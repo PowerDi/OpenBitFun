@@ -340,6 +340,38 @@ pub async fn create_acp_flow_session(
         )
         .await
         .map_err(|e| e.to_string())?;
+    if request.client_id == openbitfun_acp::client::claude_native::CLIENT_ID {
+        service
+            .prepare_claude_native_session(
+                &response.session_id,
+                &scope.workspace_path,
+                scope.remote_connection_id.as_deref(),
+                &scope.session_storage_path,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        let coordinator = openbitfun_core::agentic::coordination::get_global_coordinator()
+            .ok_or_else(|| "Conversation coordinator is not initialized".to_string())?;
+        coordinator
+            .event_queue()
+            .enqueue(
+                openbitfun_events::AgenticEvent::SessionCreated {
+                    session_id: response.session_id.clone(),
+                    session_name: response.session_name.clone(),
+                    agent_type: response.agent_type.clone(),
+                    workspace_path: Some(scope.workspace_path),
+                    project_workspace_path: None,
+                    execution_target: None,
+                    workspace_id: Some(scope.workspace_id),
+                    remote_connection_id: scope.remote_connection_id,
+                    remote_ssh_host: scope.remote_ssh_host,
+                },
+                None,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        return Ok(response);
+    }
     if let Err(error) = service
         .start_client_for_session(
             &request.client_id,
@@ -413,6 +445,28 @@ pub async fn start_acp_dialog_turn(
         ),
         None => (None, None, None),
     };
+
+    if request.client_id == openbitfun_acp::client::claude_native::CLIENT_ID {
+        let path = workspace_path
+            .as_deref()
+            .ok_or_else(|| "Claude native requires an authoritative workspace".to_string())?;
+        let storage = session_storage_path
+            .as_deref()
+            .ok_or_else(|| "Claude native session storage is unavailable".to_string())?;
+        let session = service
+            .prepare_claude_native_session(
+                &session_id,
+                path,
+                remote_connection_id.as_deref(),
+                storage,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        return session
+            .start_turn(turn_id, user_input, Some(original_user_input))
+            .await
+            .map_err(|error| error.to_string());
+    }
 
     app_handle
         .emit(
@@ -710,6 +764,12 @@ pub async fn cancel_acp_dialog_turn(
         request.remote_ssh_host.as_deref(),
     )
     .await?;
+    if request.client_id == openbitfun_acp::client::claude_native::CLIENT_ID {
+        return service
+            .cancel_claude_native_session(&request.session_id)
+            .await
+            .map_err(|error| error.to_string());
+    }
     service
         .cancel_agent_session(
             &request.client_id,
@@ -725,6 +785,43 @@ pub async fn get_acp_session_options(
     state: State<'_, AppState>,
     request: GetAcpSessionOptionsRequest,
 ) -> Result<AcpSessionOptions, String> {
+    if request.client_id == openbitfun_acp::client::claude_native::CLIENT_ID {
+        let service = state
+            .acp_client_service
+            .as_ref()
+            .ok_or_else(|| "ACP client service not initialized".to_string())?;
+        // Launching the CLI and completing `initialize` is required before the
+        // SDK model list exists. The session may already be prepared (created
+        // with the flow session), so warm-up runs on every path; it is
+        // idempotent while the process is alive and sends no user turn.
+        let session = match service.claude_native_session(&request.session_id) {
+            Some(session) => session,
+            None => {
+                let scope = resolve_optional_acp_workspace_scope(
+                    &state,
+                    request.workspace_id.as_deref(),
+                    request.workspace_path.as_deref(),
+                    request.remote_connection_id.as_deref(),
+                    request.remote_ssh_host.as_deref(),
+                )
+                .await?;
+                let Some(scope) = scope else {
+                    return Ok(AcpSessionOptions::default());
+                };
+                service
+                    .prepare_claude_native_session(
+                        &request.session_id,
+                        &scope.workspace_path,
+                        scope.remote_connection_id.as_deref(),
+                        &scope.session_storage_path,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?
+            }
+        };
+        session.warm_up().await.map_err(|error| error.to_string())?;
+        return Ok(session.options());
+    }
     let service = state
         .acp_client_service
         .as_ref()
@@ -762,6 +859,9 @@ pub async fn get_acp_session_commands(
     state: State<'_, AppState>,
     request: GetAcpSessionOptionsRequest,
 ) -> Result<Vec<AcpAvailableCommand>, String> {
+    if request.client_id == openbitfun_acp::client::claude_native::CLIENT_ID {
+        return Ok(Vec::new());
+    }
     let service = state
         .acp_client_service
         .as_ref()
@@ -811,6 +911,29 @@ pub async fn set_acp_session_model(
         request.remote_ssh_host.as_deref(),
     )
     .await?;
+    if request.client_id == openbitfun_acp::client::claude_native::CLIENT_ID {
+        let session = match service.claude_native_session(&request.session_id) {
+            Some(session) => session,
+            None => {
+                let scope = scope.ok_or_else(|| {
+                    "Claude native requires an authoritative workspace".to_string()
+                })?;
+                service
+                    .prepare_claude_native_session(
+                        &request.session_id,
+                        &scope.workspace_path,
+                        scope.remote_connection_id.as_deref(),
+                        &scope.session_storage_path,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?
+            }
+        };
+        return session
+            .set_model(&request.model_id)
+            .await
+            .map_err(|error| error.to_string());
+    }
     let mut request = request;
     let session_storage_path = scope.map(|scope| {
         request.workspace_path = Some(scope.workspace_path);
@@ -832,6 +955,15 @@ pub async fn set_acp_session_config_option(
         .acp_client_service
         .as_ref()
         .ok_or_else(|| "ACP client service not initialized".to_string())?;
+    if request.client_id == openbitfun_acp::client::claude_native::CLIENT_ID {
+        let session = service
+            .claude_native_session(&request.session_id)
+            .ok_or_else(|| "Claude native session is not prepared".to_string())?;
+        return session
+            .set_config_option(&request.config_id, request.value)
+            .await
+            .map_err(|error| error.to_string());
+    }
     let scope = resolve_optional_acp_workspace_scope(
         &state,
         request.workspace_id.as_deref(),

@@ -2546,6 +2546,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .mark_turn_started(&turn_id, Some(goal));
     }
 
+    /// Canonical event ingress for externally driven native sessions.
+    pub fn event_queue(&self) -> Arc<EventQueue> {
+        Arc::clone(&self.event_queue)
+    }
+
     pub fn set_terminal_port(&self, terminal_port: Arc<dyn TerminalPort>) {
         if self.terminal_port.set(terminal_port).is_err() {
             log::warn!("Terminal port is already configured; ignoring duplicate injection");

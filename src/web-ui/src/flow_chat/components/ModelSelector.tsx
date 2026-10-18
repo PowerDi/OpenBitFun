@@ -40,6 +40,7 @@ import {
   resolveAcpModeState,
   resolveAcpReasoningState,
 } from '../utils/acpSessionConfig';
+import type { AcpModeState } from '../utils/acpSessionConfig';
 import { sessionProjectWorkspacePath, sessionWorkspaceId } from '../utils/sessionWorkspace';
 import { quickActions } from '@/shared/services/ide-control';
 import {
@@ -104,6 +105,15 @@ export interface ExternalModelSelection {
   onSelectReasoningPreset?: (presetId: string | null) => void | Promise<void>;
 }
 
+/** ACP mode picker state handed to the composer strip when it hosts the picker. */
+export interface AcpModeControl {
+  mode: AcpModeState;
+  clientId?: string;
+  loading: boolean;
+  disabled: boolean;
+  onSelect: (value: string) => void | Promise<void>;
+}
+
 export interface ModelSelectorAvailability {
   status: ModelAvailabilityStatus;
   canSend: boolean;
@@ -142,6 +152,11 @@ interface ModelSelectorProps {
   disabledReason?: string;
   /** Compact trigger treatment supplied by the owning composer. */
   reasoningTriggerPresentation?: 'meter' | 'label';
+  /**
+   * When set, the ACP mode picker is rendered by the caller (the composer
+   * strip's permission slot) instead of beside the model trigger.
+   */
+  onAcpModeControlChange?: (control: AcpModeControl | null) => void;
 }
 
 interface ModelInfo {
@@ -371,6 +386,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   persistSharedModeDefault = true,
   disabled = false,
   disabledReason,
+  onAcpModeControlChange,
 }) => {
   const { t, formatNumber } = useI18n('flow-chat');
   const deviceSurfaceScope = useSyncExternalStore(onSurfaceActivated, getActiveSurfaceScope, getActiveSurfaceScope);
@@ -1931,6 +1947,21 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     activeSession?.workspaceId,
   ]);
 
+  const hostedAcpMode = isAcpSession && !externalSelection ? acpMode : null;
+  useEffect(() => {
+    if (!onAcpModeControlChange) return;
+    onAcpModeControlChange(hostedAcpMode
+      ? {
+          mode: hostedAcpMode,
+          clientId: acpClientId ?? undefined,
+          loading,
+          disabled,
+          onSelect: handleSelectAcpMode,
+        }
+      : null);
+  }, [acpClientId, disabled, handleSelectAcpMode, hostedAcpMode, loading, onAcpModeControlChange]);
+  useEffect(() => () => onAcpModeControlChange?.(null), [onAcpModeControlChange]);
+
   const handleTriggerKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
@@ -2409,7 +2440,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       </Tooltip>
       )}
 
-      {isAcpSelection && acpMode && (
+      {isAcpSelection && acpMode && !onAcpModeControlChange && (
         <AcpModeSelector
           mode={acpMode}
           clientId={acpClientId ?? undefined}

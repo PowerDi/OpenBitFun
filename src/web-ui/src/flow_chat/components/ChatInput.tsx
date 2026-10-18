@@ -32,7 +32,7 @@ import {
   useSessionStateMachineActions,
 } from '../hooks/useSessionStateMachine';
 import { SessionExecutionEvent, SessionExecutionState } from '../state-machine/types';
-import { ModelSelector, type ModelSelectorAvailability } from './ModelSelector';
+import { ModelSelector, type AcpModeControl, type ModelSelectorAvailability } from './ModelSelector';
 import { FlowChatStore } from '../store/FlowChatStore';
 import { useAcpPlan } from '../hooks/useAcpPlan';
 import { usePromptSuggestionsEnabled } from '../hooks/usePromptSuggestionsEnabled';
@@ -590,6 +590,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const [permissionModeSaving, setPermissionModeSaving] = useState(false);
   const realtimeVoiceCallActive = useRealtimeVoiceCallActive();
   const [showPermissionModeControl, setShowPermissionModeControl] = useState(true);
+  const [acpModeControl, setAcpModeControl] = useState<AcpModeControl | null>(null);
   // The session's own selection. `null` means it follows the global default,
   // which is what keeps switching modes in one conversation from moving every
   // other open session.
@@ -6396,6 +6397,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           }
         : undefined}
       deferPassiveGitRefresh={deferChatStripPassiveGitRefresh}
+      acpModeControl={acpModeControl}
       permissionControl={showPermissionModeControl
         ? caps.sessionScopedApproval
           ? {
@@ -7181,6 +7183,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                       || !!effectiveTargetSession?.draft && effectiveTargetSession.draft.phase !== 'editing'}
                     disabledReason={btwDraftSettingsInherited ? t('selection.inheritedSettings') : undefined}
                     reasoningTriggerPresentation="label"
+                    onAcpModeControlChange={workspaceStripVisible ? setAcpModeControl : undefined}
                   />
                   </div>
                 ) : null}

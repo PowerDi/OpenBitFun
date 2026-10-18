@@ -55,6 +55,8 @@ import { stateMachineManager } from '@/flow_chat/state-machine';
 import { sessionNavStatusService } from '@/flow_chat/services/sessionNavStatusService';
 import { i18nService } from '@/infrastructure/i18n';
 import { isDefaultSessionTitle, resolveSessionTitle } from '@/flow_chat/utils/sessionTitle';
+import { acpClientIdFromAgentType } from '@/flow_chat/utils/acpSession';
+import { ExternalAgentIcon, externalAgentIconSource } from '@/shared/components/ExternalAgentIcon';
 import { useSessionTitleNumbers } from '@/flow_chat/hooks/useSessionTitleNumbers';
 import { SessionTitleNumber } from '@/flow_chat/components/SessionTitleNumber';
 import { useSessionComposerStore } from '@/flow_chat/store/sessionComposerStore';
@@ -1420,6 +1422,11 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
                 ? relationship.kind
                 : null;
           const sessionTitle = resolveSessionTitle(session);
+          // External agent sessions (e.g. Claude Code native) show their brand
+          // icon before the title, like codexhost does.
+          const externalAgentClientId = acpClientIdFromAgentType(session.config?.agentType)
+            ?? acpClientIdFromAgentType(session.mode);
+          const showExternalAgentIcon = Boolean(externalAgentIconSource(externalAgentClientId));
           const titleNumber = titleNumbers.get(session.sessionId);
           const displayTitle = titleNumber ? `${sessionTitle} ${titleNumber}` : sessionTitle;
           const isDefaultTitle = isDefaultSessionTitle(session);
@@ -1645,6 +1652,9 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
                     <span className="openbitfun-nav-panel__inline-item-copy">
                       <span className="openbitfun-nav-panel__inline-item-primary">
                         <span className="openbitfun-nav-panel__inline-item-title">
+                          {showExternalAgentIcon && externalAgentClientId ? (
+                            <ExternalAgentIcon clientId={externalAgentClientId} className="openbitfun-nav-panel__inline-item-agent-icon" />
+                          ) : null}
                           <OverflowText behavior="marquee" title="" className="openbitfun-nav-panel__inline-item-label">{sessionTitle}</OverflowText>
                           <SessionTitleNumber number={titleNumber} />
                           {defaultSessionAction?.sessionId === session.sessionId && (

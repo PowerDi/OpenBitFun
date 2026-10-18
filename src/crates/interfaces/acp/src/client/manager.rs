@@ -154,9 +154,11 @@ impl AcpSessionConfigValue {
 
 pub struct AcpClientService {
     config_service: Arc<ConfigService>,
-    session_persistence: AcpSessionPersistence,
+    session_persistence: Arc<AcpSessionPersistence>,
     remote_capability_store: RemoteAcpCapabilityStore,
     clients: DashMap<String, Arc<AcpClientConnection>>,
+    native_sessions: DashMap<String, Arc<super::claude_native::ClaudeNativeSession>>,
+    native_preparation: Mutex<()>,
     pending_permissions: DashMap<String, PendingPermission>,
     session_permission_modes: DashMap<String, AcpClientPermissionMode>,
 }
@@ -226,16 +228,107 @@ impl AcpClientService {
     ) -> OpenBitFunResult<Arc<Self>> {
         Ok(Arc::new(Self {
             config_service,
-            session_persistence: AcpSessionPersistence::new(path_manager.clone())?,
+            session_persistence: Arc::new(AcpSessionPersistence::new(path_manager.clone())?),
             remote_capability_store: RemoteAcpCapabilityStore::new(
                 path_manager
                     .user_data_dir()
                     .join("ssh_acp_capabilities.json"),
             ),
             clients: DashMap::new(),
+            native_sessions: DashMap::new(),
+            native_preparation: Mutex::new(()),
             pending_permissions: DashMap::new(),
             session_permission_modes: DashMap::new(),
         }))
+    }
+
+    /// Prepare a native driver without launching an ACP adapter. Persist the
+    /// provider UUID in the existing tolerant external-session metadata shape.
+    pub async fn prepare_claude_native_session(
+        &self,
+        session_id: &str,
+        workspace_path: &str,
+        remote_connection_id: Option<&str>,
+        session_storage_path: &Path,
+    ) -> OpenBitFunResult<Arc<super::claude_native::ClaudeNativeSession>> {
+        let _guard = self.native_preparation.lock().await;
+        if let Some(session) = self.native_sessions.get(session_id) {
+            if !session.matches_scope(workspace_path, remote_connection_id) {
+                return Err(OpenBitFunError::Validation(
+                    "Claude native session workspace or host changed; refusing local fallback"
+                        .into(),
+                ));
+            }
+            return Ok(session.clone());
+        }
+        let queue = openbitfun_core::agentic::coordination::get_global_coordinator()
+            .ok_or_else(|| OpenBitFunError::service("Conversation coordinator is not initialized"))?
+            .event_queue();
+        let (persisted, resume, turn_index) = self
+            .session_persistence
+            .load_claude_native_state(session_storage_path, session_id)
+            .await?;
+        let provider_id = persisted.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        uuid::Uuid::parse_str(&provider_id).map_err(|_| {
+            OpenBitFunError::Validation(
+                "Invalid persisted Claude session UUID; session data was preserved".into(),
+            )
+        })?;
+        self.session_persistence
+            .update_remote_session_state(
+                session_storage_path,
+                session_id,
+                &provider_id,
+                if resume {
+                    "claude-native-stream-json"
+                } else {
+                    "claude-native-prepared"
+                },
+                None,
+            )
+            .await?;
+        let session = super::claude_native::ClaudeNativeSession::new(
+            session_id.into(),
+            provider_id,
+            workspace_path.into(),
+            remote_connection_id.map(str::to_string),
+            resume,
+            queue,
+            Some((
+                self.session_persistence.clone(),
+                session_storage_path.to_path_buf(),
+            )),
+            turn_index,
+        );
+        session.apply_preferences(
+            self.session_persistence
+                .load_claude_preferences(session_storage_path, session_id)
+                .await,
+        );
+        self.native_sessions
+            .insert(session_id.into(), session.clone());
+        Ok(session)
+    }
+
+    /// Live native session, if it has been prepared in this process.
+    pub fn claude_native_session(
+        &self,
+        session_id: &str,
+    ) -> Option<Arc<super::claude_native::ClaudeNativeSession>> {
+        self.native_sessions
+            .get(session_id)
+            .map(|entry| entry.clone())
+    }
+
+    pub async fn cancel_claude_native_session(&self, session_id: &str) -> OpenBitFunResult<()> {
+        let session = self
+            .native_sessions
+            .get(session_id)
+            .map(|entry| entry.clone());
+        if let Some(session) = session {
+            session.cancel().await?;
+        }
+        Ok(())
     }
 
     /// `workspace_id` is the persisted identity of the owning workspace;
@@ -317,6 +410,27 @@ impl AcpClientService {
                 session_count,
             });
         }
+        infos.retain(|info| info.id != super::claude_native::CLIENT_ID);
+        infos.push(AcpClientInfo {
+            id: super::claude_native::CLIENT_ID.into(),
+            name: "Claude Code (Native)".into(),
+            command: "claude".into(),
+            args: Vec::new(),
+            enabled: true,
+            readonly: true,
+            subagent: super::config::AcpClientSubagentConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            permission_mode: AcpClientPermissionMode::Ask,
+            status: if self.native_sessions.is_empty() {
+                AcpClientStatus::Configured
+            } else {
+                AcpClientStatus::Running
+            },
+            tool_name: AcpAgentTool::tool_name_for(super::claude_native::CLIENT_ID),
+            session_count: self.native_sessions.len(),
+        });
         infos.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(infos)
     }
@@ -330,17 +444,20 @@ impl AcpClientService {
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            return if force_refresh {
-                self.refresh_remote_client_requirements(remote_connection_id)
-                    .await
-            } else {
-                Ok(self
-                    .remote_capability_store
-                    .get(remote_connection_id)
-                    .await
-                    .map(|snapshot| snapshot.probes)
-                    .unwrap_or_default())
-            };
+            let cached = self.remote_capability_store.get(remote_connection_id).await;
+            if force_refresh
+                || cached.as_ref().is_some_and(|snapshot| {
+                    !snapshot
+                        .probes
+                        .iter()
+                        .any(|probe| probe.id == super::claude_native::CLIENT_ID)
+                })
+            {
+                return self
+                    .refresh_remote_client_requirements(remote_connection_id)
+                    .await;
+            }
+            return Ok(cached.map(|snapshot| snapshot.probes).unwrap_or_default());
         }
 
         let configs = self.load_configs().await?;
@@ -350,12 +467,24 @@ impl AcpClientService {
                 ids.push(id.to_string());
             }
         }
+        if !ids.iter().any(|id| id == super::claude_native::CLIENT_ID) {
+            ids.push(super::claude_native::CLIENT_ID.into());
+        }
         ids.sort();
 
         let mut probes = Vec::with_capacity(ids.len());
         for id in ids {
             let spec = acp_requirement_spec(&id, configs.get(&id));
-            let tool = probe_executable(spec.tool_command).await;
+            let native_executable;
+            let command = if id == super::claude_native::CLIENT_ID {
+                native_executable = super::claude_native::local_executable()
+                    .to_string_lossy()
+                    .into_owned();
+                native_executable.as_str()
+            } else {
+                spec.tool_command
+            };
+            let tool = probe_executable(command).await;
             let adapter = match spec.adapter {
                 Some(adapter) => Some(probe_npm_adapter(adapter.package, adapter.bin).await),
                 None => None,
@@ -433,6 +562,9 @@ impl AcpClientService {
             if !ids.iter().any(|candidate| candidate == id) {
                 ids.push(id.to_string());
             }
+        }
+        if !ids.iter().any(|id| id == super::claude_native::CLIENT_ID) {
+            ids.push(super::claude_native::CLIENT_ID.into());
         }
         ids.sort();
 
@@ -760,6 +892,17 @@ impl AcpClientService {
     }
 
     pub async fn stop_client(self: &Arc<Self>, client_id: &str) -> OpenBitFunResult<()> {
+        if client_id == super::claude_native::CLIENT_ID {
+            let sessions: Vec<_> = self
+                .native_sessions
+                .iter()
+                .map(|entry| entry.value().clone())
+                .collect();
+            for session in sessions {
+                session.shutdown().await;
+            }
+            return Ok(());
+        }
         let connection_ids = self
             .clients
             .iter()
@@ -797,6 +940,10 @@ impl AcpClientService {
     }
 
     pub async fn release_openbitfun_session(self: &Arc<Self>, openbitfun_session_id: &str) -> bool {
+        if let Some((_, session)) = self.native_sessions.remove(openbitfun_session_id) {
+            session.shutdown().await;
+            return true;
+        }
         let session_key_prefix = format!("{}:", openbitfun_session_id);
         let clients = self
             .clients
@@ -921,6 +1068,20 @@ impl AcpClientService {
         &self,
         request: SubmitAcpPermissionResponseRequest,
     ) -> OpenBitFunResult<AcpClientPermissionResponse> {
+        let sessions: Vec<_> = self
+            .native_sessions
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect();
+        for session in sessions {
+            if let Some(result) = session.submit_permission(&request).await {
+                result?;
+                return Ok(AcpClientPermissionResponse {
+                    permission_id: request.permission_id,
+                    resolved: true,
+                });
+            }
+        }
         let Some((_, pending)) = self.pending_permissions.remove(&request.permission_id) else {
             return Err(OpenBitFunError::NotFound(format!(
                 "ACP permission request not found: {}",
@@ -2127,7 +2288,7 @@ fn aggregate_client_status(statuses: &[AcpClientStatus]) -> AcpClientStatus {
     AcpClientStatus::Stopped
 }
 
-fn configure_process_group(command: &mut Command) {
+pub(super) fn configure_process_group(command: &mut Command) {
     #[cfg(unix)]
     {
         command.process_group(0);
@@ -2138,7 +2299,7 @@ fn configure_process_group(command: &mut Command) {
     }
 }
 
-async fn terminate_child_process_tree(client_id: &str, mut child: Child) {
+pub(super) async fn terminate_child_process_tree(client_id: &str, mut child: Child) {
     let pid = child.id();
 
     #[cfg(unix)]

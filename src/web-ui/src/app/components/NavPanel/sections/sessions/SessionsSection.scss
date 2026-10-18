@@ -200,6 +200,14 @@
     overflow: visible;
   }
 
+  &__inline-item-agent-icon {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    margin-right: 6px;
+    object-fit: contain;
+  }
+
   &__inline-item-avatar {
     display: inline-flex;
     flex: 0 0 26px;

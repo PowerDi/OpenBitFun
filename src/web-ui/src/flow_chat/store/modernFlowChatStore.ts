@@ -65,6 +65,12 @@ function mergeRoundGroupForDisplay(currentRound: ModelRound, nextRound: ModelRou
   };
 }
 
+function hasVisibleUserInput(message: NonNullable<DialogTurn['userMessage']>): boolean {
+  return message.content.trim().length > 0
+    || Boolean(message.hasImages)
+    || (message.images?.length ?? 0) > 0;
+}
+
 function isTerminalTurnStatus(status: DialogTurn['status']): boolean {
   return status === 'completed' || status === 'cancelled' || status === 'error';
 }
@@ -186,7 +192,9 @@ export function sessionToVirtualItems(session: Session | null): VirtualItem[] {
     }
     const turnItemStart = items.length;
 
-    if (turn.userMessage) {
+    // Agent-initiated turns (e.g. Claude background task follow-ups) carry no
+    // user input; rendering them would leave an empty bubble.
+    if (turn.userMessage && hasVisibleUserInput(turn.userMessage)) {
       items.push({
         type: 'user-message',
         data: turn.userMessage,

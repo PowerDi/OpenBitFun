@@ -948,7 +948,7 @@ describe('ChatInputWorkspaceStrip git refresh behavior', () => {
     ).not.toBeNull();
   });
 
-  it('shows ACP ownership without exposing native permission choices', async () => {
+  it('puts the agent mode picker in the permission slot instead of native choices', async () => {
     await act(async () => {
       root.render(
         <ChatInputWorkspaceStrip workspaceId="workspace-1"
@@ -958,11 +958,44 @@ describe('ChatInputWorkspaceStrip git refresh behavior', () => {
         />
       );
     });
+    // No read-only badge while the agent has not published a mode.
+    expect(container.querySelector('[data-testid="chat-input-permission-trigger"]')).toBeNull();
 
-    const trigger = container.querySelector<HTMLButtonElement>('[data-testid="chat-input-permission-trigger"]');
-    expect(trigger?.disabled).toBe(true);
-    expect(trigger?.dataset.permissionMode).toBe('acp');
-    expect(container.querySelector('[data-testid="chat-input-permission-menu"]')).toBeNull();
+    await act(async () => {
+      root.render(
+        <ChatInputWorkspaceStrip workspaceId="workspace-1"
+          repositoryPath="D:/workspace/OpenBitFun"
+          workspaceLabel="OpenBitFun"
+          permissionControl={{ mode: 'acp' }}
+          acpModeControl={{
+            mode: {
+              option: {
+                id: 'permission-mode',
+                name: 'Permission mode',
+                category: 'mode',
+                type: 'select',
+                currentValue: 'bypassPermissions',
+                options: [
+                  { value: 'default', name: '默认' },
+                  { value: 'bypassPermissions', name: '绕过权限' },
+                ],
+              },
+              currentValue: 'bypassPermissions',
+              locked: false,
+            },
+            loading: false,
+            disabled: false,
+            onSelect: () => {},
+          }}
+        />
+      );
+    });
+
+    expect(container.querySelector('[data-testid="chat-input-permission-trigger"]')).toBeNull();
+    const picker = container.querySelector<HTMLButtonElement>('[data-testid="chat-acp-mode-selector-btn"]');
+    expect(picker?.disabled).toBe(false);
+    expect(picker?.textContent).toContain('绕过权限');
+    expect(picker?.className).toContain('permission-trigger--full_access');
   });
 
   it('keeps both rails present whatever the session happens to expose', async () => {

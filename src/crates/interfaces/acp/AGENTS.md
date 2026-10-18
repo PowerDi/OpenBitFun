@@ -49,3 +49,21 @@ partial output, and transport termination with in-memory agent streams. These
 fixtures do not require a live provider or a device connection. The explicit
 Core `git` feature satisfies the worktree tool dependency in the current client
 closure without enabling the server role or `product-full`.
+
+## Claude native stdio driver
+
+`client/claude_native` is the native Claude Code SDK stream-json driver, exposed
+through the existing external-client menu (`claude-native`), not an ACP adapter.
+Its process is session-scoped; `result` ends a foreground segment, not the
+process. Preserve generation fences, PID-scoped shutdown, native tool IDs in
+permission cards, and the canonical EventQueue ingress.
+
+Focused verification (memory streams; no Claude account or SSH host required):
+
+```bash
+cargo test -p openbitfun-acp --lib claude_native
+```
+
+The tests cover projection, control correlation, permission wire compatibility,
+turn cleanup, cancellation, stderr/EOF, retired generations, background notices,
+and legacy metadata. They do not establish live SSH or relay reconnect behavior.

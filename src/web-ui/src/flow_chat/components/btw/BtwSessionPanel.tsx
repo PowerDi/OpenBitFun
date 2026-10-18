@@ -6,6 +6,7 @@ import {useTranslation} from 'react-i18next';
 import path from 'path-browserify';
 import { CornerUpLeft, Square } from 'lucide-react';
 import {FlowChatContext, FlowChatVolatileContext} from '../modern/FlowChatContext';
+import { useFlowChatToolActions } from '../modern/useFlowChatToolActions';
 import { FlowChatSelectionBar } from '../../selection/FlowChatSelectionBar';
 import { ConversationExcerptSourceProvider } from '../../selection/ConversationExcerptSources';
 import {BtwVirtualSessionList} from './BtwVirtualSessionList';
@@ -369,9 +370,15 @@ const BtwSessionPanelContent: React.FC<BtwSessionPanelProps & { viewState: BtwPa
     });
   }, []);
 
+  // Child transcripts can hold actionable permission cards (e.g. a subagent
+  // asking to run a command); resolve them like the main transcript does.
+  const { handleToolConfirm, handleToolReject } = useFlowChatToolActions();
+
   const contextValue = useMemo(() => ({
     onFileViewRequest: handleFileViewRequest,
     onTabOpen: handleTabOpen,
+    onToolConfirm: handleToolConfirm,
+    onToolReject: handleToolReject,
     sessionId: childSessionId,
     activeSessionOverride: childSession ?? null,
     allowUserMessageRollback: false,
@@ -388,6 +395,8 @@ const BtwSessionPanelContent: React.FC<BtwSessionPanelProps & { viewState: BtwPa
     childSessionId,
     handleFileViewRequest,
     handleTabOpen,
+    handleToolConfirm,
+    handleToolReject,
     onExploreGroupToggle,
     onExpandGroup,
     onExpandAllInTurn,

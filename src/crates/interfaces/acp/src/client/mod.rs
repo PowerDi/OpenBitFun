@@ -1,4 +1,5 @@
 mod builtin_clients;
+pub mod claude_native;
 mod config;
 mod dsh_profile;
 mod manager;
