@@ -101,6 +101,12 @@ function normalizeRoundForDisplay(round: ModelRound, continuedAfterInterruption:
   return normalized;
 }
 
+function hasVisibleUserInput(message: NonNullable<DialogTurn['userMessage']>): boolean {
+  return message.content.trim().length > 0
+    || Boolean(message.hasImages)
+    || (message.images?.length ?? 0) > 0;
+}
+
 function isTerminalTurnStatus(status: DialogTurn['status']): boolean {
   return status === 'completed' || status === 'cancelled' || status === 'error';
 }
@@ -505,8 +511,11 @@ function projectSessionItems(
     const turnItemStart = items.length;
 
     // Host rendering evidence drives a repair turn but is not a user utterance.
-    // Keep its model output while omitting the input row (and its spacing).
-    if (turn.userMessage && !turn.userMessage.metadata?.genUIHostRepair) {
+    // Agent-initiated turns can also carry an empty placeholder; omit both rows
+    // while preserving their model output and the upstream repair projection.
+    if (turn.userMessage
+      && !turn.userMessage.metadata?.genUIHostRepair
+      && hasVisibleUserInput(turn.userMessage)) {
       items.push({
         type: 'user-message',
         data: turn.userMessage,

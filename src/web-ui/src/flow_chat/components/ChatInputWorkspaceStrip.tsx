@@ -39,6 +39,8 @@ import {
 import { formatCompactTokenCount } from '../utils/tokenUsageDisplay';
 import { ContextUsagePopover } from './usage/ContextUsagePopover';
 import type { UsageContextEstimate } from '@/infrastructure/api/service-api/SessionAPI';
+import { AcpModeSelector } from './AcpModeSelector';
+import type { AcpModeControl } from './ModelSelector';
 import './ChatInputWorkspaceStrip.scss';
 
 export interface ChatInputWorkspaceStripProps {
@@ -104,6 +106,11 @@ export interface ChatInputWorkspaceStripProps {
       mode: Exclude<ChatInputPermissionMode, 'acp'>,
     ) => void | Promise<void>;
   };
+  /**
+   * External agent permission mode (ACP `mode` category). Occupies the
+   * permission slot instead of the read-only "ACP control" badge.
+   */
+  acpModeControl?: AcpModeControl | null;
   /** Keep the strip on cached Git state while historical content is still restoring. */
   deferPassiveGitRefresh?: boolean;
   /** Resolved target bound to the active session. */
@@ -168,6 +175,15 @@ const PERMISSION_MODE_ICONS: Record<ChatInputPermissionMode, typeof Shield> = {
   acp: Shield,
 };
 
+/** Map an external agent's mode id onto the native risk ramp for colouring. */
+function acpPermissionRisk(value: string): Exclude<ChatInputPermissionMode, 'reject'> {
+  const id = value.toLowerCase();
+  if (/bypass|full|yolo|danger|never/.test(id)) return 'full_access';
+  if (/auto|accept|edit/.test(id)) return 'auto';
+  if (/default|ask|plan|read/.test(id)) return 'ask';
+  return 'acp';
+}
+
 export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = ({
   repositoryPath,
   workspaceId,
@@ -175,6 +191,7 @@ export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = (
   workspaceControl,
   usageReport,
   permissionControl,
+  acpModeControl,
   deferPassiveGitRefresh = false,
   executionTarget,
   worktreeControl,
@@ -246,7 +263,8 @@ export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = (
 
   const showUsage = usageReport?.visible && !!usageReport.onOpen;
   const showGoal = !!threadGoal?.goal;
-  const showPermission = !!permissionControl;
+  const showAcpMode = !!acpModeControl && permissionControl?.mode === 'acp';
+  const showPermission = !!permissionControl && (permissionControl.mode !== 'acp' || showAcpMode);
   const showDispatchResult = !!dispatchControl?.syncableJobId;
   const isWorktree = !!executionTarget?.worktreeId;
   const worktreeEnabled = worktreeControl?.enabled ?? isWorktree;
@@ -906,7 +924,35 @@ export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = (
             />
           </>
         ) : null}
-        {showPermission && permissionControl ? (
+        {showAcpMode && acpModeControl ? (
+          <div
+            data-openbitfun-component="chat-input-workspace-strip"
+            data-openbitfun-part="permission"
+            className="openbitfun-chat-input-workspace-strip__permission"
+          >
+            <AcpModeSelector
+              mode={acpModeControl.mode}
+              clientId={acpModeControl.clientId}
+              disabled={acpModeControl.disabled}
+              loading={acpModeControl.loading}
+              onSelect={acpModeControl.onSelect}
+              triggerClassName={[
+                'openbitfun-chat-input-workspace-strip__permission-trigger',
+                `openbitfun-chat-input-workspace-strip__permission-trigger--${acpPermissionRisk(acpModeControl.mode.currentValue)}`,
+              ].join(' ')}
+              leading={(() => {
+                const AcpIcon = PERMISSION_MODE_ICONS[acpPermissionRisk(acpModeControl.mode.currentValue)];
+                return (
+                  <Icon glyph={AcpIcon}
+                    className="openbitfun-chat-input-workspace-strip__permission-overview-icon"
+                    size="xs"
+                    aria-hidden
+                  />
+                );
+              })()}
+            />
+          </div>
+        ) : showPermission && permissionControl ? (
           <div
             ref={permissionRootRef}
             data-openbitfun-component="chat-input-workspace-strip"

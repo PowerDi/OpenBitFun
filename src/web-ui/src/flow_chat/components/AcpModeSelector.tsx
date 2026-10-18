@@ -31,6 +31,10 @@ interface AcpModeSelectorProps {
    * only one on screen and therefore also carries the context-usage readout.
    */
   tooltip?: React.ReactNode;
+  /** Replaces the default trigger styling (used by the composer strip). */
+  triggerClassName?: string;
+  /** Icon shown before the label. */
+  leading?: React.ReactNode;
   onSelect: (value: string) => void | Promise<void>;
 }
 
@@ -41,6 +45,8 @@ export const AcpModeSelector: React.FC<AcpModeSelectorProps> = ({
   loading = false,
   dropdownPlacement = 'top',
   tooltip,
+  triggerClassName,
+  leading,
   onSelect,
 }) => {
   const { t } = useTranslation('flow-chat');
@@ -136,7 +142,8 @@ export const AcpModeSelector: React.FC<AcpModeSelectorProps> = ({
         <button data-overflow-trigger
           ref={triggerRef}
           type="button"
-          className={`openbitfun-acp-mode-selector__trigger${open ? ' openbitfun-acp-mode-selector__trigger--open' : ''}`}
+          className={triggerClassName
+            ?? `openbitfun-acp-mode-selector__trigger${open ? ' openbitfun-acp-mode-selector__trigger--open' : ''}`}
           data-openbitfun-component="acp-mode-selector"
           data-openbitfun-part="trigger"
           data-openbitfun-state={open ? 'open' : undefined}
@@ -165,6 +172,7 @@ export const AcpModeSelector: React.FC<AcpModeSelectorProps> = ({
             }
           }}
         >
+          {leading}
           <OverflowText
             className="openbitfun-acp-mode-selector__label"
             data-openbitfun-component="acp-mode-selector"

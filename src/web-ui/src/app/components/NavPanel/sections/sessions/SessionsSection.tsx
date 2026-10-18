@@ -56,6 +56,8 @@ import { sessionNavStatusService } from '@/flow_chat/services/sessionNavStatusSe
 import { i18nService } from '@/infrastructure/i18n';
 import { isDefaultSessionTitle, resolveSessionTitle } from '@/flow_chat/utils/sessionTitle';
 import { getChildSessionBadge } from './sessionRowBadges';
+import { acpClientIdFromAgentType } from '@/flow_chat/utils/acpSession';
+import { ExternalAgentIcon, externalAgentIconSource } from '@/shared/components/ExternalAgentIcon';
 import { useSessionComposerStore } from '@/flow_chat/store/sessionComposerStore';
 import { getActiveSurfaceId, getActiveSurfaceScope, surfaceScopedKey } from '@/infrastructure/peer-device/deviceSurface';
 import { EXTERNAL_SESSION_NAMES, isExternalSessionEcosystem } from '@/shared/types/external-session';
@@ -1410,6 +1412,11 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
                 ? relationship.kind
                 : null;
           const sessionTitle = resolveSessionTitle(session);
+          // External agent sessions (including native Claude) keep their
+          // provider identity visible without changing the upstream title row.
+          const externalAgentClientId = acpClientIdFromAgentType(session.config?.agentType)
+            ?? acpClientIdFromAgentType(session.mode);
+          const showExternalAgentIcon = Boolean(externalAgentIconSource(externalAgentClientId));
           const isDefaultTitle = isDefaultSessionTitle(session);
           const sessionWorkspaceScope = workspaceScopes?.find(scope => sessionBelongsToWorkspaceNavRow(session, scope.workspaceId));
           const backgroundSubagentActivity = !isChildSession
@@ -1640,6 +1647,9 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
                     <span className="openbitfun-nav-panel__inline-item-copy">
                       <span className="openbitfun-nav-panel__inline-item-primary">
                         <span className="openbitfun-nav-panel__inline-item-title">
+                          {showExternalAgentIcon && externalAgentClientId ? (
+                            <ExternalAgentIcon clientId={externalAgentClientId} className="openbitfun-nav-panel__inline-item-agent-icon" />
+                          ) : null}
                           <OverflowText behavior="marquee" title="" className="openbitfun-nav-panel__inline-item-label">{sessionTitle}</OverflowText>
                           {isArchived && (
                             <StatusPill className="openbitfun-nav-panel__inline-item-archived-badge" tone="neutral" data-testid="nav-session-archived-badge">

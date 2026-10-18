@@ -31,6 +31,13 @@ pub(crate) fn acp_requirement_spec<'a>(
     client_id: &'a str,
     config: Option<&'a AcpClientConfig>,
 ) -> AcpRequirementSpec<'a> {
+    if client_id == super::claude_native::CLIENT_ID {
+        return AcpRequirementSpec {
+            tool_command: "claude",
+            install_package: None,
+            adapter: None,
+        };
+    }
     if let Some(preset) = builtin_acp_client_preset(client_id) {
         return AcpRequirementSpec {
             tool_command: preset.tool_command,
