@@ -10,6 +10,11 @@ use openbitfun_core::util::errors::{OpenBitFunError, OpenBitFunResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use super::native::{
+    preferences::{NativeAgentPreferences, METADATA_KEY},
+    NativeAgentPreferencesStore,
+};
+
 // Persistence reads these back to tell an externally projected Session from a
 // Runtime-owned one, so both sides share one definition. It reaches this crate
 // through the Session module it already reads metadata types from, because the
@@ -29,51 +34,27 @@ pub struct CreateAcpFlowSessionRecordResponse {
     pub agent_type: String,
 }
 
-pub(super) const CUSTOM_METADATA_CLAUDE_PREFERENCES_KEY: &str = "claudeNativePreferences";
-
-/// Last model / permission mode / thinking level picked for Claude native
-/// sessions. Stored per session (resume keeps its own choice) and globally
-/// (new sessions start from the most recent choice).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ClaudeNativePreferences {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub permission_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thinking: Option<String>,
-}
-
 pub(super) struct AcpSessionPersistence {
     manager: PersistenceManager,
-    claude_preferences_path: std::path::PathBuf,
+    native_preferences: NativeAgentPreferencesStore,
 }
 
 impl AcpSessionPersistence {
     pub(super) fn new(path_manager: Arc<PathManager>) -> OpenBitFunResult<Self> {
         Ok(Self {
-            claude_preferences_path: path_manager
-                .user_config_dir()
-                .join("claude_native_preferences.json"),
+            native_preferences: NativeAgentPreferencesStore::new(&path_manager.user_config_dir()),
             manager: PersistenceManager::new(path_manager)?,
         })
     }
 
-    async fn load_global_claude_preferences(&self) -> ClaudeNativePreferences {
-        match tokio::fs::read(&self.claude_preferences_path).await {
-            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
-            Err(_) => ClaudeNativePreferences::default(),
-        }
-    }
-
-    /// Session preferences, falling back to the global last choice per field.
-    pub(crate) async fn load_claude_preferences(
+    /// Session preferences fall back to this client's global choice per field.
+    pub(crate) async fn load_native_preferences(
         &self,
+        client_id: &str,
         storage: &Path,
         session_id: &str,
-    ) -> ClaudeNativePreferences {
-        let global = self.load_global_claude_preferences().await;
+    ) -> NativeAgentPreferences {
+        let global = self.native_preferences.get(client_id).await;
         let own = self
             .manager
             .load_session_metadata(storage, session_id)
@@ -81,46 +62,30 @@ impl AcpSessionPersistence {
             .ok()
             .flatten()
             .and_then(|metadata| metadata.custom_metadata)
-            .and_then(|custom| custom.get(CUSTOM_METADATA_CLAUDE_PREFERENCES_KEY).cloned())
-            .and_then(|value| serde_json::from_value::<ClaudeNativePreferences>(value).ok())
+            .map(|custom| NativeAgentPreferences::from_metadata(&custom, client_id))
             .unwrap_or_default();
-        ClaudeNativePreferences {
+        NativeAgentPreferences {
             model: own.model.or(global.model),
             permission_mode: own.permission_mode.or(global.permission_mode),
             thinking: own.thinking.or(global.thinking),
         }
     }
 
-    /// Record a choice on the session and as the global default.
-    pub(crate) async fn save_claude_preference(
+    /// Record the choice on the session and as this client's global default.
+    pub(crate) async fn save_native_preference(
         &self,
+        client_id: &str,
         storage: &Path,
         session_id: &str,
-        update: impl Fn(&mut ClaudeNativePreferences),
+        update: impl Fn(&mut NativeAgentPreferences),
     ) -> OpenBitFunResult<()> {
-        let mut global = self.load_global_claude_preferences().await;
-        update(&mut global);
-        if let Some(parent) = self.claude_preferences_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|error| OpenBitFunError::service(error.to_string()))?;
-        }
-        let bytes = serde_json::to_vec_pretty(&global)
-            .map_err(|error| OpenBitFunError::service(error.to_string()))?;
-        tokio::fs::write(&self.claude_preferences_path, bytes)
-            .await
-            .map_err(|error| OpenBitFunError::service(error.to_string()))?;
+        self.native_preferences.update(client_id, &update).await?;
         self.update_metadata(storage, session_id, |metadata| {
             let mut custom = metadata.custom_metadata.take().unwrap_or_else(|| json!({}));
             ensure_object(&mut custom)?;
-            let mut own = custom
-                .get(CUSTOM_METADATA_CLAUDE_PREFERENCES_KEY)
-                .cloned()
-                .and_then(|value| serde_json::from_value::<ClaudeNativePreferences>(value).ok())
-                .unwrap_or_default();
+            let mut own = NativeAgentPreferences::from_metadata(&custom, client_id);
             update(&mut own);
-            custom[CUSTOM_METADATA_CLAUDE_PREFERENCES_KEY] =
-                serde_json::to_value(own).unwrap_or(Value::Null);
+            custom[METADATA_KEY] = serde_json::to_value(own).unwrap_or(Value::Null);
             metadata.custom_metadata = Some(custom);
             Ok(())
         })
@@ -258,21 +223,6 @@ impl AcpSessionPersistence {
             .map(ToString::to_string))
     }
 
-    pub(super) async fn load_claude_native_state(
-        &self,
-        storage: &Path,
-        session_id: &str,
-    ) -> OpenBitFunResult<(Option<String>, bool, usize)> {
-        let metadata = self
-            .manager
-            .load_session_metadata(storage, session_id)
-            .await?
-            .ok_or_else(|| {
-                OpenBitFunError::NotFound(format!("Claude session record not found: {session_id}"))
-            })?;
-        claude_native_state_from_metadata(&metadata)
-    }
-
     pub(super) async fn update_remote_session_state(
         &self,
         session_storage_path: &Path,
@@ -320,89 +270,6 @@ impl AcpSessionPersistence {
             .update_session_metadata_if_present(session_storage_path, openbitfun_session_id, update)
             .await
             .map(|_| ())
-    }
-}
-
-fn claude_native_state_from_metadata(
-    metadata: &SessionMetadata,
-) -> OpenBitFunResult<(Option<String>, bool, usize)> {
-    let custom = metadata.custom_metadata.as_ref();
-    if custom
-        .and_then(|c| c.get(CUSTOM_METADATA_CLIENT_ID_KEY))
-        .and_then(Value::as_str)
-        != Some("claude-native")
-    {
-        return Err(OpenBitFunError::Validation(
-            "Session is not a Claude native session".into(),
-        ));
-    }
-    let id = match custom.and_then(|c| c.get(CUSTOM_METADATA_REMOTE_SESSION_ID_KEY)) {
-        None | Some(Value::Null) => None,
-        Some(Value::String(id)) if uuid::Uuid::parse_str(id).is_ok() => Some(id.clone()),
-        Some(_) => {
-            return Err(OpenBitFunError::Validation(
-                "Invalid persisted Claude UUID; session data was preserved".into(),
-            ))
-        }
-    };
-    let prepared = custom
-        .and_then(|c| c.get(CUSTOM_METADATA_RESUME_STRATEGY_KEY))
-        .and_then(Value::as_str)
-        == Some("claude-native-prepared");
-    Ok((id.clone(), id.is_some() && !prepared, metadata.turn_count))
-}
-
-#[cfg(test)]
-mod claude_native_tests {
-    use super::*;
-
-    #[test]
-    fn legacy_metadata_round_trip_preserves_unknown_fields_and_provider_uuid() {
-        let mut metadata = SessionMetadata::new(
-            "s1".into(),
-            "Native".into(),
-            "acp:claude-native".into(),
-            "primary".into(),
-        );
-        metadata.custom_metadata =
-            Some(json!({"acpClientId":"claude-native", "futureField":{"keep":true}}));
-        let old = serde_json::to_value(&metadata).unwrap();
-        let mut restored: SessionMetadata = serde_json::from_value(old.clone()).unwrap();
-        assert_eq!(
-            claude_native_state_from_metadata(&restored).unwrap(),
-            (None, false, 0)
-        );
-        let id = uuid::Uuid::new_v4().to_string();
-        let custom = restored.custom_metadata.as_mut().unwrap();
-        custom["acpRemoteSessionId"] = json!(id);
-        custom["acpResumeStrategy"] = json!("claude-native-prepared");
-        assert!(!claude_native_state_from_metadata(&restored).unwrap().1);
-        restored.custom_metadata.as_mut().unwrap()["acpResumeStrategy"] =
-            json!("claude-native-stream-json");
-        let new_wire = serde_json::to_value(&restored).unwrap();
-        let round_trip: SessionMetadata = serde_json::from_value(new_wire).unwrap();
-        assert_eq!(
-            claude_native_state_from_metadata(&round_trip).unwrap(),
-            (Some(id), true, 0)
-        );
-        assert_eq!(
-            round_trip.custom_metadata.unwrap()["futureField"],
-            old["customMetadata"]["futureField"]
-        );
-    }
-
-    #[test]
-    fn corrupt_provider_identity_is_not_reset() {
-        let mut metadata = SessionMetadata::new(
-            "s1".into(),
-            "Native".into(),
-            "acp:claude-native".into(),
-            "primary".into(),
-        );
-        metadata.custom_metadata =
-            Some(json!({"acpClientId":"claude-native", "acpRemoteSessionId":123}));
-        assert!(claude_native_state_from_metadata(&metadata).is_err());
-        assert_eq!(metadata.custom_metadata.unwrap()["acpRemoteSessionId"], 123);
     }
 }
 

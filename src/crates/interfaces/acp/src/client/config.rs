@@ -73,6 +73,8 @@ pub struct AcpClientInfo {
     pub status: AcpClientStatus,
     pub tool_name: String,
     pub session_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<super::native::NativeAgentCapabilities>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

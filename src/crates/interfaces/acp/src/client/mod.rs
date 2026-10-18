@@ -1,9 +1,9 @@
 mod builtin_clients;
-pub mod claude_native;
 mod config;
 mod dsh_profile;
 mod execution;
 mod manager;
+pub mod native;
 mod prompt;
 mod remote_capability_store;
 mod remote_session;

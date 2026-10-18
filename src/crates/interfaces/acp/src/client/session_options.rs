@@ -92,6 +92,9 @@ pub struct AcpSessionOptions {
     /// Present on combined metadata reads; absence preserves the legacy commands endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub available_commands: Option<Vec<AcpAvailableCommand>>,
+    /// Native driver capabilities; absent for ordinary ACP clients and old hosts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<super::native::NativeAgentCapabilities>,
     #[serde(default)]
     pub current_model_id: Option<String>,
     #[serde(default)]

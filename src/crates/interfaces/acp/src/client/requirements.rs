@@ -31,9 +31,9 @@ pub(crate) fn acp_requirement_spec<'a>(
     client_id: &'a str,
     config: Option<&'a AcpClientConfig>,
 ) -> AcpRequirementSpec<'a> {
-    if client_id == super::claude_native::CLIENT_ID {
+    if let Some(driver) = super::native::native_driver(client_id) {
         return AcpRequirementSpec {
-            tool_command: "claude",
+            tool_command: driver.command(),
             install_package: None,
             adapter: None,
         };
