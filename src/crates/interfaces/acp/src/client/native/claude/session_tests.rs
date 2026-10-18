@@ -1,6 +1,6 @@
 use super::*;
 use openbitfun_core::agentic::events::EventQueueConfig;
-use tokio::io::DuplexStream;
+use tokio::io::{AsyncWriteExt, DuplexStream};
 
 fn fixture() -> (Arc<ClaudeNativeSession>, Arc<NativeProcess>, DuplexStream) {
     let session = ClaudeNativeSession::new(

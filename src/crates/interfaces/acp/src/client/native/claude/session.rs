@@ -6,8 +6,6 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::pin::Pin;
-use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,22 +14,23 @@ use dashmap::DashMap;
 use openbitfun_core::agentic::core::SessionContinuationPolicy;
 use openbitfun_core::agentic::events::EventQueue;
 use openbitfun_core::infrastructure::events::{emit_global_event, BackendEvent};
-use openbitfun_core::service::remote_ssh::workspace_state::get_remote_workspace_manager;
 use openbitfun_core::util::errors::{OpenBitFunError, OpenBitFunResult};
-use openbitfun_events::{AgenticEvent, AgenticEventPriority};
+use openbitfun_events::AgenticEvent;
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::{oneshot, Mutex, Notify};
 
-use super::super::manager::{configure_process_group, terminate_child_process_tree};
-use super::super::remote_shell::{remote_user_shell_command, shell_escape};
-use super::super::session_persistence::{AcpSessionPersistence, ClaudeNativePreferences};
-use super::super::{
+use super::super::preferences::NativeAgentPreferences;
+use super::super::process::{Reader, Writer};
+use super::super::NativeAgentDriver;
+use super::projector::{native_tool_name, ClaudeTurnProjector};
+use crate::client::remote_shell::{remote_user_shell_command, shell_escape};
+use crate::client::session_persistence::AcpSessionPersistence;
+use crate::client::{
     AcpSessionConfigKind, AcpSessionConfigOption, AcpSessionConfigSelectOption,
     AcpSessionConfigValue, AcpSessionModelOption, AcpSessionOptions,
     SubmitAcpPermissionResponseRequest,
 };
-use super::projector::{native_tool_name, ClaudeTurnProjector};
 
 pub const CLIENT_ID: &str = "claude-native";
 /// Follow the Claude CLI's own configured model (no `--model` flag).
@@ -66,8 +65,6 @@ const THINKING_LEVELS: &[(&str, &str)] = &[
     ("max", "Max"),
 ];
 const INTERRUPT_GRACE: Duration = Duration::from_secs(3);
-type Reader = Pin<Box<dyn AsyncRead + Send>>;
-type Writer = Pin<Box<dyn AsyncWrite + Send>>;
 
 struct NativeProcess {
     id: String,
@@ -82,21 +79,13 @@ struct NativeProcess {
 
 impl NativeProcess {
     async fn write(&self, frame: &Value) -> OpenBitFunResult<()> {
-        let mut bytes = serde_json::to_vec(frame).map_err(|e| service_error(e.to_string()))?;
-        bytes.push(b'\n');
-        tokio::time::timeout(INTERRUPT_GRACE, async {
-            let mut writer = self.writer.lock().await;
-            writer
-                .write_all(&bytes)
-                .await
-                .map_err(|e| service_error(e.to_string()))?;
-            writer
-                .flush()
-                .await
-                .map_err(|e| service_error(e.to_string()))
-        })
+        super::super::process::write_json_line(
+            &self.writer,
+            frame,
+            INTERRUPT_GRACE,
+            "Claude stdin write timed out",
+        )
         .await
-        .map_err(|_| service_error("Claude stdin write timed out"))?
     }
 
     async fn request(&self, request: Value, timeout: Duration) -> OpenBitFunResult<Value> {
@@ -220,7 +209,7 @@ impl ClaudeNativeSession {
 
     /// Seed model / permission mode / thinking from remembered choices.
     /// The model is re-validated once the SDK reports its catalog.
-    pub(in crate::client) fn apply_preferences(&self, preferences: ClaudeNativePreferences) {
+    pub(in crate::client) fn apply_preferences(&self, preferences: NativeAgentPreferences) {
         let assign = |slot: &std::sync::Mutex<String>, value: Option<String>| {
             if let Some(value) = value {
                 *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = value;
@@ -244,10 +233,10 @@ impl ClaudeNativeSession {
         );
     }
 
-    async fn remember(&self, update: impl Fn(&mut ClaudeNativePreferences)) {
+    async fn remember(&self, update: impl Fn(&mut NativeAgentPreferences)) {
         if let Some((persistence, storage)) = &self.persistence {
             if let Err(error) = persistence
-                .save_claude_preference(storage, &self.session_id, update)
+                .save_native_preference(CLIENT_ID, storage, &self.session_id, update)
                 .await
             {
                 log::warn!("Failed to remember Claude native preference: {error}");
@@ -284,6 +273,7 @@ impl ClaudeNativeSession {
             model_config_id: None,
             config_options: self.config_options(&models),
             context_usage: None,
+            capabilities: Some(super::ClaudeNativeDriver.capabilities()),
         }
     }
 
@@ -385,7 +375,8 @@ impl ClaudeNativeSession {
         }
         *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = value.clone();
         if config_id == PERMISSION_MODE_CONFIG_ID {
-            self.remember(|p| p.permission_mode = Some(value.clone())).await;
+            self.remember(|p| p.permission_mode = Some(value.clone()))
+                .await;
         } else {
             self.remember(|p| p.thinking = Some(value.clone())).await;
         }
@@ -441,7 +432,8 @@ impl ClaudeNativeSession {
                 process.kill().await;
             }
         }
-        self.remember(|p| p.model = Some(model_id.to_string())).await;
+        self.remember(|p| p.model = Some(model_id.to_string()))
+            .await;
         Ok(self.options())
     }
 
@@ -553,15 +545,7 @@ impl ClaudeNativeSession {
     }
 
     async fn enqueue(&self, events: Vec<AgenticEvent>) -> OpenBitFunResult<()> {
-        for event in events {
-            // A native stream is already causally ordered. The legacy priority
-            // heap must not put tool/terminal events ahead of their turn/round.
-            self.queue
-                .enqueue(event, Some(AgenticEventPriority::Normal))
-                .await
-                .map_err(|e| service_error(format!("Claude event enqueue failed: {e}")))?;
-        }
-        Ok(())
+        super::super::events::enqueue(&self.queue, events, "Claude").await
     }
 
     async fn ensure_process(self: &Arc<Self>) -> OpenBitFunResult<Arc<NativeProcess>> {
@@ -590,98 +574,34 @@ impl ClaudeNativeSession {
                 *completion = None;
             }
         }
-        let (kill_tx, kill_rx) = oneshot::channel();
-        let (terminated_tx, terminated_rx) = oneshot::channel();
-        let (exit_tx, exit_rx) = tokio::sync::watch::channel(None);
-        let (writer, reader, stderr): (Writer, Reader, Reader) = if let Some(connection) =
-            &self.remote_connection_id
-        {
-            let manager = get_remote_workspace_manager()
-                .ok_or_else(|| service_error("Remote workspace manager is not initialized"))?;
-            let ssh = manager
-                .get_ssh_manager()
-                .await
-                .ok_or_else(|| service_error("SSH manager is unavailable for Claude native"))?;
-            let command = remote_command(&self.workspace_path, &args);
-            let transport = ssh
-                .open_workspace_stdio(connection, &command)
-                .await
-                .map_err(|e| service_error(format!("Claude SSH launch failed: {e}")))?;
-            let (writer, reader, stderr, control, completion) = transport.into_parts();
-            tokio::spawn(async move {
-                tokio::select! {
-                    _ = kill_rx => {
-                        if let Err(error) = control.kill().await {
-                            log::warn!("Claude SSH process termination failed: {error}");
-                        }
-                        completion.wait().await;
-                    }
-                    exit = completion.clone().wait() => {
-                        let _ = exit_tx.send(Some(format!("Claude SSH process exited: {:?}", exit.exit_code)));
-                    }
-                }
-                let _ = terminated_tx.send(());
-            });
-            (Box::pin(writer), Box::pin(reader), Box::pin(stderr))
-        } else {
-            let mut command =
-                openbitfun_core::util::process_manager::create_tokio_command(local_executable());
-            configure_process_group(&mut command);
-            command
-                .args(&args)
-                .current_dir(&self.workspace_path)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true);
-            let mut child = command
-                .spawn()
-                .map_err(|e| service_error(format!("Claude native launch failed: {e}")))?;
-            let writer = child
-                .stdin
-                .take()
-                .ok_or_else(|| service_error("Claude stdin unavailable"))?;
-            let reader = child
-                .stdout
-                .take()
-                .ok_or_else(|| service_error("Claude stdout unavailable"))?;
-            let stderr = child
-                .stderr
-                .take()
-                .ok_or_else(|| service_error("Claude stderr unavailable"))?;
-            tokio::spawn(async move {
-                tokio::select! {
-                    _ = kill_rx => terminate_child_process_tree(CLIENT_ID, child).await,
-                    exit = child.wait() => {
-                        let _ = exit_tx.send(Some(format!("Claude process exited: {exit:?}")));
-                    }
-                }
-                let _ = terminated_tx.send(());
-            });
-            (Box::pin(writer), Box::pin(reader), Box::pin(stderr))
-        };
+        let executable = local_executable();
+        let remote_command = remote_command(&self.workspace_path, &args);
+        let io = super::super::process::spawn(super::super::process::ProcessConfig {
+            client_id: CLIENT_ID,
+            name: "Claude",
+            executable: &executable,
+            args: &args,
+            workspace_path: &self.workspace_path,
+            remote_connection_id: self.remote_connection_id.as_deref(),
+            remote_command: &remote_command,
+        })
+        .await?;
+        let reader = io.reader;
+        let stderr = io.stderr;
         let process = Arc::new(NativeProcess {
             id: uuid::Uuid::new_v4().to_string(),
-            writer: Mutex::new(writer),
+            writer: Mutex::new(io.writer),
             controls: DashMap::new(),
-            shutdown: Mutex::new(Some(kill_tx)),
+            shutdown: Mutex::new(Some(io.shutdown)),
             alive: AtomicBool::new(true),
-            terminated: Mutex::new(Some(terminated_rx)),
-            exit: exit_rx,
+            terminated: Mutex::new(Some(io.terminated)),
+            exit: io.exit,
             stderr: Mutex::new(VecDeque::new()),
         });
         *slot = Some(process.clone());
         let tail_process = process.clone();
         let stderr_task = tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let mut tail = tail_process.stderr.lock().await;
-                // Bound diagnostics, not protocol frames or agent behavior.
-                tail.push_back(line.chars().take(2048).collect());
-                while tail.len() > 20 {
-                    tail.pop_front();
-                }
-            }
+            super::super::process::collect_stderr(stderr, &tail_process.stderr).await;
         });
         let session = self.clone();
         let reader_process = process.clone();
@@ -705,7 +625,9 @@ impl ClaudeNativeSession {
                     // to the CLI default instead of failing the first turn.
                     let model = self.selected_model();
                     if model != DEFAULT_MODEL_ID
-                        && !models.iter().any(|row| row["value"].as_str() == Some(model.as_str()))
+                        && !models
+                            .iter()
+                            .any(|row| row["value"].as_str() == Some(model.as_str()))
                     {
                         log::warn!("Remembered Claude model {model} is unavailable; using default");
                         *self
@@ -1282,6 +1204,58 @@ impl ClaudeNativeSession {
         if let Some(process) = self.process.lock().await.as_ref() {
             process.kill().await;
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl super::super::NativeAgentSession for ClaudeNativeSession {
+    fn client_id(&self) -> &'static str {
+        CLIENT_ID
+    }
+    fn options(&self) -> AcpSessionOptions {
+        ClaudeNativeSession::options(self)
+    }
+    async fn warm_up(self: Arc<Self>) -> OpenBitFunResult<()> {
+        ClaudeNativeSession::warm_up(&self).await
+    }
+    async fn start_turn(
+        self: Arc<Self>,
+        turn_id: String,
+        input: String,
+        original: Option<String>,
+    ) -> OpenBitFunResult<()> {
+        ClaudeNativeSession::start_turn(&self, turn_id, input, original).await
+    }
+    async fn cancel(&self) -> OpenBitFunResult<()> {
+        ClaudeNativeSession::cancel(self).await
+    }
+    async fn set_model(&self, id: &str) -> OpenBitFunResult<AcpSessionOptions> {
+        ClaudeNativeSession::set_model(self, id).await
+    }
+    async fn set_config_option(
+        &self,
+        id: &str,
+        value: AcpSessionConfigValue,
+    ) -> OpenBitFunResult<AcpSessionOptions> {
+        ClaudeNativeSession::set_config_option(self, id, value).await
+    }
+    async fn respond_permission(
+        &self,
+        request: &SubmitAcpPermissionResponseRequest,
+    ) -> OpenBitFunResult<bool> {
+        match self.submit_permission(request).await {
+            Some(result) => result.map(|()| true),
+            None => Ok(false),
+        }
+    }
+    fn commands(&self) -> Vec<crate::client::AcpAvailableCommand> {
+        Vec::new()
+    }
+    fn matches_scope(&self, path: &str, remote: Option<&str>) -> bool {
+        ClaudeNativeSession::matches_scope(self, path, remote)
+    }
+    async fn shutdown(&self) {
+        ClaudeNativeSession::shutdown(self).await
     }
 }
 

@@ -89,6 +89,8 @@ impl From<agent_client_protocol::schema::PlanEntry> for AcpPlanEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpSessionOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<super::native::NativeAgentCapabilities>,
     #[serde(default)]
     pub current_model_id: Option<String>,
     #[serde(default)]
@@ -171,6 +173,7 @@ pub(super) fn session_options_from_state(
             model_config_id: None,
             config_options: session_config_options,
             context_usage,
+            ..Default::default()
         };
     }
 
@@ -182,6 +185,7 @@ pub(super) fn session_options_from_state(
             model_config_id: Some(option.id.to_string()),
             config_options: session_config_options,
             context_usage,
+            ..Default::default()
         };
     }
 

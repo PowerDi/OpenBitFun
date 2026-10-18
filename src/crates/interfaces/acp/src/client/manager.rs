@@ -44,6 +44,7 @@ use super::config::{
     AcpClientRequirementProbe, AcpClientStatus, RemoteAcpClientRequirementSnapshot,
 };
 use super::dsh_profile::{ensure_bundled_profile, ensure_bundled_profile_remote};
+use super::native::{self, NativeAgentDriver, NativeAgentOpenContext, NativeAgentSession};
 use super::prompt::AcpPrompt;
 use super::remote_capability_store::RemoteAcpCapabilityStore;
 use super::remote_session::{preferred_resume_strategies, AcpRemoteSessionStrategy};
@@ -157,7 +158,7 @@ pub struct AcpClientService {
     session_persistence: Arc<AcpSessionPersistence>,
     remote_capability_store: RemoteAcpCapabilityStore,
     clients: DashMap<String, Arc<AcpClientConnection>>,
-    native_sessions: DashMap<String, Arc<super::claude_native::ClaudeNativeSession>>,
+    native_sessions: DashMap<String, Arc<dyn NativeAgentSession>>,
     native_preparation: Mutex<()>,
     pending_permissions: DashMap<String, PendingPermission>,
     session_permission_modes: DashMap<String, AcpClientPermissionMode>,
@@ -242,90 +243,65 @@ impl AcpClientService {
         }))
     }
 
-    /// Prepare a native driver without launching an ACP adapter. Persist the
-    /// provider UUID in the existing tolerant external-session metadata shape.
-    pub async fn prepare_claude_native_session(
+    pub fn native_driver(&self, client_id: &str) -> Option<&'static dyn NativeAgentDriver> {
+        native::native_driver(client_id)
+    }
+
+    pub fn is_native_client(&self, client_id: &str) -> bool {
+        native::is_native_client(client_id)
+    }
+
+    /// Prepare through the native registry without launching an ACP adapter.
+    pub async fn prepare_native_session(
         &self,
+        client_id: &str,
         session_id: &str,
         workspace_path: &str,
         remote_connection_id: Option<&str>,
         session_storage_path: &Path,
-    ) -> OpenBitFunResult<Arc<super::claude_native::ClaudeNativeSession>> {
+    ) -> OpenBitFunResult<Arc<dyn NativeAgentSession>> {
+        let driver = self.native_driver(client_id).ok_or_else(|| {
+            OpenBitFunError::Validation(format!("Unknown native agent: {client_id}"))
+        })?;
         let _guard = self.native_preparation.lock().await;
         if let Some(session) = self.native_sessions.get(session_id) {
-            if !session.matches_scope(workspace_path, remote_connection_id) {
-                return Err(OpenBitFunError::Validation(
-                    "Claude native session workspace or host changed; refusing local fallback"
-                        .into(),
-                ));
+            if session.client_id() != client_id
+                || !session.matches_scope(workspace_path, remote_connection_id)
+            {
+                return Err(OpenBitFunError::Validation(format!(
+                    "{} session workspace or host changed; refusing local fallback",
+                    driver.session_label(),
+                )));
             }
             return Ok(session.clone());
         }
         let queue = openbitfun_core::agentic::coordination::get_global_coordinator()
             .ok_or_else(|| OpenBitFunError::service("Conversation coordinator is not initialized"))?
             .event_queue();
-        let (persisted, resume, turn_index) = self
-            .session_persistence
-            .load_claude_native_state(session_storage_path, session_id)
+        let session = driver
+            .open(NativeAgentOpenContext {
+                session_id: session_id.into(),
+                workspace_path: workspace_path.into(),
+                remote_connection_id: remote_connection_id.map(str::to_string),
+                session_storage_path: session_storage_path.to_path_buf(),
+                queue,
+                persistence: self.session_persistence.clone(),
+            })
             .await?;
-        let provider_id = persisted.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        uuid::Uuid::parse_str(&provider_id).map_err(|_| {
-            OpenBitFunError::Validation(
-                "Invalid persisted Claude session UUID; session data was preserved".into(),
-            )
-        })?;
-        self.session_persistence
-            .update_remote_session_state(
-                session_storage_path,
-                session_id,
-                &provider_id,
-                if resume {
-                    "claude-native-stream-json"
-                } else {
-                    "claude-native-prepared"
-                },
-                None,
-            )
-            .await?;
-        let session = super::claude_native::ClaudeNativeSession::new(
-            session_id.into(),
-            provider_id,
-            workspace_path.into(),
-            remote_connection_id.map(str::to_string),
-            resume,
-            queue,
-            Some((
-                self.session_persistence.clone(),
-                session_storage_path.to_path_buf(),
-            )),
-            turn_index,
-        );
-        session.apply_preferences(
-            self.session_persistence
-                .load_claude_preferences(session_storage_path, session_id)
-                .await,
-        );
         self.native_sessions
             .insert(session_id.into(), session.clone());
         Ok(session)
     }
 
     /// Live native session, if it has been prepared in this process.
-    pub fn claude_native_session(
-        &self,
-        session_id: &str,
-    ) -> Option<Arc<super::claude_native::ClaudeNativeSession>> {
+    pub fn native_session(&self, session_id: &str) -> Option<Arc<dyn NativeAgentSession>> {
         self.native_sessions
             .get(session_id)
             .map(|entry| entry.clone())
     }
 
-    pub async fn cancel_claude_native_session(&self, session_id: &str) -> OpenBitFunResult<()> {
-        let session = self
-            .native_sessions
-            .get(session_id)
-            .map(|entry| entry.clone());
-        if let Some(session) = session {
+    pub async fn cancel_native_session(&self, session_id: &str) -> OpenBitFunResult<()> {
+        if let Some(session) = self.native_session(session_id) {
             session.cancel().await?;
         }
         Ok(())
@@ -408,29 +384,38 @@ impl AcpClientService {
                 id,
                 status,
                 session_count,
+                capabilities: None,
             });
         }
-        infos.retain(|info| info.id != super::claude_native::CLIENT_ID);
-        infos.push(AcpClientInfo {
-            id: super::claude_native::CLIENT_ID.into(),
-            name: "Claude Code (Native)".into(),
-            command: "claude".into(),
-            args: Vec::new(),
-            enabled: true,
-            readonly: true,
-            subagent: super::config::AcpClientSubagentConfig {
-                enabled: false,
-                ..Default::default()
-            },
-            permission_mode: AcpClientPermissionMode::Ask,
-            status: if self.native_sessions.is_empty() {
-                AcpClientStatus::Configured
-            } else {
-                AcpClientStatus::Running
-            },
-            tool_name: AcpAgentTool::tool_name_for(super::claude_native::CLIENT_ID),
-            session_count: self.native_sessions.len(),
-        });
+        infos.retain(|info| !self.is_native_client(&info.id));
+        for driver in native::drivers() {
+            let session_count = self
+                .native_sessions
+                .iter()
+                .filter(|entry| entry.value().client_id() == driver.client_id())
+                .count();
+            infos.push(AcpClientInfo {
+                id: driver.client_id().into(),
+                name: driver.name().into(),
+                command: driver.command().into(),
+                args: Vec::new(),
+                enabled: true,
+                readonly: true,
+                subagent: super::config::AcpClientSubagentConfig {
+                    enabled: false,
+                    ..Default::default()
+                },
+                permission_mode: AcpClientPermissionMode::Ask,
+                status: if session_count == 0 {
+                    AcpClientStatus::Configured
+                } else {
+                    AcpClientStatus::Running
+                },
+                tool_name: AcpAgentTool::tool_name_for(driver.client_id()),
+                session_count,
+                capabilities: Some(driver.capabilities()),
+            });
+        }
         infos.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(infos)
     }
@@ -447,10 +432,12 @@ impl AcpClientService {
             let cached = self.remote_capability_store.get(remote_connection_id).await;
             if force_refresh
                 || cached.as_ref().is_some_and(|snapshot| {
-                    !snapshot
-                        .probes
-                        .iter()
-                        .any(|probe| probe.id == super::claude_native::CLIENT_ID)
+                    native::drivers().iter().any(|driver| {
+                        !snapshot
+                            .probes
+                            .iter()
+                            .any(|probe| probe.id == driver.client_id())
+                    })
                 })
             {
                 return self
@@ -467,8 +454,10 @@ impl AcpClientService {
                 ids.push(id.to_string());
             }
         }
-        if !ids.iter().any(|id| id == super::claude_native::CLIENT_ID) {
-            ids.push(super::claude_native::CLIENT_ID.into());
+        for driver in native::drivers() {
+            if !ids.iter().any(|id| id == driver.client_id()) {
+                ids.push(driver.client_id().into());
+            }
         }
         ids.sort();
 
@@ -476,10 +465,8 @@ impl AcpClientService {
         for id in ids {
             let spec = acp_requirement_spec(&id, configs.get(&id));
             let native_executable;
-            let command = if id == super::claude_native::CLIENT_ID {
-                native_executable = super::claude_native::local_executable()
-                    .to_string_lossy()
-                    .into_owned();
+            let command = if let Some(driver) = self.native_driver(&id) {
+                native_executable = driver.local_executable().to_string_lossy().into_owned();
                 native_executable.as_str()
             } else {
                 spec.tool_command
@@ -563,8 +550,10 @@ impl AcpClientService {
                 ids.push(id.to_string());
             }
         }
-        if !ids.iter().any(|id| id == super::claude_native::CLIENT_ID) {
-            ids.push(super::claude_native::CLIENT_ID.into());
+        for driver in native::drivers() {
+            if !ids.iter().any(|id| id == driver.client_id()) {
+                ids.push(driver.client_id().into());
+            }
         }
         ids.sort();
 
@@ -892,10 +881,11 @@ impl AcpClientService {
     }
 
     pub async fn stop_client(self: &Arc<Self>, client_id: &str) -> OpenBitFunResult<()> {
-        if client_id == super::claude_native::CLIENT_ID {
+        if self.is_native_client(client_id) {
             let sessions: Vec<_> = self
                 .native_sessions
                 .iter()
+                .filter(|entry| entry.value().client_id() == client_id)
                 .map(|entry| entry.value().clone())
                 .collect();
             for session in sessions {
@@ -1074,8 +1064,7 @@ impl AcpClientService {
             .map(|entry| entry.value().clone())
             .collect();
         for session in sessions {
-            if let Some(result) = session.submit_permission(&request).await {
-                result?;
+            if session.respond_permission(&request).await? {
                 return Ok(AcpClientPermissionResponse {
                     permission_id: request.permission_id,
                     resolved: true,

@@ -52,18 +52,34 @@ closure without enabling the server role or `product-full`.
 
 ## Claude native stdio driver
 
-`client/claude_native` is the native Claude Code SDK stream-json driver, exposed
-through the existing external-client menu (`claude-native`), not an ACP adapter.
-Its process is session-scoped; `result` ends a foreground segment, not the
-process. Preserve generation fences, PID-scoped shutdown, native tool IDs in
-permission cards, and the canonical EventQueue ingress.
+The native driver registry and the object-safe `NativeAgentDriver` /
+`NativeAgentSession` interfaces live in `client/native/mod.rs`. Manager and
+desktop dispatch use that registry; adding a native provider must not extend the
+ACP connection path. Capability facts live in `native/capabilities.rs`;
+`process.rs` owns shared local/SSH stdio launch and supervision, line writes and
+stderr tails, and `events.rs` preserves canonical EventQueue ingress ordering.
+`preferences.rs` stores per-client defaults in `native_agent_preferences.json`,
+reads the legacy Claude file only when the new file is absent, and falls back
+from session metadata `nativeAgentPreferences` to `claudeNativePreferences`.
 
-Focused verification (memory streams; no Claude account or SSH host required):
+`client/native/claude` remains the Claude Code stream-json implementation,
+exposed through the existing external-client menu (`claude-native`), not an ACP
+adapter. Claude identity/resume validation, control correlation, permissions,
+turn state and subagent projection stay with that driver. Its process is
+session-scoped; `result` ends a foreground segment, not the process. Preserve
+generation fences, PID-scoped shutdown, native tool IDs in permission cards,
+and the canonical EventQueue ingress. PID-tree helpers continue to use the
+existing ACP process supervisor.
+
+Verification from `src/crates` (memory streams; no Claude account or SSH host required):
 
 ```bash
-cargo test -p openbitfun-acp --lib claude_native
+CARGO_TARGET_DIR=target/check-native cargo test -p openbitfun-acp --lib
+# Focus just the relocated driver and preference coverage:
+CARGO_TARGET_DIR=target/check-native cargo test -p openbitfun-acp --lib client::native
 ```
 
 The tests cover projection, control correlation, permission wire compatibility,
 turn cleanup, cancellation, stderr/EOF, retired generations, background notices,
-and legacy metadata. They do not establish live SSH or relay reconnect behavior.
+legacy metadata and preference migration. They do not establish live SSH,
+relay reconnect, Peer Device Mode or Detached Dispatch behavior.

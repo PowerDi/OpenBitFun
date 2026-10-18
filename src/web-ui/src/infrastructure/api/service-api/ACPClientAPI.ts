@@ -11,7 +11,21 @@ export interface AcpClientSubagentConfig {
   bestFor?: string;
 }
 
+export interface NativeAgentCapabilities {
+  selectModel: boolean;
+  permissionMode: boolean;
+  thinking: boolean;
+  commands: boolean;
+  subagents: {
+    observe: boolean;
+    readTranscript: boolean;
+    interact: boolean;
+  };
+  autonomousTurns: boolean;
+}
+
 export interface AcpClientInfo {
+  capabilities?: NativeAgentCapabilities;
   id: string;
   name: string;
   command: string;
@@ -172,6 +186,7 @@ export interface AcpContextUsage {
 }
 
 export interface AcpSessionOptions {
+  capabilities?: NativeAgentCapabilities;
   currentModelId?: string;
   availableModels: AcpSessionModelOption[];
   modelConfigId?: string;

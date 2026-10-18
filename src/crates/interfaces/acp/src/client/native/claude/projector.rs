@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use openbitfun_events::{AgenticEvent, ToolEventData, ToolEventIdentity};
 use serde_json::{json, Value};
 
-use super::super::tool_card_bridge::{normalize_tool_params, normalize_tool_result};
+use crate::client::tool_card_bridge::{normalize_tool_params, normalize_tool_result};
 
 /// Model identifiers reported on native rounds. Native harnesses pick their
 /// own model, so the config id is a synthetic, stable label.
