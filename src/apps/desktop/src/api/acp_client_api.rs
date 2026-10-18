@@ -2,6 +2,7 @@
 
 use crate::api::app_state::AppState;
 use crate::startup_trace::DesktopStartupTrace;
+use openbitfun_acp::client::native::{NativeAgentNotification, NativeAgentNotificationSink};
 use openbitfun_acp::client::{
     AcpAvailableCommand, AcpClientInfo, AcpClientPermissionResponse, AcpClientRequirementProbe,
     AcpClientStreamEvent, AcpSessionOptions, CreateAcpFlowSessionRecordResponse,
@@ -14,6 +15,32 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, State};
+
+/// Native drivers publish through the same presentation events as ACP streams.
+fn native_notification_sink(
+    app_handle: &AppHandle,
+    session_id: &str,
+    client_id: &str,
+) -> NativeAgentNotificationSink {
+    let app_handle = app_handle.clone();
+    let session_id = session_id.to_string();
+    let client_id = client_id.to_string();
+    std::sync::Arc::new(move |update| {
+        let result = match update {
+            NativeAgentNotification::AvailableCommandsUpdated(commands) => app_handle.emit(
+                "agentic://acp-available-commands-updated",
+                serde_json::json!({"sessionId":session_id, "clientId":client_id, "commands":commands}),
+            ),
+            NativeAgentNotification::PlanUpdated { turn_id, entries } => app_handle.emit(
+                "agentic://acp-plan-updated",
+                serde_json::json!({"sessionId":session_id, "turnId":turn_id, "clientId":client_id, "entries":entries}),
+            ),
+        };
+        if let Err(error) = result {
+            log::warn!("Failed to publish native agent update for {session_id}: {error}");
+        }
+    })
+}
 
 /// Workspace facts an ACP session command executes against, derived from the
 /// authoritative workspace record rather than from caller-supplied paths.
@@ -348,6 +375,11 @@ pub async fn create_acp_flow_session(
                 &scope.workspace_path,
                 scope.remote_connection_id.as_deref(),
                 &scope.session_storage_path,
+                Some(native_notification_sink(
+                    &app_handle,
+                    &response.session_id,
+                    &request.client_id,
+                )),
             )
             .await
             .map_err(|error| error.to_string())?;
@@ -464,6 +496,11 @@ pub async fn start_acp_dialog_turn(
                 path,
                 remote_connection_id.as_deref(),
                 storage,
+                Some(native_notification_sink(
+                    &app_handle,
+                    &session_id,
+                    &request.client_id,
+                )),
             )
             .await
             .map_err(|error| error.to_string())?;
@@ -788,6 +825,7 @@ pub async fn cancel_acp_dialog_turn(
 #[tauri::command]
 pub async fn get_acp_session_options(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     request: GetAcpSessionOptionsRequest,
 ) -> Result<AcpSessionOptions, String> {
     let service = state
@@ -820,6 +858,11 @@ pub async fn get_acp_session_options(
                         &scope.workspace_path,
                         scope.remote_connection_id.as_deref(),
                         &scope.session_storage_path,
+                        Some(native_notification_sink(
+                            &app_handle,
+                            &request.session_id,
+                            &request.client_id,
+                        )),
                     )
                     .await
                     .map_err(|error| error.to_string())?
@@ -906,6 +949,7 @@ pub async fn get_acp_session_commands(
 #[tauri::command]
 pub async fn set_acp_session_model(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     request: SetAcpSessionModelRequest,
 ) -> Result<AcpSessionOptions, String> {
     let service = state
@@ -937,6 +981,11 @@ pub async fn set_acp_session_model(
                         &scope.workspace_path,
                         scope.remote_connection_id.as_deref(),
                         &scope.session_storage_path,
+                        Some(native_notification_sink(
+                            &app_handle,
+                            &request.session_id,
+                            &request.client_id,
+                        )),
                     )
                     .await
                     .map_err(|error| error.to_string())?

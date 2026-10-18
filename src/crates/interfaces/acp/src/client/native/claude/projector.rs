@@ -80,6 +80,17 @@ pub(crate) struct ClaudeTurnProjector {
     /// Usage of the latest root assistant message: its prompt size is the
     /// current context occupancy (result usage sums every API call instead).
     last_message_usage: Option<Value>,
+    compaction: Option<Compaction>,
+    compaction_settled: bool,
+    compression_count: usize,
+    compaction_trigger: &'static str,
+}
+
+#[derive(Debug)]
+struct Compaction {
+    id: String,
+    tokens_before: usize,
+    started_at: std::time::Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -112,6 +123,10 @@ impl ClaudeTurnProjector {
             finished: false,
             sidechain: false,
             last_message_usage: None,
+            compaction: None,
+            compaction_settled: false,
+            compression_count: 0,
+            compaction_trigger: "auto",
         }
     }
 
@@ -129,6 +144,10 @@ impl ClaudeTurnProjector {
 
     pub(crate) fn is_finished(&self) -> bool {
         self.finished
+    }
+
+    pub(crate) fn mark_manual_compaction(&mut self) {
+        self.compaction_trigger = "manual";
     }
 
     pub(crate) fn mark_cancel_requested(&mut self) {
@@ -177,6 +196,15 @@ impl ClaudeTurnProjector {
         let mut out = Vec::new();
         match frame.get("type").and_then(Value::as_str) {
             Some("system") => {
+                self.consume_compaction(frame, &mut out);
+                if frame["subtype"] == "local_command_output" {
+                    if let Some(text) = frame["content"].as_str().filter(|text| !text.is_empty()) {
+                        if self.open_round.is_none() {
+                            self.start_round(&mut out);
+                        }
+                        out.extend(self.text_event(text.to_string()));
+                    }
+                }
                 if frame.get("subtype").and_then(Value::as_str) == Some("init") {
                     if let Some(model) = frame.get("model").and_then(Value::as_str) {
                         self.model_name = model.to_string();
@@ -196,6 +224,116 @@ impl ClaudeTurnProjector {
         out
     }
 
+    fn consume_compaction(&mut self, frame: &Value, out: &mut Vec<AgenticEvent>) {
+        let status = frame["subtype"] == "status";
+        let boundary = frame["subtype"] == "compact_boundary";
+        let outcome = frame["compact_result"]
+            .as_str()
+            .filter(|value| matches!(*value, "success" | "failed"));
+        let starting = status && frame["status"] == "compacting";
+        if !starting && !boundary && !(status && outcome.is_some()) {
+            return;
+        }
+        // CLI versions may send both compact_result and compact_boundary.
+        if !starting && self.compaction_settled {
+            return;
+        }
+        let metadata = &frame["compact_metadata"];
+        if self.compaction.is_none() {
+            let tokens_before = metadata["pre_tokens"]
+                .as_u64()
+                .map(|n| n as usize)
+                .unwrap_or_else(|| {
+                    self.last_message_usage.as_ref().map_or(0, |usage| {
+                        [
+                            "input_tokens",
+                            "cache_read_input_tokens",
+                            "cache_creation_input_tokens",
+                        ]
+                        .iter()
+                        .map(|key| usage[*key].as_u64().unwrap_or(0) as usize)
+                        .sum()
+                    })
+                });
+            let id = uuid::Uuid::new_v4().to_string();
+            out.push(AgenticEvent::ContextCompressionStarted {
+                session_id: self.session_id.clone(),
+                turn_id: self.turn_id.clone(),
+                compression_id: id.clone(),
+                trigger: metadata["trigger"]
+                    .as_str()
+                    .unwrap_or(self.compaction_trigger)
+                    .to_string(),
+                tokens_before,
+                context_window: 0,
+            });
+            self.compaction = Some(Compaction {
+                id,
+                tokens_before,
+                started_at: std::time::Instant::now(),
+            });
+            self.compaction_settled = false;
+        }
+        if !boundary && outcome.is_none() {
+            return;
+        }
+        let compaction = self.compaction.take().expect("started compaction");
+        self.compaction_settled = true;
+        if outcome == Some("failed") {
+            out.push(AgenticEvent::ContextCompressionFailed {
+                session_id: self.session_id.clone(),
+                turn_id: self.turn_id.clone(),
+                compression_id: compaction.id,
+                error: frame["error"]
+                    .as_str()
+                    .or_else(|| frame["message"].as_str())
+                    .unwrap_or("Claude context compaction failed")
+                    .to_string(),
+            });
+            return;
+        }
+        self.compression_count += 1;
+        let tokens_before = metadata["pre_tokens"]
+            .as_u64()
+            .map(|n| n as usize)
+            .unwrap_or(compaction.tokens_before);
+        // Claude normally reports only pre_tokens. Keep the last known occupancy
+        // until a later usage report, rather than treating missing post_tokens as zero.
+        let tokens_after = metadata["post_tokens"]
+            .as_u64()
+            .map(|n| n as usize)
+            .unwrap_or(tokens_before);
+        out.push(AgenticEvent::ContextCompressionCompleted {
+            session_id: self.session_id.clone(),
+            turn_id: self.turn_id.clone(),
+            compression_id: compaction.id,
+            compression_count: self.compression_count,
+            tokens_before,
+            tokens_after,
+            compression_ratio: if tokens_before == 0 {
+                1.0
+            } else {
+                tokens_after as f64 / tokens_before as f64
+            },
+            duration_ms: compaction.started_at.elapsed().as_millis() as u64,
+            has_summary: true,
+            summary_source: "model".into(),
+            applied: true,
+        });
+    }
+
+    fn fail_compaction(&mut self, error: &str, out: &mut Vec<AgenticEvent>) {
+        if let Some(compaction) = self.compaction.take() {
+            self.compaction_settled = true;
+            out.push(AgenticEvent::ContextCompressionFailed {
+                session_id: self.session_id.clone(),
+                turn_id: self.turn_id.clone(),
+                compression_id: compaction.id,
+                error: error.to_string(),
+            });
+        }
+    }
+
     /// Close the turn when the process faulted before a `result` arrived.
     pub(crate) fn fail(&mut self, error: &str) -> Vec<AgenticEvent> {
         if self.finished {
@@ -205,6 +343,7 @@ impl ClaudeTurnProjector {
             return self.cancel();
         }
         let mut out = Vec::new();
+        self.fail_compaction(error, &mut out);
         self.fail_open_tools(error, &mut out);
         self.close_round(&mut out);
         out.push(AgenticEvent::DialogTurnFailed {
@@ -224,6 +363,7 @@ impl ClaudeTurnProjector {
             return Vec::new();
         }
         let mut out = Vec::new();
+        self.fail_compaction("Claude context compaction was cancelled", &mut out);
         self.cancel_open_tools(&mut out);
         self.close_round(&mut out);
         out.push(AgenticEvent::DialogTurnCancelled {
@@ -517,6 +657,7 @@ impl ClaudeTurnProjector {
         }
         match outcome {
             TurnOutcome::Completed => {
+                self.fail_compaction("Claude turn ended before compaction completion", out);
                 // A result with tools still open is a protocol gap; close them
                 // so cards do not spin forever.
                 self.fail_open_tools("Tool did not report a result", out);

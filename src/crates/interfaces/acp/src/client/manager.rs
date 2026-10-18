@@ -259,6 +259,7 @@ impl AcpClientService {
         workspace_path: &str,
         remote_connection_id: Option<&str>,
         session_storage_path: &Path,
+        notifier: Option<native::NativeAgentNotificationSink>,
     ) -> OpenBitFunResult<Arc<dyn NativeAgentSession>> {
         let driver = self.native_driver(client_id).ok_or_else(|| {
             OpenBitFunError::Validation(format!("Unknown native agent: {client_id}"))
@@ -285,6 +286,7 @@ impl AcpClientService {
                 remote_connection_id: remote_connection_id.map(str::to_string),
                 session_storage_path: session_storage_path.to_path_buf(),
                 queue,
+                notifier,
                 persistence: self.session_persistence.clone(),
             })
             .await?;

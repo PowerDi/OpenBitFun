@@ -14,11 +14,23 @@ use openbitfun_core::util::errors::OpenBitFunResult;
 
 use super::session_persistence::AcpSessionPersistence;
 use super::{
-    AcpAvailableCommand, AcpSessionConfigValue, AcpSessionOptions,
+    AcpAvailableCommand, AcpPlanEntry, AcpSessionConfigValue, AcpSessionOptions,
     SubmitAcpPermissionResponseRequest,
 };
 pub use capabilities::{NativeAgentCapabilities, NativeSubagentCapabilities};
 pub(crate) use preferences::NativeAgentPreferencesStore;
+
+/// Presentation updates scoped to one native session. Hosts choose their event transport.
+#[derive(Debug, Clone)]
+pub enum NativeAgentNotification {
+    AvailableCommandsUpdated(Vec<AcpAvailableCommand>),
+    PlanUpdated {
+        turn_id: String,
+        entries: Vec<AcpPlanEntry>,
+    },
+}
+
+pub type NativeAgentNotificationSink = Arc<dyn Fn(NativeAgentNotification) + Send + Sync>;
 
 /// Prepared host resources. Provider identity and resume policy belong to the driver.
 pub struct NativeAgentOpenContext {
@@ -27,6 +39,7 @@ pub struct NativeAgentOpenContext {
     pub remote_connection_id: Option<String>,
     pub session_storage_path: PathBuf,
     pub queue: Arc<EventQueue>,
+    pub notifier: Option<NativeAgentNotificationSink>,
     pub(in crate::client) persistence: Arc<AcpSessionPersistence>,
 }
 
