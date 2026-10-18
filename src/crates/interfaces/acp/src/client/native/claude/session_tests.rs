@@ -3,6 +3,12 @@ use openbitfun_core::agentic::events::EventQueueConfig;
 use tokio::io::{AsyncWriteExt, DuplexStream};
 
 fn fixture() -> (Arc<ClaudeNativeSession>, Arc<NativeProcess>, DuplexStream) {
+    fixture_with_notifier(None)
+}
+
+fn fixture_with_notifier(
+    notifier: Option<NativeAgentNotificationSink>,
+) -> (Arc<ClaudeNativeSession>, Arc<NativeProcess>, DuplexStream) {
     let session = ClaudeNativeSession::new(
         "s1".into(),
         uuid::Uuid::new_v4().to_string(),
@@ -12,6 +18,7 @@ fn fixture() -> (Arc<ClaudeNativeSession>, Arc<NativeProcess>, DuplexStream) {
         Arc::new(EventQueue::new(EventQueueConfig::default())),
         None,
         0,
+        notifier,
     );
     let (writer, reader) = tokio::io::duplex(65536);
     let process = Arc::new(NativeProcess {
@@ -680,4 +687,265 @@ async fn set_model_sends_live_control_request() {
         Some("sonnet")
     );
     assert!(process.alive.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn commands_cache_initialize_replace_live_catalog_and_exclude_host_controls() {
+    use crate::client::native::NativeAgentSession;
+    let updates = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = updates.clone();
+    let (session, process, _output) = fixture_with_notifier(Some(Arc::new(move |update| {
+        recorded.lock().unwrap().push(update);
+    })));
+    let mut commands = vec![
+        json!({"name":"/compact", "description":"Compact context", "argumentHint":"instructions"}),
+        json!({"name":"init"}),
+        json!({"name":"review"}),
+        json!({"name":"recap"}),
+    ];
+    commands.extend(
+        [
+            "model",
+            "config",
+            "statusline",
+            "rewind",
+            "resume",
+            "fast",
+            "login",
+            "logout",
+            "permissions",
+            "exit",
+            "clear",
+            "vim",
+            "theme",
+            "terminal-setup",
+            "ide",
+            "doctor",
+            "upgrade",
+            "help",
+        ]
+        .iter()
+        .map(|name| json!({"name":name})),
+    );
+    session.cache_initialize_response(&json!({"commands":commands, "models":[]}));
+    let cached = session.commands();
+    assert_eq!(
+        cached.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+        ["compact", "init", "review", "recap"]
+    );
+    assert_eq!(cached[0].input_hint.as_deref(), Some("instructions"));
+    session.route_frame(&process, json!({"type":"system", "subtype":"init", "skills":["my-skill"], "slash_commands":["compact", "help"]})).await.unwrap();
+    assert_eq!(session.commands().len(), 5);
+    assert_eq!(session.commands()[0], cached[0]);
+    session.route_frame(&process, json!({"type":"system", "subtype":"commands_changed", "commands":[{"name":"review", "description":"Review changes"}, {"name":"model"}]})).await.unwrap();
+    assert_eq!(
+        session
+            .commands()
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>(),
+        ["review"]
+    );
+    session
+        .route_frame(
+            &process,
+            json!({"type":"system", "subtype":"commands_changed", "commands":[]}),
+        )
+        .await
+        .unwrap();
+    assert!(session.commands().is_empty());
+    let updates = updates.lock().unwrap();
+    assert_eq!(updates.len(), 4);
+    assert!(
+        matches!(&updates[3], NativeAgentNotification::AvailableCommandsUpdated(commands) if commands.is_empty())
+    );
+}
+
+#[tokio::test]
+async fn compaction_frames_emit_one_lifecycle_and_local_command_text() {
+    for trigger in ["manual", "auto"] {
+        let (session, process, _output) = fixture();
+        session
+            .begin_turn(
+                &mut *session.state.lock().await,
+                "t1".into(),
+                if trigger == "manual" {
+                    "/compact foo"
+                } else {
+                    "continue"
+                }
+                .into(),
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        for frame in [
+            json!({"type":"system", "subtype":"status", "status":"compacting", "compact_metadata":{"pre_tokens":1000}}),
+            json!({"type":"system", "subtype":"status", "status":"compacting"}),
+            json!({"type":"system", "subtype":"compact_boundary", "compact_metadata":{"trigger":trigger, "pre_tokens":1000}}),
+            json!({"type":"system", "subtype":"status", "compact_result":"success"}),
+            json!({"type":"system", "subtype":"local_command_output", "content":"Compacted context"}),
+        ] {
+            session.route_frame(&process, frame).await.unwrap();
+        }
+        let events = session.queue.dequeue_batch(100).await;
+        let started: Vec<_> = events
+            .iter()
+            .filter_map(|e| match &e.event {
+                AgenticEvent::ContextCompressionStarted {
+                    compression_id,
+                    trigger: actual,
+                    tokens_before,
+                    ..
+                } => {
+                    assert_eq!(actual, trigger);
+                    assert_eq!(*tokens_before, 1000);
+                    Some(compression_id)
+                }
+                _ => None,
+            })
+            .collect();
+        let completed: Vec<_> = events
+            .iter()
+            .filter_map(|e| match &e.event {
+                AgenticEvent::ContextCompressionCompleted {
+                    compression_id,
+                    tokens_before,
+                    tokens_after,
+                    applied,
+                    ..
+                } => {
+                    assert_eq!(
+                        (*tokens_before, *tokens_after, *applied),
+                        (1000, 1000, true)
+                    );
+                    Some(compression_id)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(started.len(), 1);
+        assert_eq!(started, completed);
+        assert!(events.iter().any(|e| matches!(&e.event, AgenticEvent::TextChunk { text, .. } if text == "Compacted context")));
+    }
+}
+
+#[tokio::test]
+async fn boundary_without_status_and_failed_compaction_are_projected() {
+    let (session, process, _output) = fixture();
+    session
+        .begin_turn(
+            &mut *session.state.lock().await,
+            "t1".into(),
+            "hello".into(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    for frame in [
+        json!({"type":"system", "subtype":"compact_boundary", "compact_metadata":{"pre_tokens":900, "post_tokens":200}}),
+        json!({"type":"system", "subtype":"status", "status":"compacting"}),
+        json!({"type":"system", "subtype":"status", "compact_result":"failed", "error":"Could not compact"}),
+        json!({"type":"system", "subtype":"status", "status":"compacting"}),
+        json!({"type":"result", "subtype":"error_during_execution", "is_error":true, "result":"Compaction interrupted"}),
+    ] {
+        session.route_frame(&process, frame).await.unwrap();
+    }
+    let events = session.queue.dequeue_batch(100).await;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(&e.event, AgenticEvent::ContextCompressionStarted { .. }))
+            .count(),
+        3
+    );
+    assert!(events.iter().any(|e| matches!(
+        &e.event,
+        AgenticEvent::ContextCompressionCompleted {
+            tokens_before: 900,
+            tokens_after: 200,
+            ..
+        }
+    )));
+    assert!(events.iter().any(|e| matches!(&e.event, AgenticEvent::ContextCompressionFailed { error, .. } if error == "Could not compact")));
+    assert!(events.iter().any(|e| matches!(&e.event, AgenticEvent::ContextCompressionFailed { error, .. } if error == "Compaction interrupted")));
+}
+
+#[tokio::test]
+async fn todo_write_publishes_session_plan_without_consuming_tool_cards() {
+    use openbitfun_events::ToolEventData;
+    let updates = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = updates.clone();
+    let (session, process, _output) = fixture_with_notifier(Some(Arc::new(move |update| {
+        recorded.lock().unwrap().push(update);
+    })));
+    session
+        .begin_turn(
+            &mut *session.state.lock().await,
+            "t1".into(),
+            "plan".into(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    session.route_frame(&process, json!({"type":"assistant", "message":{"id":"m1", "content":[{"type":"tool_use", "id":"todo1", "name":"TodoWrite", "input":{"todos":[
+        {"content":"Inspect", "status":"completed", "activeForm":"Inspecting"},
+        {"content":"Implement", "status":"in_progress", "activeForm":"Implementing"},
+        {"content":"Verify", "status":"pending", "activeForm":"Verifying"}
+    ]}}]}})).await.unwrap();
+    assert!(updates.lock().unwrap().is_empty());
+    session.route_frame(&process, json!({"type":"user", "message":{"content":[{"type":"tool_result", "tool_use_id":"todo1", "content":"Todos updated"}]}})).await.unwrap();
+    {
+        let updates = updates.lock().unwrap();
+        let NativeAgentNotification::PlanUpdated { turn_id, entries } = &updates[0] else {
+            panic!("plan update")
+        };
+        assert_eq!(turn_id, "t1");
+        assert_eq!(
+            entries
+                .iter()
+                .map(|e| (e.content.as_str(), e.status.as_str(), e.priority.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("Inspect", "completed", "medium"),
+                ("Implement", "in_progress", "medium"),
+                ("Verify", "pending", "medium")
+            ]
+        );
+    }
+    let events = session.queue.dequeue_batch(100).await;
+    assert!(events.iter().any(|e| matches!(
+        &e.event,
+        AgenticEvent::ToolEvent {
+            tool_event: ToolEventData::Started { .. },
+            ..
+        }
+    )));
+    assert!(events.iter().any(|e| matches!(
+        &e.event,
+        AgenticEvent::ToolEvent {
+            tool_event: ToolEventData::Completed { .. },
+            ..
+        }
+    )));
+    session
+        .route_frame(&process, json!({"type":"result", "subtype":"success"}))
+        .await
+        .unwrap();
+    session
+        .begin_turn(
+            &mut *session.state.lock().await,
+            "t2".into(),
+            "continue".into(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(&updates.lock().unwrap()[1], NativeAgentNotification::PlanUpdated { turn_id, entries } if turn_id == "t2" && entries.len() == 3)
+    );
 }

@@ -1,6 +1,8 @@
 //! Claude Code stream-json identity, resume policy and session implementation.
+mod commands;
 mod projector;
 mod session;
+mod tasks;
 pub use session::{ClaudeNativeSession, CLIENT_ID, DEFAULT_MODEL_ID};
 
 use super::{
@@ -41,6 +43,8 @@ impl NativeAgentDriver for ClaudeNativeDriver {
             select_model: true,
             permission_mode: true,
             thinking: true,
+            commands: true,
+            plan: true,
             subagents: NativeSubagentCapabilities {
                 observe: true,
                 read_transcript: true,
@@ -60,6 +64,7 @@ impl NativeAgentDriver for ClaudeNativeDriver {
             remote_connection_id,
             session_storage_path,
             queue,
+            notifier,
             persistence,
         } = context;
         let metadata = persistence
@@ -97,6 +102,7 @@ impl NativeAgentDriver for ClaudeNativeDriver {
             queue,
             Some((persistence.clone(), session_storage_path.clone())),
             turn_index,
+            notifier,
         );
         session.apply_preferences(
             persistence

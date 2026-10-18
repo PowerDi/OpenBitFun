@@ -22,8 +22,9 @@ use tokio::sync::{oneshot, Mutex, Notify};
 
 use super::super::preferences::NativeAgentPreferences;
 use super::super::process::{Reader, Writer};
-use super::super::NativeAgentDriver;
+use super::super::{NativeAgentDriver, NativeAgentNotification, NativeAgentNotificationSink};
 use super::projector::{native_tool_name, ClaudeTurnProjector};
+use super::tasks::ClaudeTasks;
 use crate::client::remote_shell::{remote_user_shell_command, shell_escape};
 use crate::client::session_persistence::AcpSessionPersistence;
 use crate::client::{
@@ -141,6 +142,7 @@ struct TurnState {
     process_id: Option<String>,
     /// Subagent transcripts keyed by the parent `Agent`/`Task` tool_use id.
     children: std::collections::HashMap<String, ChildTranscript>,
+    tasks: ClaudeTasks,
 }
 
 /// One Claude subagent projected as a read-only child session. Claude Code
@@ -171,6 +173,8 @@ pub struct ClaudeNativeSession {
     thinking: std::sync::Mutex<String>,
     /// Models reported by the SDK `initialize` response (`response.models`).
     sdk_models: std::sync::Mutex<Vec<Value>>,
+    commands: std::sync::Mutex<Vec<crate::client::AcpAvailableCommand>>,
+    notifier: Option<NativeAgentNotificationSink>,
 }
 
 impl ClaudeNativeSession {
@@ -183,6 +187,7 @@ impl ClaudeNativeSession {
         queue: Arc<EventQueue>,
         persistence: Option<(Arc<AcpSessionPersistence>, PathBuf)>,
         turn_index: usize,
+        notifier: Option<NativeAgentNotificationSink>,
     ) -> Arc<Self> {
         Arc::new(Self {
             session_id,
@@ -204,7 +209,66 @@ impl ClaudeNativeSession {
             permission_mode: std::sync::Mutex::new("default".to_string()),
             thinking: std::sync::Mutex::new("auto".to_string()),
             sdk_models: std::sync::Mutex::new(Vec::new()),
+            commands: std::sync::Mutex::new(Vec::new()),
+            notifier,
         })
+    }
+
+    fn notify(&self, update: NativeAgentNotification) {
+        if let Some(notifier) = &self.notifier {
+            notifier(update);
+        }
+    }
+
+    fn cache_initialize_response(&self, response: &Value) {
+        self.replace_commands(&response["commands"]);
+        if let Some(models) = response["models"].as_array() {
+            *self
+                .sdk_models
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = models.clone();
+        }
+    }
+
+    fn replace_commands(&self, value: &Value) {
+        if !value.is_array() {
+            return;
+        }
+        self.publish_commands(super::commands::parse(value));
+    }
+
+    fn publish_commands(&self, commands: Vec<crate::client::AcpAvailableCommand>) {
+        let mut cached = self
+            .commands
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if *cached == commands {
+            return;
+        }
+        *cached = commands.clone();
+        drop(cached);
+        self.notify(NativeAgentNotification::AvailableCommandsUpdated(commands));
+    }
+
+    fn init_commands(&self, frame: &Value) {
+        // Some CLI releases advertise names here instead of in initialize.
+        // Preserve descriptions/hints already supplied by the SDK catalog.
+        let mut commands = self
+            .commands
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        for key in ["slash_commands", "skills"] {
+            for command in super::commands::parse(&frame[key]) {
+                if !commands
+                    .iter()
+                    .any(|existing| existing.name == command.name)
+                {
+                    commands.push(command);
+                }
+            }
+        }
+        self.publish_commands(commands);
     }
 
     /// Seed model / permission mode / thinking from remembered choices.
@@ -521,6 +585,7 @@ impl ClaudeNativeSession {
         original: Option<String>,
         autonomous: bool,
     ) -> OpenBitFunResult<()> {
+        let manual_compaction = input.split_whitespace().next() == Some("/compact");
         self.enqueue(vec![AgenticEvent::DialogTurnStarted {
             session_id: self.session_id.clone(),
             turn_id: turn_id.clone(),
@@ -533,6 +598,9 @@ impl ClaudeNativeSession {
         state.index += 1;
         let mut projector =
             ClaudeTurnProjector::new(&self.session_id, &turn_id, state.model.as_deref());
+        if manual_compaction {
+            projector.mark_manual_compaction();
+        }
         if !autonomous {
             // Show the waiting indicator immediately, before Claude streams.
             self.enqueue(projector.open_pending_round()).await?;
@@ -541,6 +609,19 @@ impl ClaudeNativeSession {
         state.autonomous = autonomous;
         state.streaming = false;
         state.process_id = None;
+        state.tasks.clear_pending();
+        let entries = state.tasks.entries();
+        if !entries.is_empty() {
+            self.notify(NativeAgentNotification::PlanUpdated {
+                turn_id: state
+                    .projector
+                    .as_ref()
+                    .expect("new turn")
+                    .turn_id()
+                    .to_string(),
+                entries,
+            });
+        }
         Ok(())
     }
 
@@ -617,10 +698,8 @@ impl ClaudeNativeSession {
             .await
         {
             Ok(response) => {
+                self.cache_initialize_response(&response);
                 if let Some(models) = response["models"].as_array() {
-                    if let Ok(mut cache) = self.sdk_models.lock() {
-                        *cache = models.clone();
-                    }
                     // A remembered model the CLI no longer offers falls back
                     // to the CLI default instead of failing the first turn.
                     let model = self.selected_model();
@@ -754,6 +833,7 @@ impl ClaudeNativeSession {
         }
         if frame["type"] == "system" && frame["subtype"] == "init" {
             state.model = frame["model"].as_str().map(str::to_string);
+            self.init_commands(&frame);
         }
         if frame["type"] == "control_request" {
             if frame["request"]["subtype"] == "can_use_tool" {
@@ -769,6 +849,10 @@ impl ClaudeNativeSession {
         }
         if frame["type"] == "system" {
             match frame["subtype"].as_str() {
+                Some("commands_changed") => {
+                    self.replace_commands(&frame["commands"]);
+                    return Ok(());
+                }
                 Some("task_started") => {
                     if let Some(tool_id) = frame["tool_use_id"].as_str() {
                         let tool_id = tool_id.to_string();
@@ -806,6 +890,19 @@ impl ClaudeNativeSession {
         }
         if frame["type"] == "stream_event" && frame["event"]["type"] == "message_start" {
             state.streaming = true;
+        }
+        if state.projector.is_some() {
+            if let Some(entries) = state.tasks.consume(&frame) {
+                self.notify(NativeAgentNotification::PlanUpdated {
+                    turn_id: state
+                        .projector
+                        .as_ref()
+                        .expect("active turn")
+                        .turn_id()
+                        .to_string(),
+                    entries,
+                });
+            }
         }
         if let Some(projector) = state.projector.as_mut() {
             let events = projector.consume(&frame);
@@ -1249,7 +1346,10 @@ impl super::super::NativeAgentSession for ClaudeNativeSession {
         }
     }
     fn commands(&self) -> Vec<crate::client::AcpAvailableCommand> {
-        Vec::new()
+        self.commands
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
     }
     fn matches_scope(&self, path: &str, remote: Option<&str>) -> bool {
         ClaudeNativeSession::matches_scope(self, path, remote)
