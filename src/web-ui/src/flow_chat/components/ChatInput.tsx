@@ -42,6 +42,8 @@ import { useAcpPlan } from '../hooks/useAcpPlan';
 import { usePromptSuggestionsEnabled } from '../hooks/usePromptSuggestionsEnabled';
 import { filterSlashCommands, useAcpSlashCommands } from '../hooks/useAcpSlashCommands';
 import { acpSessionRef, acpSlashCommandText } from '../utils/acpSession';
+import { externalAgentSupports } from '../utils/externalAgentCapabilities';
+import { useExternalAgentCapabilities } from '../hooks/useExternalAgentCapabilities';
 import { AcpPlanPanel } from './AcpPlanPanel';
 import type { FlowChatState, QueuedMessage } from '../types/flow-chat';
 import type {
@@ -805,10 +807,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     [effectiveTargetSession],
   );
   const { commands: acpAgentCommands } = useAcpSlashCommands(acpSessionForInput);
-  const isAcpInputSession = Boolean(acpSessionForInput);
+  const externalCaps = useExternalAgentCapabilities(effectiveTargetSessionId);
+  const canUsePromptCommands = externalAgentSupports(externalCaps, 'hostCommands');
+  const canUseImages = externalAgentSupports(externalCaps, 'input.images');
+  const canUseWorktree = externalAgentSupports(externalCaps, 'worktree');
+  const canUseDispatch = externalAgentSupports(externalCaps, 'dispatch');
+  const canUseExternalSkills = externalAgentSupports(externalCaps, 'skills');
+  const promptCommandsSupported = canUsePromptCommands || caps.ops.size > 0
+    || canUseExternalSkills || externalAgentSupports(externalCaps, 'mcpSelection');
   const reloadContextSupported = supportsLocalReloadContext({
     desktopRuntime: isTauriRuntime(),
-    acpSession: isAcpInputSession,
+    externalCapabilities: externalCaps,
     dispatchTransport: caps.dispatchTransport,
   });
   const canReloadContext = reloadContextSupported && Boolean(effectiveTargetSessionId);
@@ -1404,6 +1413,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   // backend resolves the mode for each submission.
   // The session-scoped mode, which is what the menu checkmark marks. An armed
   // one-off is reported separately so the two states stay distinguishable.
+  // External agents use their own approval API; permissionMode advertises that
+  // control, not access to the OpenBitFun Runtime policy setters below.
   const permissionMode: ChatInputPermissionMode = isAcpTargetSession
     ? 'acp'
     : chatInputPermissionMode(sessionPermissionMode ?? globalPermissionMode);
@@ -1415,6 +1426,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const activeSessionMode = effectiveTargetSessionId
     ? acpTargetAgentType || flowChatState.sessions.get(effectiveTargetSessionId)?.mode
     : undefined;
+  // Harness selection changes the OpenBitFun execution owner; model/thinking
+  // capabilities do not make that Runtime policy apply to an external driver.
   const chatInputModePolicy = useMemo(
     () => resolveChatInputModePolicy({
       currentMode,
@@ -1722,12 +1735,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   }, [effectiveSendAgentType, modeState.available, subagentToolInfo, targetModeEnabledTools]);
 
   const canUseSkillsForTarget = useMemo(
-    () => resolveChatInputCanUseSkills({
+    () => canUseExternalSkills && resolveChatInputCanUseSkills({
       isSubagentTarget: isSubagentInputTarget,
       targetAgentType: effectiveSendAgentType,
       availableAgents: targetSkillToolAgents,
     }),
-    [effectiveSendAgentType, isSubagentInputTarget, targetSkillToolAgents],
+    [canUseExternalSkills, effectiveSendAgentType, isSubagentInputTarget, targetSkillToolAgents],
   );
   const [slashCommandState, setSlashCommandState] = useState<{
     isActive: boolean;
@@ -1747,7 +1760,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   });
   const canSelectMcp = resolveChatInputCanUseMcp({
     targetAgentType: effectiveSendAgentType,
-    isAcpTargetSession,
+    externalCapabilities: externalCaps,
     isDispatchTransport: Boolean(caps.dispatchTransport),
   });
   const chatMcp = useChatMcpCatalog({
@@ -1873,7 +1886,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     forceRefresh = false,
   ) => {
     const requestId = ++externalPromptCatalogRequestRef.current;
-    if (isAcpInputSession) {
+    if (!canUsePromptCommands) {
       setExternalPromptCommands([]);
       setExternalPromptCommandsPending(false);
       setExternalPromptCommandsIssue(undefined);
@@ -1915,7 +1928,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         setExternalPromptCommandsLoading(false);
       }
     }
-  }, [isAcpInputSession, inputWorkspaceId]);
+  }, [canUsePromptCommands, inputWorkspaceId]);
 
   useEffect(() => {
     externalPromptCatalogRequestRef.current += 1;
@@ -2079,7 +2092,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       ));
     };
 
-    if (isAcpInputSession || !canUseSkillsForTarget) {
+    if (!canUseSkillsForTarget) {
       closeInlineSkillPicker();
       return;
     }
@@ -2100,7 +2113,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
 
     closeInlineSkillPicker();
-  }, [canUseSkillsForTarget, inlineTriggerState, isAcpInputSession]);
+  }, [canUseSkillsForTarget, inlineTriggerState]);
 
   const previousComposerSessionIdRef = useRef<string | null>(null);
   const previousComposerSurfaceEpochRef = useRef(deviceSurfaceScope.epoch);
@@ -2988,7 +3001,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const worktreeControl = useMemo(() => {
     if (!effectiveTargetSessionId || !effectiveTargetSession) return undefined;
     if (remoteWorkspaceSession) return undefined;
-    if (isSubagentInputTarget || isAcpTargetSession) return undefined;
+    if (isSubagentInputTarget || !canUseWorktree) return undefined;
     // A dispatch always executes against a managed worktree baseline of this
     // repository, so the chip reports that state instead of disappearing. It is
     // never togglable: the baseline is chosen with the target, not after.
@@ -3032,7 +3045,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     effectiveTargetSession,
     effectiveTargetSessionId,
     derivedState?.isProcessing,
-    isAcpTargetSession,
+    canUseWorktree,
     isSubagentInputTarget,
     remoteWorkspaceSession,
     tWorktrees,
@@ -3082,7 +3095,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       registration ||
       isBtwSession ||
       isSubagentInputTarget ||
-      isAcpInputSession ||
+      !canUseDispatch ||
       remoteWorkspaceSession
     ) {
       return undefined;
@@ -3128,7 +3141,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     dispatchObserverJob?.baselineWorktreePath,
     dispatchObserverJob?.branch,
     handleSelectDispatchTarget,
-    isAcpInputSession,
+    canUseDispatch,
     isBtwSession,
     isSubagentInputTarget,
     registration,
@@ -3437,10 +3450,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   }, [effectiveTargetSessionId, sessionBoundWorkspacePath, derivedState?.isProcessing]);
 
   const getFilteredActions = useCallback(() => {
-    if (isAcpInputSession) {
-      return [];
-    }
-
     const items: SlashActionItem[] = [
       ...(isPrimarySlashActionVisible({ actionId: 'btw', isBtwSession, canLaunchReview })
         ? [{
@@ -3519,10 +3528,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       const cmd = i.command.slice(1).toLowerCase();
       return cmd.includes(q) || i.label.toLowerCase().includes(q);
     });
-  }, [canLaunchReview, canReloadContext, canUseThreadGoal, caps.ops, derivedState?.isProcessing, isAcpInputSession, isBtwSession, isSubagentInputTarget, slashCommandState.query, t]);
+  }, [canLaunchReview, canReloadContext, canUseThreadGoal, caps.ops, derivedState?.isProcessing, isBtwSession, isSubagentInputTarget, slashCommandState.query, t]);
 
   const getFilteredMcpPromptCommands = useCallback((): SlashMcpPromptItem[] => {
-    if (isAcpInputSession) {
+    if (!externalAgentSupports(externalCaps, 'mcpSelection')) {
       return [];
     }
 
@@ -3539,10 +3548,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         item.label.toLowerCase().includes(q)
       );
     });
-  }, [isAcpInputSession, mcpPromptCommands, slashCommandState.query]);
+  }, [externalCaps, mcpPromptCommands, slashCommandState.query]);
 
   const getFilteredExternalPromptCommands = useCallback((): SlashExternalPromptCommandItem[] => {
-    if (isAcpInputSession
+    if (!canUsePromptCommands
       || derivedState?.isProcessing
       || (inlineTriggerState.isActive && inlineTriggerState.startOffset > 0)) {
       return [];
@@ -3554,7 +3563,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     return externalPromptCommands.filter(item =>
       item.command.slice(1).toLowerCase().includes(q)
         || item.label.toLowerCase().includes(q));
-  }, [derivedState?.isProcessing, externalPromptCommands, inlineTriggerState, isAcpInputSession, slashCommandState.query]);
+  }, [derivedState?.isProcessing, externalPromptCommands, inlineTriggerState, canUsePromptCommands, slashCommandState.query]);
 
   const getFilteredAcpCommands = useCallback((): SlashAcpCommandItem[] => {
     return filterSlashCommands(acpAgentCommands, slashCommandState.query).map(command => ({
@@ -3628,16 +3637,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   const getSlashPickerItems = useCallback((): SlashPickerItem[] => {
     const acpCommands = getFilteredAcpCommands();
-    if (isAcpInputSession) {
-      return acpCommands;
-    }
-
     const actions = getFilteredActions();
     const externalCommands = getFilteredExternalPromptCommands();
     const mcpPrompts = getFilteredMcpPromptCommands();
     const skills = getFilteredSkills();
     return [...acpCommands, ...actions, ...externalCommands, ...mcpPrompts, ...skills];
-  }, [getFilteredActions, getFilteredAcpCommands, getFilteredExternalPromptCommands, getFilteredMcpPromptCommands, getFilteredSkills, isAcpInputSession]);
+  }, [getFilteredActions, getFilteredAcpCommands, getFilteredExternalPromptCommands, getFilteredMcpPromptCommands, getFilteredSkills]);
 
   const getActiveSlashPickerItems = useCallback((): SlashPickerItem[] => {
     if (slashCommandState.kind === 'actions') {
@@ -3679,7 +3684,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       setSelectedNonExternalSlashCandidateId(undefined);
     }
 
-    const promptSlashCommandsEnabled = !isAcpInputSession;
+    const promptSlashCommandsEnabled = promptCommandsSupported;
     const localSlashCommandsEnabled = promptSlashCommandsEnabled && caps.localSlashCommands;
     const trimmed = text.trim();
     const isBtwCommand =
@@ -3708,7 +3713,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         ? resolveTypedMcpPromptCommand(text)
         : null;
 
-      if (isAcpInputSession && hasWhitespace) {
+      if (!promptCommandsSupported && hasWhitespace) {
         if (slashCommandState.isActive) {
           setSlashCommandState({ isActive: false, kind: 'all', query: '', selectedIndex: 0 });
         }
@@ -3763,7 +3768,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         selectedIndex: 0,
       });
     }
-  }, [canUseThreadGoal, contexts, derivedState, dispatchInput, externalPromptCommands, isAcpInputSession, prunePendingLargePastes, removeContext, resolveTypedMcpPromptCommand, selectedExternalPromptCandidateId, selectedNonExternalSlashCommand, setQueuedInput, slashCommandState.isActive, slashCommandState.kind, caps.localSlashCommands, caps.ops]);
+  }, [canUseThreadGoal, contexts, derivedState, dispatchInput, externalPromptCommands, promptCommandsSupported, prunePendingLargePastes, removeContext, resolveTypedMcpPromptCommand, selectedExternalPromptCandidateId, selectedNonExternalSlashCommand, setQueuedInput, slashCommandState.isActive, slashCommandState.kind, caps.localSlashCommands, caps.ops]);
 
   const submitBtwFromInput = useCallback(async () => {
     if (!derivedState) return;
@@ -5682,7 +5687,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       ...submittedContexts.filter(isConversationExcerpt).map(formatConversationExcerpt)].join('\n'));
     // Voice transcripts are always message content; they must not accidentally execute local commands.
     const promptSlashCommandsEnabled =
-      !isAcpInputSession &&
+      promptCommandsSupported &&
       messageOverride === undefined;
     const localSlashCommandsEnabled =
       promptSlashCommandsEnabled &&
@@ -5916,7 +5921,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     effectiveTargetSessionId,
     clearPendingLargePastes,
     expandComposerSpecialTokens,
-    isAcpInputSession,
+    promptCommandsSupported,
     richTextInputRef,
     replaceContexts,
     replacePendingLargePastes,
@@ -6713,7 +6718,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   );
   const workspaceStrip = workspaceStripVisible ? (
     <ChatInputWorkspaceStrip
-      workspaceControl={!registration && !isBtwSession && !isSubagentInputTarget && !isAcpTargetSession && !isAssistantWorkspace
+      workspaceControl={!registration && !isBtwSession && !isSubagentInputTarget && canUseWorktree && !isAssistantWorkspace
         ? {
             ...workspaceSelection.workspaceControl,
             onSelect: workspaceId => {
@@ -6999,7 +7004,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   : effectiveTargetSession?.workspaceId || contextWorkspace?.id}
                 excludeSessionId={effectiveTargetSessionId || undefined}
                 anchorRef={inputAreaAnchorRef}
-                entryView={isAcpTargetSession ? 'files' : 'sources'}
+                entryView={externalAgentSupports(externalCaps, 'mcpSelection') ? 'sources' : 'files'}
                 skills={canUseSkillsForTarget ? userInvocableSkills : []}
                 skillsLoading={resolvedModeSkillsLoading}
                 skillsLoadFailed={resolvedModeSkillsLoadFailed}
@@ -7013,7 +7018,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 mcpUnavailable={chatMcp.unavailable}
                 onRefreshMcp={chatMcp.refresh}
                 onSelectMcp={canSelectMcp ? selectContextMcp : undefined}
-                onAddImage={!isAcpTargetSession ? handleContextPickerAddImage : undefined}
+                onAddImage={canUseImages ? handleContextPickerAddImage : undefined}
                 onSelectContext={(context: FileContext | DirectoryContext | SessionReferenceContext) => {
                   addContext(context);
                   richTextInputRef.current?.insertContextTagReplacingTrigger?.(context);
@@ -7300,7 +7305,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   data-testid="chat-input-agent-boost"
                   ref={agentBoostRef}
                 >
-                  {!isAcpTargetSession && (
+                  {canUsePromptCommands && (
                     <span className="openbitfun-chat-input__agent-boost-trigger" ref={boostTriggerRef} onPointerEnter={() => setModeSkillsWarm(true)} data-openbitfun-component="chat-input" data-openbitfun-part="boostTrigger" data-openbitfun-state={modeState.dropdownOpen ? 'open' : undefined}>
                       <Tooltip content={t('chatInput.addBoostTooltip')}>
                         <ChatComposerActionButton

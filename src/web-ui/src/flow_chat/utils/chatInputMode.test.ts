@@ -1,3 +1,4 @@
+import { resolveExternalAgentCapabilities } from './externalAgentCapabilities';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -35,14 +36,14 @@ function createWorkspace(overrides: Partial<WorkspaceInfo>): WorkspaceInfo {
 
 describe('MCP picker availability', () => {
   it.each(['Minimal', 'minimal', ' MINIMAL '])('hides MCP in %s mode', targetAgentType => {
-    expect(resolveChatInputCanUseMcp({ targetAgentType, isAcpTargetSession: false, isDispatchTransport: false })).toBe(false);
+    expect(resolveChatInputCanUseMcp({ targetAgentType, externalCapabilities: null, isDispatchTransport: false })).toBe(false);
   });
   it.each(['Standard', 'Ultimate', 'Creative', 'agentic', 'DocsAgent'])('allows native %s discovery', targetAgentType => {
-    expect(resolveChatInputCanUseMcp({ targetAgentType, isAcpTargetSession: false, isDispatchTransport: false })).toBe(true);
+    expect(resolveChatInputCanUseMcp({ targetAgentType, externalCapabilities: null, isDispatchTransport: false })).toBe(true);
   });
   it('keeps ACP and detached dispatch discovery unavailable', () => {
-    expect(resolveChatInputCanUseMcp({ targetAgentType: 'Standard', isAcpTargetSession: true, isDispatchTransport: false })).toBe(false);
-    expect(resolveChatInputCanUseMcp({ targetAgentType: 'Standard', isAcpTargetSession: false, isDispatchTransport: true })).toBe(false);
+    expect(resolveChatInputCanUseMcp({ targetAgentType: 'Standard', externalCapabilities: resolveExternalAgentCapabilities('acp:unknown'), isDispatchTransport: false })).toBe(false);
+    expect(resolveChatInputCanUseMcp({ targetAgentType: 'Standard', externalCapabilities: null, isDispatchTransport: true })).toBe(false);
   });
 });
 

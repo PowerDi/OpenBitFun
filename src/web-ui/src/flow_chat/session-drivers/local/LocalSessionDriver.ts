@@ -3,6 +3,7 @@ import { readProjectDefaults } from '@/infrastructure/config/services/ProjectDef
 import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
 import { supportsModelPools } from '@/infrastructure/api/service-api/ModelPoolAPI';
 import { acpClientIdFromAgentType, isAcpFlowSession } from '../../utils/acpSession';
+import { externalAgentSupports, resolveExternalAgentCapabilities } from '../../utils/externalAgentCapabilities';
 import { hostQueueSupported, hostDialogQueue, queueImageAttachments } from '../../services/hostDialogQueue';
 import { promoteAcceptedHostMessage } from '../../services/hostQueueSubmission';
 import { requireSessionOwningWorkspaceId, sessionOwningWorkspaceId } from '../../utils/sessionOrdering';
@@ -530,7 +531,7 @@ export const localSessionDriver: SessionDriver = {
       }
 
     };
-    if (!acpClientId && hostQueueSupported(sessionId) && (!options?.execution || options.execution.kind === 'standard')) {
+    if (externalAgentSupports(resolveExternalAgentCapabilities(readySession), 'input.queue') && hostQueueSupported(sessionId) && (!options?.execution || options.execution.kind === 'standard')) {
       if (readySession.isHistorical || context.pendingHistoryLoads.has(surfaceScope.key('history-load', surfaceScope.epoch, sessionId))) {
         throw new Error('Session history is still restoring, please retry once loading finishes');
       }

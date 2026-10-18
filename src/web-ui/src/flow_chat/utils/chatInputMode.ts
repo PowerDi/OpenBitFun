@@ -1,3 +1,4 @@
+import { externalAgentSupports, type ExternalAgentCapabilities } from './externalAgentCapabilities';
 import { HARNESS_IDS, canonicalAgentId, canonicalHarnessId, type HarnessId } from '@/shared/agents/identity';
 import { resolveLegacySessionWorkspace } from '@/infrastructure/api/service-api/legacyWorkspaceCompatibility';
 import { WorkspaceKind, type WorkspaceInfo } from '@/shared/types';
@@ -17,10 +18,10 @@ export function agentExecutionTier(agentType: string | null | undefined): AgentE
 
 export function resolveChatInputCanUseMcp(params: {
   targetAgentType: string;
-  isAcpTargetSession: boolean;
+  externalCapabilities: ExternalAgentCapabilities | null;
   isDispatchTransport: boolean;
 }): boolean {
-  return !params.isAcpTargetSession
+  return externalAgentSupports(params.externalCapabilities, 'mcpSelection')
     && !params.isDispatchTransport
     && canonicalHarnessId(params.targetAgentType) !== 'Minimal';
 }

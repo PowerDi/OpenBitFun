@@ -32,7 +32,13 @@ vi.mock('@/infrastructure/config/services/ConfigManager', () => ({ configManager
   },
 } }));
 vi.mock('@/infrastructure/runtime', () => ({ isTauriRuntime: () => true }));
-vi.mock('../store/FlowChatStore', () => ({ flowChatStore: { getState: () => ({ sessions: state.sessions }) } }));
+vi.mock('../store/FlowChatStore', () => ({
+  flowChatStore: { getState: () => ({ sessions: state.sessions }) },
+  FlowChatStore: { getInstance: () => ({
+    getState: () => ({ sessions: state.sessions }),
+    subscribe: () => () => undefined,
+  }) },
+}));
 vi.mock('../session-drivers/resolve', () => ({ resolveSessionDriverId: () => 'local' }));
 vi.mock('@/infrastructure/i18n', () => ({ useI18n: () => ({ t: state.t }) }));
 

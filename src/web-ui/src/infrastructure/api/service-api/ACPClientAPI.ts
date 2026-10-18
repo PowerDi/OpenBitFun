@@ -1,5 +1,5 @@
 import { api } from './ApiClient';
-import { getActiveSurfaceScope } from '@/infrastructure/peer-device/deviceSurface';
+import { getActiveSurfaceScope, onSurfaceActivated } from '@/infrastructure/peer-device/deviceSurface';
 import type { ImageContextData as ImageInputContextData } from './ImageContextTypes';
 
 export type AcpClientPermissionMode = 'ask' | 'allow_once' | 'reject_once';
@@ -16,12 +16,34 @@ export interface NativeAgentCapabilities {
   permissionMode: boolean;
   thinking: boolean;
   commands: boolean;
+  hostCommands: boolean;
+  voiceHistory: boolean;
+  sideChat: boolean;
   subagents: {
     observe: boolean;
     readTranscript: boolean;
     interact: boolean;
   };
   autonomousTurns: boolean;
+  history: {
+    rollbackLastTurn: boolean;
+    fork: boolean;
+    importTranscripts: boolean;
+  };
+  input: {
+    images: boolean;
+    steering: boolean;
+    queue: boolean;
+  };
+  compact: boolean;
+  plan: boolean;
+  contextUsage: boolean;
+  backgroundTasks: boolean;
+  threadGoal: boolean;
+  worktree: boolean;
+  dispatch: boolean;
+  mcpSelection: boolean;
+  skills: boolean;
 }
 
 export interface AcpClientInfo {
@@ -265,6 +287,63 @@ export class ACPClientAPI {
   private static sessionOptionsInFlight = new Map<string, Promise<AcpSessionOptions>>();
   private static commandSnapshotListeners = new Set<(event: AcpAvailableCommandsUpdatedEvent) => void>();
   private static cacheScope = getActiveSurfaceScope();
+  private static capabilityRevision = 0;
+  private static capabilityListeners = new Set<() => void>();
+  private static unsubscribeCapabilitySurface: (() => void) | null = null;
+  private static capabilityClients: readonly AcpClientInfo[] = [];
+  private static sessionOptionsCache = new Map<string, AcpSessionOptions>();
+
+  private static sessionOptionsKey(request: Pick<GetAcpSessionOptionsRequest, 'sessionId' | 'clientId' | 'remoteConnectionId'>): string {
+    return JSON.stringify([request.sessionId, request.clientId, request.remoteConnectionId ?? '']);
+  }
+
+  private static publishCapabilities(): void {
+    ACPClientAPI.capabilityRevision += 1;
+    ACPClientAPI.capabilityListeners.forEach(listener => listener());
+  }
+
+  /** Observes existing API responses; subscribing never issues a host request. */
+  static subscribeCapabilities = (listener: () => void): (() => void) => {
+    ACPClientAPI.capabilityListeners.add(listener);
+    ACPClientAPI.unsubscribeCapabilitySurface ??= onSurfaceActivated(() => {
+      ACPClientAPI.prepareCacheScope();
+      ACPClientAPI.publishCapabilities();
+    });
+    return () => {
+      ACPClientAPI.capabilityListeners.delete(listener);
+      if (ACPClientAPI.capabilityListeners.size === 0) {
+        ACPClientAPI.unsubscribeCapabilitySurface?.();
+        ACPClientAPI.unsubscribeCapabilitySurface = null;
+      }
+    };
+  };
+
+  static getCapabilityRevision = (): number => {
+    ACPClientAPI.prepareCacheScope();
+    return ACPClientAPI.capabilityRevision;
+  };
+
+  static getCachedCapabilityClients(): readonly AcpClientInfo[] {
+    ACPClientAPI.prepareCacheScope();
+    return ACPClientAPI.capabilityClients;
+  }
+
+  static getCachedSessionOptions(request: Pick<GetAcpSessionOptionsRequest, 'sessionId' | 'clientId' | 'remoteConnectionId'>): AcpSessionOptions | undefined {
+    ACPClientAPI.prepareCacheScope();
+    return ACPClientAPI.sessionOptionsCache.get(ACPClientAPI.sessionOptionsKey(request));
+  }
+
+  private static async cacheSessionOptions(
+    command: string,
+    request: GetAcpSessionOptionsRequest,
+  ): Promise<AcpSessionOptions> {
+    const scope = ACPClientAPI.prepareCacheScope();
+    const options = await api.invoke<AcpSessionOptions>(command, { request });
+    scope.assertCurrent('cache ACP session capabilities');
+    ACPClientAPI.sessionOptionsCache.set(ACPClientAPI.sessionOptionsKey(request), options);
+    ACPClientAPI.publishCapabilities();
+    return options;
+  }
 
   private static clientListCache: {
     clients: AcpClientInfo[];
@@ -295,6 +374,9 @@ export class ACPClientAPI {
     if (ACPClientAPI.cacheScope.epoch !== scope.epoch) {
       ACPClientAPI.invalidateClientListCache();
       ACPClientAPI.invalidateRequirementProbeCache();
+      ACPClientAPI.capabilityClients = [];
+      ACPClientAPI.sessionOptionsCache.clear();
+      ACPClientAPI.capabilityRevision += 1;
       ACPClientAPI.cacheScope = scope;
     }
     return scope;
@@ -326,6 +408,8 @@ export class ACPClientAPI {
           clients,
           expiresAt: Date.now() + CLIENT_LIST_CACHE_TTL_MS,
         };
+        ACPClientAPI.capabilityClients = clients;
+        ACPClientAPI.publishCapabilities();
         return clients;
       })
       .finally(() => {
@@ -483,7 +567,7 @@ export class ACPClientAPI {
       request.workspacePath, request.remoteConnectionId, request.remoteSshHost);
     const existing = this.sessionOptionsInFlight.get(key);
     if (existing) return existing;
-    const pending = api.invoke<AcpSessionOptions>('get_acp_session_options', { request })
+    const pending = ACPClientAPI.cacheSessionOptions('get_acp_session_options', request)
       .then(options => {
         scope.assertCurrent('load ACP session metadata');
         if (Array.isArray(options.availableCommands)) {
@@ -512,13 +596,13 @@ export class ACPClientAPI {
   static async setSessionModel(
     request: SetAcpSessionModelRequest
   ): Promise<AcpSessionOptions> {
-    return api.invoke('set_acp_session_model', { request });
+    return ACPClientAPI.cacheSessionOptions('set_acp_session_model', request);
   }
 
   static async setSessionConfigOption(
     request: SetAcpSessionConfigOptionRequest
   ): Promise<AcpSessionOptions> {
-    return api.invoke('set_acp_session_config_option', { request });
+    return ACPClientAPI.cacheSessionOptions('set_acp_session_config_option', request);
   }
 
   static onAvailableCommandsUpdated(

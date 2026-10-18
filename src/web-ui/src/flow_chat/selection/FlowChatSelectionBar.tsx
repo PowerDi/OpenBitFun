@@ -10,7 +10,8 @@ import { isTauriRuntime } from '@/infrastructure/runtime';
 import type { FixedPopoverPlacement } from '@/shared/utils/fixedPopoverViewport';
 import { flowChatStore } from '../store/FlowChatStore';
 import { resolveSessionDriverId } from '../session-drivers/resolve';
-import { isAcpFlowSession } from '../utils/acpSession';
+import { externalAgentSupports } from '../utils/externalAgentCapabilities';
+import { useExternalAgentCapabilities } from '../hooks/useExternalAgentCapabilities';
 import { captureFlowChatSelection, type CapturedFlowChatSelection } from './flowChatSelection';
 import {
   computeSelectionBarPosition, measureExcerptEditorGeometry, measureSelectionBarGeometry,
@@ -69,7 +70,8 @@ export function FlowChatSelectionBar({ rootRef, sessionId, parentSessionId, acti
   const scope = getActiveSurfaceScope();
   const sourceSession = sessionId ? flowChatStore.getState().sessions.get(sessionId) : undefined;
   const child = sourceSession?.sessionKind === 'btw';
-  const canAsk = Boolean(sourceSession?.workspacePath && !isAcpFlowSession(sourceSession)
+  const externalCaps = useExternalAgentCapabilities(sessionId);
+  const canAsk = Boolean(sourceSession?.workspacePath && externalAgentSupports(externalCaps, 'sideChat')
     && resolveSessionDriverId(sourceSession.sessionId, sourceSession) !== 'dispatch'
     && (peer?.peerMode.active ? peer.currentPeerCapabilities?.hostKind === 'desktop' : isTauriRuntime())
     && (!parentSessionId || child));

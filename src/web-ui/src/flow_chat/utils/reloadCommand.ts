@@ -1,3 +1,5 @@
+import { externalAgentSupports, type ExternalAgentCapabilities } from './externalAgentCapabilities';
+
 export type ReloadTarget = 'all' | 'skills' | 'instructions';
 
 export type ParsedReloadCommand =
@@ -6,10 +8,10 @@ export type ParsedReloadCommand =
 
 export function supportsLocalReloadContext(options: {
   desktopRuntime: boolean;
-  acpSession: boolean;
+  externalCapabilities: ExternalAgentCapabilities | null;
   dispatchTransport: boolean;
 }): boolean {
-  return options.desktopRuntime && !options.acpSession && !options.dispatchTransport;
+  return options.desktopRuntime && externalAgentSupports(options.externalCapabilities, 'hostCommands') && !options.dispatchTransport;
 }
 
 export function parseReloadCommand(input: string): ParsedReloadCommand | null {

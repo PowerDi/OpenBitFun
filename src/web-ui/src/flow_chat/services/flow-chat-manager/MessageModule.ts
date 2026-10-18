@@ -47,7 +47,7 @@ import { interruptedTurnRecoveryGate } from '../interruptedTurnRecoveryGate';
 import { hasPendingVoiceExchanges, replayVoiceExchanges } from '../controlConversation';
 import { submitSteeringMessage } from '../steeringSubmission';
 import { promoteAcceptedHostMessage } from '../hostQueueSubmission';
-import { isAcpFlowSession } from '../../utils/acpSession';
+import { externalAgentSupports, resolveExternalAgentCapabilities } from '../../utils/externalAgentCapabilities';
 import { updateSessionDraft } from '../sessionDraftService';
 import {
   beginSubmittedMessagePreview,
@@ -536,7 +536,8 @@ async function sendMessageInternal(
       }
       if (!hostRefusedUnloadedSession) {
         const dialogTurnId = stateMachineManager.get(sessionId)?.getContext().currentDialogTurnId;
-        if (options?.sendImmediately && dialogTurnId && !isAcpFlowSession(session)
+        if (options?.sendImmediately && dialogTurnId
+          && externalAgentSupports(resolveExternalAgentCapabilities(session), 'input.steering')
           && driverForSession(sessionId, session).id === 'local') {
           beginSubmission();
           try {
@@ -630,7 +631,11 @@ async function sendMessageInternal(
     submittingDriver = driver;
     if (
       options?.execution?.kind === 'fresh_external_subagent'
-      && (acpClientId || driver.id !== 'local')
+      && (!externalAgentSupports(resolveExternalAgentCapabilities({
+        ...refreshedSession,
+        mode: currentAgentType,
+        config: { ...refreshedSession.config, agentType: currentAgentType },
+      }), 'hostCommands') || driver.id !== 'local')
     ) {
       throw new Error('External subagent command delegation requires the local OpenBitFun runtime');
     }

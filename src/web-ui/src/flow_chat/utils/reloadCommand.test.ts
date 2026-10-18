@@ -1,3 +1,4 @@
+import { resolveExternalAgentCapabilities } from './externalAgentCapabilities';
 import { describe, expect, it } from 'vitest';
 import { parseReloadCommand, supportsLocalReloadContext } from './reloadCommand';
 
@@ -28,25 +29,37 @@ describe('parseReloadCommand', () => {
 });
 
 describe('supportsLocalReloadContext', () => {
+  it.each([
+    { commands: true, hostCommands: false, expected: false },
+    { commands: false, hostCommands: true, expected: true },
+  ])('uses hostCommands=$hostCommands independently of commands=$commands', ({ commands, hostCommands, expected }) => {
+    const unknown = resolveExternalAgentCapabilities('acp:unknown')!;
+    expect(supportsLocalReloadContext({
+      desktopRuntime: true,
+      externalCapabilities: { ...unknown, commands, hostCommands },
+      dispatchTransport: false,
+    })).toBe(expected);
+  });
+
   it('allows only local Desktop sessions', () => {
     expect(supportsLocalReloadContext({
       desktopRuntime: true,
-      acpSession: false,
+      externalCapabilities: null,
       dispatchTransport: false,
     })).toBe(true);
     expect(supportsLocalReloadContext({
       desktopRuntime: false,
-      acpSession: false,
+      externalCapabilities: null,
       dispatchTransport: false,
     })).toBe(false);
     expect(supportsLocalReloadContext({
       desktopRuntime: true,
-      acpSession: true,
+      externalCapabilities: resolveExternalAgentCapabilities('acp:unknown'),
       dispatchTransport: false,
     })).toBe(false);
     expect(supportsLocalReloadContext({
       desktopRuntime: true,
-      acpSession: false,
+      externalCapabilities: null,
       dispatchTransport: true,
     })).toBe(false);
   });
