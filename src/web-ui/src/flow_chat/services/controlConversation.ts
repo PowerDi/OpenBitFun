@@ -5,7 +5,7 @@ import { peerConnectionManager } from '@/infrastructure/peer-device/PeerConnecti
 import { isTauriRuntime } from '@/infrastructure/runtime';
 import { flowChatStore } from '../store/FlowChatStore';
 import { resolveSessionDriverId } from '../session-drivers/resolve';
-import { isAcpFlowSession } from '../utils/acpSession';
+import { externalAgentSupports, resolveExternalAgentCapabilities } from '../utils/externalAgentCapabilities';
 
 /** `workspaceId` owns the conversation; `workspacePath` is its IO root only. */
 export interface ControlConversation { sessionId: string; workspaceId: string; workspacePath: string }
@@ -28,7 +28,7 @@ export function assertVoiceConversationSupported(sessionId: string) {
   if (!supportsControlConversation()) throw new Error('This host does not support shared voice history. Update the target host.');
   const session = flowChatStore.getState().sessions.get(sessionId);
   if (!session) throw new Error('The voice conversation is unavailable');
-  if (isAcpFlowSession(session) || resolveSessionDriverId(sessionId, session) !== 'local') {
+  if (!externalAgentSupports(resolveExternalAgentCapabilities(session), 'voiceHistory') || resolveSessionDriverId(sessionId, session) !== 'local') {
     throw new Error('Shared voice history is not supported for this session provider. Continue in text mode.');
   }
 }

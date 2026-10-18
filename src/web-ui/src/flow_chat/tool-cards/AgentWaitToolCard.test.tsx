@@ -20,12 +20,13 @@ const { getState, openBtwSessionInAuxPane, storeListeners } = vi.hoisted(() => (
 
 vi.mock('../services/btwSessionPane', () => ({ openBtwSessionInAuxPane }));
 
-vi.mock('../store/FlowChatStore', () => ({
-  flowChatStore: { getState, subscribe: (listener: () => void) => {
+vi.mock('../store/FlowChatStore', () => {
+  const store = { getState, subscribe: (listener: () => void) => {
     storeListeners.add(listener);
     return () => storeListeners.delete(listener);
-  } },
-}));
+  } };
+  return { flowChatStore: store, FlowChatStore: { getInstance: () => store } };
+});
 
 vi.mock('@/infrastructure/i18n/hooks/useI18n', async () => {
   const { createTestI18nT } = await import('@/test/i18nTestUtils');

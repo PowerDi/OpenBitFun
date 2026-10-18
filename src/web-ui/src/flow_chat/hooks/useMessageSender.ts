@@ -10,7 +10,7 @@
 
 import { useCallback } from 'react';
 import { getChatInputSendDuringTurn } from '@/infrastructure/config/services/ChatInputSendPreference';
-import { isAcpFlowSession } from '../utils/acpSession';
+import { externalAgentSupports, resolveExternalAgentCapabilities } from '../utils/externalAgentCapabilities';
 import { FlowChatManager } from '../services/FlowChatManager';
 import { flowChatSessionConfigForCurrentWorkspace } from '@/app/utils/projectSessionWorkspace';
 import { notificationService } from '@/shared/notification-system';
@@ -296,7 +296,7 @@ export function useMessageSender(props: UseMessageSenderProps): UseMessageSender
           },
           foregroundSubmission: true,
           onSessionForked: (_sourceSessionId, branchSessionId) => { sessionId = branchSessionId; },
-          sendImmediately: sendImmediately && !isAcpFlowSession(targetSession),
+          sendImmediately: sendImmediately && externalAgentSupports(resolveExternalAgentCapabilities(targetSession), 'input.steering'),
           ...(userMessageMetadata ? { userMessageMetadata } : {}),
           ...(options?.execution ? { execution: options.execution } : {}),
           onSessionConflictRetryStart: () => {

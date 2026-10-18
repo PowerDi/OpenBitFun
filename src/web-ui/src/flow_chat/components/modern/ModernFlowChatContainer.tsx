@@ -68,7 +68,8 @@ import { flowChatSessionConfigForCurrentWorkspace } from '@/app/utils/projectSes
 import { createLogger } from '@/shared/utils/logger';
 import { parsePullRequestUrl } from '@/shared/utils/pullRequestLinks';
 import { createBackgroundCommandOutputTab, createReviewPlatformPullRequestDetailTab } from '@/shared/utils/tabUtils';
-import { isAcpFlowSession } from '../../utils/acpSession';
+import { externalAgentSupports } from '../../utils/externalAgentCapabilities';
+import { useExternalAgentCapabilities } from '../../hooks/useExternalAgentCapabilities';
 import { flowChatStore } from '../../store/FlowChatStore';
 import { openBtwSessionInAuxPane } from '../../services/btwSessionPane';
 import { FlowChatSelectionBar } from '../../selection/FlowChatSelectionBar';
@@ -564,7 +565,8 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const workspaceContext = useWorkspaceContext();
   const workspacePath = viewScope ? activeSession?.workspacePath : workspaceContext.workspacePath;
   const activeWorkspace = viewScope ? undefined : workspaceContext.activeWorkspace;
-  const allowUserMessageRollback = !isAcpFlowSession(activeSession);
+  const externalCaps = useExternalAgentCapabilities(activeSession?.sessionId);
+  const allowUserMessageRollback = externalAgentSupports(externalCaps, 'history.rollbackLastTurn');
   const historyState = activeSession?.historyState;
   const hasRestoredTurnsPendingVirtualItems =
     historyState === 'ready' &&

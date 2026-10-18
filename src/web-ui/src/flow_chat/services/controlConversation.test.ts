@@ -50,6 +50,30 @@ describe('voice history recovery', () => {
     expect(service.supportsControlConversation()).toBe(true);
   });
 
+  it.each([
+    { voiceHistory: false, importTranscripts: true },
+    { voiceHistory: true, importTranscripts: false },
+  ])('uses voiceHistory=$voiceHistory independently of importTranscripts=$importTranscripts', async ({ voiceHistory, importTranscripts }) => {
+    const { ACPClientAPI } = await import('@/infrastructure/api/service-api/ACPClientAPI');
+    const { resolveExternalAgentCapabilities } = await import('../utils/externalAgentCapabilities');
+    const unknown = resolveExternalAgentCapabilities('acp:unknown', [])!;
+    const clients = vi.spyOn(ACPClientAPI, 'getCachedCapabilityClients').mockReturnValue([{
+      id: 'voice-native', name: 'Voice native', command: 'native', args: [], enabled: true,
+      readonly: true, permissionMode: 'ask', status: 'configured', toolName: 'native', sessionCount: 0,
+      capabilities: { ...unknown, voiceHistory, history: { ...unknown.history, importTranscripts } },
+    }]);
+    fixture.sessions.set('native-voice', { config: {}, mode: 'acp:voice-native' });
+    try {
+      if (voiceHistory) {
+        expect(() => service.assertVoiceConversationSupported('native-voice')).not.toThrow();
+      } else {
+        expect(() => service.assertVoiceConversationSupported('native-voice')).toThrow('Shared voice history is not supported');
+      }
+    } finally {
+      clients.mockRestore();
+    }
+  });
+
   it('does not require browser storage or host calls for ordinary text', async () => {
     vi.stubGlobal('localStorage', undefined);
     expect(service.hasPendingVoiceExchanges('conversation')).toBe(false);

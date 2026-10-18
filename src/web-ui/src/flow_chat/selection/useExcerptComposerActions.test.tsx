@@ -91,6 +91,31 @@ describe('scoped excerpt composer routing', () => {
     expect(sessionComposerStore.getState().getDraft('draft')).toMatchObject({ value: 'Keep this question', contexts: [{ ...excerpt, annotationNumber: 1 }] });
   });
 
+  it.each([
+    { sideChat: false, fork: true },
+    { sideChat: true, fork: false },
+  ])('uses sideChat=$sideChat independently of fork=$fork for excerpt Ask', async ({ sideChat, fork }) => {
+    const { ACPClientAPI } = await import('@/infrastructure/api/service-api/ACPClientAPI');
+    const { resolveExternalAgentCapabilities } = await import('../utils/externalAgentCapabilities');
+    const unknown = resolveExternalAgentCapabilities('acp:unknown', [])!;
+    const clients = vi.spyOn(ACPClientAPI, 'getCachedCapabilityClients').mockReturnValue([{
+      id: 'side-native', name: 'Side native', command: 'native', args: [], enabled: true,
+      readonly: true, permissionMode: 'ask', status: 'configured', toolName: 'native', sessionCount: 0,
+      capabilities: { ...unknown, sideChat, history: { ...unknown.history, fork } },
+    }]);
+    mocks.sessions.set('main', {
+      sessionId: 'main', workspacePath: '/workspace', dialogTurns: [], config: {}, mode: 'acp:side-native',
+    });
+    try {
+      act(() => root.render(<Probe />));
+      act(() => requestExcerptAction(excerpt, 'main', 'ask'));
+      expect(mocks.openPane).toHaveBeenCalledTimes(sideChat ? 1 : 0);
+      expect(sessionComposerStore.getState().getDraft('draft').contexts).toHaveLength(sideChat ? 1 : 0);
+    } finally {
+      clients.mockRestore();
+    }
+  });
+
   it('continues numbering while earlier annotations wait in the send queue', () => {
     mocks.queue.mockReturnValue([{ id: 'queued', sessionId: 'main', content: 'Question', timestamp: 1, status: 'queued', retryCount: 0, userMessageMetadata: {
       composerPresentation: withConversationExcerpts(null, [{ ...excerpt, id: 'queued', annotationNumber: 3 }]),

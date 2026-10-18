@@ -10,9 +10,11 @@
  * treated as remote instead of briefly offering local-only affordances.
  */
 
+import { useMemo } from 'react';
 import { useRuntimeStatusStore } from '../store/runtimeStatusStore';
 import type { Session } from '../types/flow-chat';
-import { isAcpFlowSession } from '../utils/acpSession';
+import { externalAgentSupports, resolveExternalAgentCapabilities, type ExternalAgentCapabilities } from '../utils/externalAgentCapabilities';
+import { useExternalAgentCapabilities } from '../hooks/useExternalAgentCapabilities';
 import { resolveSessionDriverId, type SessionDriverId } from './resolve';
 import { deriveSessionConversationCapability, type SessionConversationCapability } from './conversationCapability';
 
@@ -29,6 +31,14 @@ const LOCAL_SLASH_OPS_WITHOUT_THREAD_GOAL: ReadonlySet<ComposerSlashOp> = new Se
 ]);
 /** Ops a detached target serves via its durable turn mailbox / query verb. */
 const DISPATCH_SLASH_OPS: ReadonlySet<ComposerSlashOp> = new Set(['compact', 'usage']);
+const EXTERNAL_SLASH_CAPABILITIES = {
+  btw: 'sideChat',
+  compact: 'compact',
+  goal: 'threadGoal',
+  usage: 'contextUsage',
+  init: 'hostCommands',
+  review: 'hostCommands',
+} as const;
 
 export interface ComposerCapabilities {
   conversation: SessionConversationCapability;
@@ -67,18 +77,24 @@ export interface ComposerCapabilityInput {
 
 export function sessionSupportsThreadGoal(
   session: Pick<Session, 'config' | 'mode'> | undefined,
+  caps: ExternalAgentCapabilities | null = resolveExternalAgentCapabilities(session),
 ): boolean {
-  // ACP agents own their execution loop and tool surface. Until the protocol
-  // exposes the OpenBitFun thread-goal lifecycle, advertising the local goal UI
-  // would create state the external agent cannot inspect or complete.
-  return !isAcpFlowSession(session);
+  return externalAgentSupports(caps, 'threadGoal');
 }
 
 export function useComposerCapabilities(input: ComposerCapabilityInput): ComposerCapabilities {
   const { sessionId, session, hostMasksDispatch, displayAsChild } = input;
   const driverId = resolveSessionDriverId(sessionId ?? '', session);
   const dispatchTransport = !hostMasksDispatch && driverId === 'dispatch';
-  const threadGoalSupported = sessionSupportsThreadGoal(session);
+  const externalCaps = useExternalAgentCapabilities(sessionId) ?? resolveExternalAgentCapabilities(session);
+  const threadGoalSupported = sessionSupportsThreadGoal(session, externalCaps);
+  const ops = useMemo(() => {
+    if (dispatchTransport) return DISPATCH_SLASH_OPS;
+    const localOps = threadGoalSupported ? LOCAL_SLASH_OPS : LOCAL_SLASH_OPS_WITHOUT_THREAD_GOAL;
+    if (externalCaps === null) return localOps;
+    return new Set([...localOps].filter(op =>
+      externalAgentSupports(externalCaps, EXTERNAL_SLASH_CAPABILITIES[op])));
+  }, [dispatchTransport, externalCaps, threadGoalSupported]);
 
   const transferInFlight = useRuntimeStatusStore(state => {
     const status = sessionId ? state.bySessionId.get(sessionId) : undefined;
@@ -101,12 +117,8 @@ export function useComposerCapabilities(input: ComposerCapabilityInput): Compose
     conversation: deriveSessionConversationCapability(session, driverId),
     driverId,
     dispatchTransport,
-    localSlashCommands: !dispatchTransport,
-    ops: dispatchTransport
-      ? DISPATCH_SLASH_OPS
-      : threadGoalSupported
-        ? LOCAL_SLASH_OPS
-        : LOCAL_SLASH_OPS_WITHOUT_THREAD_GOAL,
+    localSlashCommands: !dispatchTransport && externalAgentSupports(externalCaps, 'hostCommands'),
+    ops,
     usageReport: true,
     threadGoal: threadGoalSupported && !displayAsChild && !dispatchTransport,
     transferInFlight,

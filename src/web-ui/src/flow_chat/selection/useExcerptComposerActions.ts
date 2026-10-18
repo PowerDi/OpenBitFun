@@ -13,7 +13,7 @@ import { createBtwSessionPlaceholder } from '../services/BtwThreadService';
 import { openBtwSessionInAuxPane } from '../services/btwSessionPane';
 import { resolveSessionDriverId } from '../session-drivers/resolve';
 import { getSessionConversationCapability } from '../session-drivers/conversationCapability';
-import { isAcpFlowSession } from '../utils/acpSession';
+import { externalAgentSupports, resolveExternalAgentCapabilities } from '../utils/externalAgentCapabilities';
 import { useConversationViewScope } from '../contexts/conversationViewScope';
 import { openMainSession } from '../services/sessionActivation';
 import { FLOWCHAT_EXCERPT_ACTION, type ExcerptActionRequest } from './excerptActions';
@@ -47,7 +47,7 @@ export function useExcerptComposerActions({ mainSessionId, targetSessionId, acti
       if (getSessionConversationCapability(mainSessionId, parent).access !== 'available') return;
       let destination = mainSessionId;
       if (request.action === 'ask') {
-        if (!parent.workspacePath || isAcpFlowSession(parent) || resolveSessionDriverId(mainSessionId, parent) === 'dispatch'
+        if (!parent.workspacePath || !externalAgentSupports(resolveExternalAgentCapabilities(parent), 'sideChat') || resolveSessionDriverId(mainSessionId, parent) === 'dispatch'
           || (peer?.peerMode.active ? peer.currentPeerCapabilities?.hostKind !== 'desktop' : !isTauriRuntime())) return;
         if (source.sessionId !== mainSessionId) {
           if (source.sessionKind !== 'btw') return;

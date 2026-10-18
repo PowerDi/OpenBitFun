@@ -22,7 +22,6 @@ import { useTranslation } from 'react-i18next';
 import { ListEnd } from 'lucide-react';
 import { OverflowText, Tooltip } from '@openbitfun/ui';
 import { stateMachineManager } from '../state-machine';
-import { FlowChatStore } from '../store/FlowChatStore';
 import { pendingQueueManager } from '../services/flow-chat-manager/PendingQueueModule';
 import { FlowChatManager } from '../services/FlowChatManager';
 import { interruptedTurnRecoveryGate } from '../services/interruptedTurnRecoveryGate';
@@ -30,7 +29,8 @@ import { submitSteeringMessage } from '../services/steeringSubmission';
 import { notificationService } from '../../shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
 import type { QueuedMessage, SteeringImage } from '../types/flow-chat';
-import { isAcpFlowSession } from '../utils/acpSession';
+import { externalAgentSupports } from '../utils/externalAgentCapabilities';
+import { useExternalAgentCapabilities } from '../hooks/useExternalAgentCapabilities';
 import { getQueuedMessageAttachmentCount } from '../utils/pendingQueuePresentation';
 import './PendingQueuePanel.scss';
 import { IconButton, Icon } from '@openbitfun/ui';
@@ -70,10 +70,8 @@ function LegacyPendingQueuePanel({
   const [items, setItems] = useState<QueuedMessage[]>(() =>
     sessionId ? pendingQueueManager.list(sessionId) : [],
   );
-  const [isAcpSession, setIsAcpSession] = useState<boolean>(() => {
-    if (!sessionId) return false;
-    return isAcpFlowSession(FlowChatStore.getInstance().getState().sessions.get(sessionId));
-  });
+  const externalCaps = useExternalAgentCapabilities(sessionId);
+  const canSteer = externalAgentSupports(externalCaps, 'input.steering');
   useEffect(() => {
     if (!sessionId) {
       setItems([]);
@@ -83,22 +81,6 @@ function LegacyPendingQueuePanel({
     const unsubscribe = pendingQueueManager.subscribe((sid, snapshot) => {
       if (sid === sessionId) setItems(snapshot);
     });
-    return unsubscribe;
-  }, [sessionId]);
-
-  useEffect(() => {
-    if (!sessionId) {
-      setIsAcpSession(false);
-      return;
-    }
-
-    const store = FlowChatStore.getInstance();
-    const sync = () => {
-      setIsAcpSession(isAcpFlowSession(store.getState().sessions.get(sessionId)));
-    };
-
-    sync();
-    const unsubscribe = store.subscribe(sync);
     return unsubscribe;
   }, [sessionId]);
 
@@ -133,9 +115,8 @@ function LegacyPendingQueuePanel({
 
         // A running turn takes the message through the steering channel, which
         // carries the whole payload — text, attachments and metadata alike.
-        // ACP agents own their execution loop and expose no mid-turn injection
-        // point, so they take the drain path below instead.
-        if (dialogTurnId && !isAcpSession) {
+        // Agents without steering support take the drain path below instead.
+        if (dialogTurnId && canSteer) {
           pendingQueueManager.setStatus(sessionId, item.id, 'sending_now');
           try {
             await submitSteeringMessage({
@@ -182,7 +163,7 @@ function LegacyPendingQueuePanel({
         sendNowInFlightIdsRef.current.delete(item.id);
       }
     },
-    [isAcpSession, recoveryInFlight, sessionId, t],
+    [canSteer, recoveryInFlight, sessionId, t],
   );
 
   const visibleItems = useMemo(() => items, [items]);

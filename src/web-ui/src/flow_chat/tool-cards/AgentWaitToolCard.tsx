@@ -7,6 +7,7 @@ import { resolveSubagentNameKey, SubagentDelegationAvatar } from '../subagent-id
 import { openBtwSessionInAuxPane } from '../services/btwSessionPane';
 import { getToolCardStatus, getToolCardStatusDescription } from './toolCardStatus';
 import type { ToolCardProps } from '../types/flow-chat';
+import { useExternalAgentCapabilities } from '../hooks/useExternalAgentCapabilities';
 import { shouldShowAgentWaitSteeringHint } from './agentWaitSteeringHint';
 import { resolveAgentWaitAvatarTargets, type AgentWaitAvatarTarget } from './agentWaitAvatarTargets';
 import {
@@ -39,7 +40,8 @@ export const AgentWaitToolCard: React.FC<ToolCardProps> = ({
   const result = readToolRecord(toolResult?.result) as AgentWaitResult;
   const source = useCurrentToolSessionParticipant(sessionId, t);
   const session = sessionId ? flowChatStore.getState().sessions.get(sessionId) : undefined;
-  const showSteeringHint = shouldShowAgentWaitSteeringHint(status, displayContext, session);
+  const externalCaps = useExternalAgentCapabilities(sessionId);
+  const showSteeringHint = shouldShowAgentWaitSteeringHint(status, displayContext, session, externalCaps);
   const steeringHint = t('toolCards.agentWait.steeringHint');
   const readAvatarSnapshot = useCallback(() => {
     const { sessions } = flowChatStore.getState();

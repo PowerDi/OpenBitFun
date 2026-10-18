@@ -112,10 +112,6 @@ vi.mock('@/shared/utils/logger', () => ({
   }),
 }));
 
-vi.mock('../utils/acpSession', () => ({
-  isAcpFlowSession: () => false,
-}));
-
 describe('PendingQueuePanel', () => {
   let container: HTMLDivElement;
   let root: Root;

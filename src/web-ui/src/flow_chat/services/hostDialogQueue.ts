@@ -4,7 +4,7 @@ import { getActiveSurfaceScope, isLocalSurface } from '@/infrastructure/peer-dev
 import { peerConnectionManager } from '@/infrastructure/peer-device/PeerConnectionManager';
 import { accountIdentityService } from '@/infrastructure/account-identity/AccountIdentityService';
 import { FlowChatStore } from '../store/FlowChatStore';
-import { isAcpFlowSession } from '../utils/acpSession';
+import { externalAgentSupports, resolveExternalAgentCapabilities } from '../utils/externalAgentCapabilities';
 import { resolveSessionDriverId } from '../session-drivers/resolve';
 import { translateAgentIdentityFields } from '../../../../shared/agent-harness/wire';
 import { registerSubmittedMessageScrollIntent, finishSubmittedMessageScrollIntent, peekSubmittedMessageScrollIntent } from './submittedMessageScrollIntent';
@@ -17,7 +17,7 @@ function currentAccount(): string {
 }
 export function hostQueueSupported(sessionId: string): boolean {
   const session = FlowChatStore.getInstance().getState().sessions.get(sessionId);
-  if (!session || isAcpFlowSession(session) || resolveSessionDriverId(sessionId, session) !== 'local') return false;
+  if (!session || !externalAgentSupports(resolveExternalAgentCapabilities(session), 'input.queue') || resolveSessionDriverId(sessionId, session) !== 'local') return false;
   const scope = getActiveSurfaceScope();
   return isLocalSurface(scope.surfaceId)
     || peerConnectionManager.get(scope.surfaceId)?.getState().capabilities.dialogQueueV1 === true;
