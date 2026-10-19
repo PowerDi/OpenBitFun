@@ -135,3 +135,23 @@
     transition-duration: 0ms;
   }
 }
+
+.tool-approval-bar__plan-review {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tool-approval-bar__plan {
+  max-height: 360px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: var(--openbitfun-control-flow-chat-card-radius);
+  background: var(--openbitfun-color-surface-raised);
+}
+
+.tool-approval-bar__plan-review .tool-approval-bar__actions {
+  justify-content: flex-end;
+  gap: var(--openbitfun-control-flow-chat-inline-gap);
+}

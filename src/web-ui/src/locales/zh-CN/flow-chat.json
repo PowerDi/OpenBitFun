@@ -2456,7 +2456,16 @@
       "imageCount": "{{count}} 张图片",
       "resourceCount": "{{count}} 个资源"
     },
+    "planReview": {
+      "title": "审阅 Claude 的计划",
+      "missingPlan": "Claude 未提供计划内容。请继续规划并让 Claude 给出计划。",
+      "feedbackPlaceholder": "继续规划时给 Claude 的可选反馈",
+      "keepPlanning": "继续规划",
+      "approve": "批准计划",
+      "approveHint": "退出规划模式，恢复之前的权限模式，并让 Claude 开始实施"
+    },
     "acpPermission": {
+      "allowSession": "本会话允许",
       "allowOnce": "允许一次",
       "allowAlways": "始终允许",
       "reject": "拒绝一次",

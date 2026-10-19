@@ -250,12 +250,16 @@ export interface SubmitAcpPermissionResponseRequest {
   permissionId: string;
   approve: boolean;
   optionId?: string;
+  /** Native question answers keyed by question index (or question text). */
+  answers?: Record<string, string | string[]>;
+  /** Optional free-text feedback sent with a rejection. */
+  feedback?: string;
 }
 
 export interface AcpPermissionOption {
   optionId: string;
   name: string;
-  kind: 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always';
+  kind: 'allow_once' | 'allow_session' | 'allow_always' | 'reject_once' | 'reject_always';
 }
 
 export interface AcpPermissionRequestEvent {

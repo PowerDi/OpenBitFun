@@ -35,6 +35,16 @@ fn native_notification_sink(
                 "agentic://acp-plan-updated",
                 serde_json::json!({"sessionId":session_id, "turnId":turn_id, "clientId":client_id, "entries":entries}),
             ),
+            NativeAgentNotification::ContextUsageUpdated(usage) => app_handle.emit(
+                "agentic://acp-context-usage-updated",
+                serde_json::json!({"sessionId":session_id, "clientId":client_id,
+                    "used":usage.used, "size":usage.size, "cost":usage.cost,
+                    "subagentParentInfo":null}),
+            ),
+            NativeAgentNotification::OptionsChanged => app_handle.emit(
+                "agentic://acp-session-options-changed",
+                serde_json::json!({"sessionId":session_id, "clientId":client_id}),
+            ),
         };
         if let Err(error) = result {
             log::warn!("Failed to publish native agent update for {session_id}: {error}");

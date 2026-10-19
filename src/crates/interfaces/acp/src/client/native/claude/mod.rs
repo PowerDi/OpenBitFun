@@ -1,5 +1,6 @@
 //! Claude Code stream-json identity, resume policy and session implementation.
 mod commands;
+mod errors;
 mod projector;
 mod session;
 mod tasks;

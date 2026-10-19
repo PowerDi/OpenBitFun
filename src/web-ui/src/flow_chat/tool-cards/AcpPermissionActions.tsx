@@ -9,9 +9,10 @@ import './AcpPermissionActions.scss';
 
 const KIND_ORDER: Record<AcpPermissionOption['kind'], number> = {
   allow_once: 0,
-  allow_always: 1,
-  reject_once: 2,
-  reject_always: 3,
+  allow_session: 1,
+  allow_always: 2,
+  reject_once: 3,
+  reject_always: 4,
 };
 
 interface AcpPermissionActionsProps {
@@ -24,13 +25,15 @@ interface AcpPermissionActionsProps {
 }
 
 function isApprovalKind(kind: AcpPermissionOption['kind']): boolean {
-  return kind === 'allow_once' || kind === 'allow_always';
+  return kind === 'allow_once' || kind === 'allow_session' || kind === 'allow_always';
 }
 
 function fallbackLabel(kind: AcpPermissionOption['kind'], t: TFunction<'flow-chat'>): string {
   switch (kind) {
     case 'allow_once':
       return t('toolCards.acpPermission.allowOnce');
+    case 'allow_session':
+      return t('toolCards.acpPermission.allowSession');
     case 'allow_always':
       return t('toolCards.acpPermission.allowAlways');
     case 'reject_once':
@@ -46,6 +49,7 @@ function optionIcon(kind: AcpPermissionOption['kind']): React.ReactNode {
   switch (kind) {
     case 'allow_once':
       return <Icon name="check-line" size="xs" />;
+    case 'allow_session':
     case 'allow_always':
       return <Icon glyph={ShieldCheck} size="xs" />;
     case 'reject_always':

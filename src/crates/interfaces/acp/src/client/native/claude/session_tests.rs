@@ -80,46 +80,213 @@ async fn control_timeout_does_not_leak_request() {
     assert!(process.controls.is_empty());
 }
 
+fn pending(
+    process: &Arc<NativeProcess>,
+    id: &str,
+    kind: PermissionKind,
+    input: Value,
+    suggestions: Value,
+) -> PendingPermission {
+    PendingPermission {
+        process: process.clone(),
+        turn_id: "t1".into(),
+        request_id: id.into(),
+        tool_id: "tool-123".into(),
+        input,
+        suggestions,
+        kind,
+    }
+}
+
+fn decision(id: &str, approve: bool, option: Option<&str>) -> SubmitAcpPermissionResponseRequest {
+    SubmitAcpPermissionResponseRequest {
+        permission_id: id.into(),
+        approve,
+        option_id: option.map(str::to_string),
+        answers: None,
+        feedback: None,
+    }
+}
+
+async fn next_reply(lines: &mut tokio::io::Lines<BufReader<DuplexStream>>) -> Value {
+    let frame: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    frame["response"]["response"].clone()
+}
+
 #[tokio::test]
-async fn permission_always_allow_and_denial_use_native_wire_shape() {
+async fn permission_scopes_split_suggestions_by_destination() {
     let (session, process, output) = fixture();
-    let suggestions = json!([{"type":"addRules", "destination":"session", "rules":[]}]);
-    for (id, option) in [("p1", "allow_always"), ("p2", "reject_once")] {
+    let session_rule = json!({"type":"addRules", "destination":"session", "behavior":"allow",
+        "rules":[{"toolName":"Bash", "ruleContent":"echo:*"}]});
+    let local_rule = json!({"type":"addRules", "destination":"localSettings", "behavior":"allow",
+        "rules":[{"toolName":"Bash"}]});
+    let suggestions = json!([session_rule, local_rule]);
+    for (id, option) in [
+        ("p1", "allow_session"),
+        ("p2", "allow_always"),
+        ("p3", "allow_once"),
+        ("p4", "reject_once"),
+    ] {
         session.permissions.insert(
             id.into(),
-            PendingPermission {
-                process: process.clone(),
-                turn_id: "t1".into(),
-                request_id: id.into(),
-                tool_id: "tool-123".into(),
-                input: json!({"command":"echo test"}),
-                suggestions: suggestions.clone(),
-            },
+            pending(
+                &process,
+                id,
+                PermissionKind::Approval,
+                json!({"command":"echo test"}),
+                suggestions.clone(),
+            ),
         );
         session
-            .submit_permission(&SubmitAcpPermissionResponseRequest {
-                permission_id: id.into(),
-                approve: false,
-                option_id: Some(option.into()),
-            })
+            .submit_permission(&decision(id, false, Some(option)))
             .await
             .unwrap()
             .unwrap();
     }
     let mut lines = BufReader::new(output).lines();
-    let allow: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
-    assert_eq!(
-        allow["response"]["response"]["updatedPermissions"],
-        suggestions
-    );
-    assert_eq!(
-        allow["response"]["response"]["updatedInput"]["command"],
-        "echo test"
-    );
-    assert_eq!(allow["response"]["response"]["toolUseID"], "tool-123");
-    let deny: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
-    assert_eq!(deny["response"]["response"]["behavior"], "deny");
+    let scoped = next_reply(&mut lines).await;
+    assert_eq!(scoped["behavior"], "allow");
+    assert_eq!(scoped["updatedPermissions"], json!([session_rule]));
+    assert_eq!(scoped["updatedInput"]["command"], "echo test");
+    assert_eq!(scoped["toolUseID"], "tool-123");
+    assert_eq!(scoped["decisionClassification"], "user_permanent");
+    let always = next_reply(&mut lines).await;
+    assert_eq!(always["updatedPermissions"], json!([local_rule]));
+    let once = next_reply(&mut lines).await;
+    assert_eq!(once["behavior"], "allow");
+    assert!(once.get("updatedPermissions").is_none());
+    assert_eq!(once["decisionClassification"], "user_temporary");
+    let deny = next_reply(&mut lines).await;
+    assert_eq!(deny["behavior"], "deny");
     assert!(session.permissions.is_empty());
+
+    // A scope Claude did not suggest is refused and the request stays pending.
+    session.permissions.insert(
+        "p5".into(),
+        pending(
+            &process,
+            "p5",
+            PermissionKind::Approval,
+            json!({}),
+            json!([session_rule]),
+        ),
+    );
+    assert!(session
+        .submit_permission(&decision("p5", true, Some("allow_always")))
+        .await
+        .unwrap()
+        .is_err());
+    assert!(session.permissions.contains_key("p5"));
+
+    let payload = permission_payload(
+        "p",
+        "s1",
+        &json!({"tool_use_id":"tu1", "tool_name":"Bash", "input":{},
+            "permission_suggestions":[session_rule]}),
+    );
+    let ids: Vec<_> = payload["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|option| option["optionId"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["allow_once", "allow_session", "reject_once"]);
+}
+
+#[tokio::test]
+async fn ask_user_question_answers_keyed_by_question_text() {
+    let (session, process, output) = fixture();
+    let input = json!({"questions":[
+        {"question":"Which DB?", "header":"DB", "multiSelect":false,
+            "options":[{"label":"Postgres", "description":""}, {"label":"SQLite", "description":""}]},
+        {"question":"Which extras?", "header":"Extras", "multiSelect":true,
+            "options":[{"label":"Auth", "description":""}, {"label":"Cache", "description":""}]}]});
+    session.permissions.insert(
+        "q1".into(),
+        pending(&process, "q1", PermissionKind::Question, input.clone(), Value::Null),
+    );
+    // Missing answers are refused and keep the question pending.
+    assert!(session
+        .submit_permission(&decision("q1", true, None))
+        .await
+        .unwrap()
+        .is_err());
+    let mut request = decision("q1", true, None);
+    request.answers = Some(json!({"0":"My own DB", "1":["Auth", "Cache"]}));
+    session.submit_permission(&request).await.unwrap().unwrap();
+    session.permissions.insert(
+        "q2".into(),
+        pending(&process, "q2", PermissionKind::Question, input.clone(), Value::Null),
+    );
+    session
+        .submit_permission(&decision("q2", false, Some("reject_once")))
+        .await
+        .unwrap()
+        .unwrap();
+    let mut lines = BufReader::new(output).lines();
+    let answered = next_reply(&mut lines).await;
+    assert_eq!(answered["behavior"], "allow");
+    assert_eq!(answered["updatedInput"]["questions"], input["questions"]);
+    assert_eq!(
+        answered["updatedInput"]["answers"],
+        json!({"Which DB?":"My own DB", "Which extras?":"Auth, Cache"})
+    );
+    let cancelled = next_reply(&mut lines).await;
+    assert_eq!(cancelled["behavior"], "deny");
+    assert_eq!(cancelled["message"], "User cancelled the Question");
+}
+
+#[tokio::test]
+async fn exit_plan_mode_approval_restores_mode_and_keep_planning_denies() {
+    let (session, process, output) = fixture();
+    for mode in ["acceptEdits", "plan"] {
+        session
+            .set_config_option(
+                PERMISSION_MODE_CONFIG_ID,
+                AcpSessionConfigValue::Select { value: mode.into() },
+            )
+            .await
+            .unwrap();
+    }
+    let input = json!({"plan":"# Plan\n1. Do it"});
+    for id in ["e1", "e2"] {
+        session.permissions.insert(
+            id.into(),
+            pending(&process, id, PermissionKind::PlanReview, input.clone(), Value::Null),
+        );
+    }
+    let mut keep = decision("e1", false, Some("keep_planning"));
+    keep.feedback = Some("Cover rollback too".into());
+    session.submit_permission(&keep).await.unwrap().unwrap();
+    assert_eq!(read_lock(&session.permission_mode), "plan");
+    session
+        .submit_permission(&decision("e2", true, Some("approve_plan")))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(read_lock(&session.permission_mode), "acceptEdits");
+    let mut lines = BufReader::new(output).lines();
+    let denied = next_reply(&mut lines).await;
+    assert_eq!(denied["behavior"], "deny");
+    let message = denied["message"].as_str().unwrap();
+    assert!(message.starts_with(KEEP_PLANNING_MESSAGE));
+    assert!(message.ends_with("User feedback: Cover rollback too"));
+    let approved = next_reply(&mut lines).await;
+    assert_eq!(approved["behavior"], "allow");
+    assert_eq!(approved["updatedInput"], input);
+    assert!(approved.get("updatedPermissions").is_none());
+    let payload = permission_payload("p", "s1", &json!({"tool_name":"ExitPlanMode", "input":input}));
+    assert_eq!(payload["options"][0]["optionId"], APPROVE_PLAN_OPTION);
+    assert_eq!(payload["options"][1]["optionId"], KEEP_PLANNING_OPTION);
+}
+
+#[test]
+fn context_usage_response_parses_codexhost_shape() {
+    assert_eq!(
+        parse_context_usage(&json!({"totalTokens":42000, "maxTokens":200000, "model":"claude"})),
+        Some((42000, 200000))
+    );
+    assert_eq!(parse_context_usage(&json!({"totalTokens":1, "maxTokens":0})), None);
 }
 
 #[tokio::test]
@@ -135,6 +302,7 @@ async fn turn_permission_cleanup_denies_only_that_turn() {
                 tool_id: "tool-1".into(),
                 input: json!({}),
                 suggestions: json!([]),
+                kind: PermissionKind::Approval,
             },
         );
     }
@@ -438,6 +606,8 @@ async fn permission_before_tool_use_is_projected_once_and_routed() {
             permission_id: id,
             approve: true,
             option_id: None,
+            answers: None,
+            feedback: None,
         })
         .await
         .unwrap()

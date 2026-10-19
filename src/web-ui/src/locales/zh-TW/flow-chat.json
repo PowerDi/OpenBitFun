@@ -2456,7 +2456,16 @@
       "imageCount": "{{count}} 張圖片",
       "resourceCount": "{{count}} 個資源"
     },
+    "planReview": {
+      "title": "審閱 Claude 的計畫",
+      "missingPlan": "Claude 未提供計畫內容。請繼續規劃並讓 Claude 提出計畫。",
+      "feedbackPlaceholder": "繼續規劃時給 Claude 的選填回饋",
+      "keepPlanning": "繼續規劃",
+      "approve": "核准計畫",
+      "approveHint": "退出規劃模式，恢復先前的權限模式，並讓 Claude 開始實作"
+    },
     "acpPermission": {
+      "allowSession": "本工作階段允許",
       "allowOnce": "允許一次",
       "allowAlways": "始終允許",
       "reject": "拒絕一次",

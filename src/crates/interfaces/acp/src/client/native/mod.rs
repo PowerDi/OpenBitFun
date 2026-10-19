@@ -14,7 +14,8 @@ use openbitfun_core::util::errors::OpenBitFunResult;
 
 use super::session_persistence::AcpSessionPersistence;
 use super::{
-    AcpAvailableCommand, AcpPlanEntry, AcpSessionConfigValue, AcpSessionOptions,
+    AcpAvailableCommand, AcpPlanEntry, AcpSessionConfigValue, AcpSessionContextUsage,
+    AcpSessionOptions,
     SubmitAcpPermissionResponseRequest,
 };
 pub use capabilities::{NativeAgentCapabilities, NativeSubagentCapabilities};
@@ -28,6 +29,10 @@ pub enum NativeAgentNotification {
         turn_id: String,
         entries: Vec<AcpPlanEntry>,
     },
+    /// Context occupancy (and cumulative cost when known) changed.
+    ContextUsageUpdated(AcpSessionContextUsage),
+    /// Session options (e.g. permission mode) changed outside a user request.
+    OptionsChanged,
 }
 
 pub type NativeAgentNotificationSink = Arc<dyn Fn(NativeAgentNotification) + Send + Sync>;
