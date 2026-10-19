@@ -84,6 +84,11 @@ pub(crate) struct ClaudeTurnProjector {
     compaction_settled: bool,
     compression_count: usize,
     compaction_trigger: &'static str,
+    /// Last `error` code Claude attached to a root assistant frame
+    /// (e.g. `authentication_failed`); used to classify the turn failure.
+    assistant_error: Option<String>,
+    /// Cumulative session cost reported by the last `result` frame.
+    total_cost_usd: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -127,6 +132,8 @@ impl ClaudeTurnProjector {
             compaction_settled: false,
             compression_count: 0,
             compaction_trigger: "auto",
+            assistant_error: None,
+            total_cost_usd: None,
         }
     }
 
@@ -148,6 +155,11 @@ impl ClaudeTurnProjector {
 
     pub(crate) fn mark_manual_compaction(&mut self) {
         self.compaction_trigger = "manual";
+    }
+
+    /// `total_cost_usd` from the terminal `result`, when Claude reported one.
+    pub(crate) fn total_cost_usd(&self) -> Option<f64> {
+        self.total_cost_usd
     }
 
     pub(crate) fn mark_cancel_requested(&mut self) {
@@ -336,22 +348,27 @@ impl ClaudeTurnProjector {
 
     /// Close the turn when the process faulted before a `result` arrived.
     pub(crate) fn fail(&mut self, error: &str) -> Vec<AgenticEvent> {
+        self.fail_classified(error, None)
+    }
+
+    fn fail_classified(&mut self, error: &str, subtype: Option<&str>) -> Vec<AgenticEvent> {
         if self.finished {
             return Vec::new();
         }
         if self.cancel_requested {
             return self.cancel();
         }
+        let failure = super::errors::classify(error, subtype, self.assistant_error.as_deref());
         let mut out = Vec::new();
-        self.fail_compaction(error, &mut out);
-        self.fail_open_tools(error, &mut out);
+        self.fail_compaction(&failure.message, &mut out);
+        self.fail_open_tools(&failure.message, &mut out);
         self.close_round(&mut out);
         out.push(AgenticEvent::DialogTurnFailed {
             session_id: self.session_id.clone(),
             turn_id: self.turn_id.clone(),
-            error: error.to_string(),
-            error_category: None,
-            error_detail: None,
+            error: failure.display(),
+            error_category: Some(failure.category.clone()),
+            error_detail: Some(failure.detail()),
         });
         self.finished = true;
         out
@@ -467,6 +484,9 @@ impl ClaudeTurnProjector {
     }
 
     fn consume_assistant(&mut self, frame: &Value, out: &mut Vec<AgenticEvent>) {
+        if let Some(error) = frame.get("error").and_then(Value::as_str) {
+            self.assistant_error = Some(error.to_string());
+        }
         if let Some(usage) = frame.pointer("/message/usage") {
             self.last_message_usage = Some(usage.clone());
         }
@@ -640,17 +660,34 @@ impl ClaudeTurnProjector {
             .get("is_error")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        self.total_cost_usd = frame
+            .get("total_cost_usd")
+            .and_then(Value::as_f64)
+            .filter(|cost| cost.is_finite() && *cost >= 0.0);
         let outcome = if self.cancel_requested {
             TurnOutcome::Cancelled
-        } else if subtype == Some("success") && !is_error {
+        } else if subtype == Some("success") && !is_error && self.assistant_error.is_none() {
             TurnOutcome::Completed
         } else {
             let detail = frame
                 .get("result")
                 .and_then(Value::as_str)
-                .or(subtype)
-                .unwrap_or("Claude Code turn failed");
-            TurnOutcome::Failed(detail.to_string())
+                .filter(|text| !text.trim().is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    frame.get("errors").and_then(Value::as_array).map(|errors| {
+                        errors
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join("
+")
+                    })
+                })
+                .filter(|text| !text.trim().is_empty())
+                .or_else(|| subtype.map(str::to_string))
+                .unwrap_or_else(|| "Claude Code turn failed".to_string());
+            TurnOutcome::Failed(detail)
         };
         if let Some(event) = self.usage_event(frame) {
             out.push(event);
@@ -680,7 +717,7 @@ impl ClaudeTurnProjector {
                 self.finished = true;
             }
             TurnOutcome::Cancelled => out.extend(self.cancel()),
-            TurnOutcome::Failed(error) => out.extend(self.fail(&error)),
+            TurnOutcome::Failed(error) => out.extend(self.fail_classified(&error, subtype)),
         }
     }
     /// One usage update per turn, from the terminal `result`. Context

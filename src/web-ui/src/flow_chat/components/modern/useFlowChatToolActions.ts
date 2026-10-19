@@ -131,6 +131,7 @@ export function useFlowChatToolActions() {
           permissionId: acpPermission.permissionId,
           approve: false,
           optionId: options?.permissionOptionId,
+          ...(options?.instruction?.trim() ? { feedback: options.instruction.trim() } : {}),
         });
         return;
       }

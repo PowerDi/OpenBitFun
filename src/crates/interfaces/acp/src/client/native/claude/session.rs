@@ -29,7 +29,7 @@ use crate::client::remote_shell::{remote_user_shell_command, shell_escape};
 use crate::client::session_persistence::AcpSessionPersistence;
 use crate::client::{
     AcpSessionConfigKind, AcpSessionConfigOption, AcpSessionConfigSelectOption,
-    AcpSessionConfigValue, AcpSessionModelOption, AcpSessionOptions,
+    AcpSessionConfigValue, AcpSessionContextUsage, AcpSessionModelOption, AcpSessionOptions,
     SubmitAcpPermissionResponseRequest,
 };
 
@@ -66,6 +66,13 @@ const THINKING_LEVELS: &[(&str, &str)] = &[
     ("max", "Max"),
 ];
 const INTERRUPT_GRACE: Duration = Duration::from_secs(3);
+/// Permission option ids beyond the ACP-standard allow_once/allow_always/reject_once.
+const ALLOW_SESSION_OPTION: &str = "allow_session";
+const APPROVE_PLAN_OPTION: &str = "approve_plan";
+const KEEP_PLANNING_OPTION: &str = "keep_planning";
+/// Deny text codexhost sends when the user keeps Claude in plan mode.
+const KEEP_PLANNING_MESSAGE: &str =
+    "User chose to stay in plan mode. Do not begin implementation.";
 
 struct NativeProcess {
     id: String,
@@ -122,6 +129,27 @@ impl NativeProcess {
     }
 }
 
+/// How a `can_use_tool` request is presented and answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionKind {
+    /// Generic tool approval with optional session/always scopes.
+    Approval,
+    /// `AskUserQuestion`: answered with `updatedInput.answers`.
+    Question,
+    /// `ExitPlanMode`: approve the plan or keep planning.
+    PlanReview,
+}
+
+impl PermissionKind {
+    fn of(tool_name: &str) -> Self {
+        match tool_name {
+            "AskUserQuestion" => Self::Question,
+            "ExitPlanMode" => Self::PlanReview,
+            _ => Self::Approval,
+        }
+    }
+}
+
 struct PendingPermission {
     process: Arc<NativeProcess>,
     turn_id: String,
@@ -129,6 +157,7 @@ struct PendingPermission {
     tool_id: String,
     input: Value,
     suggestions: Value,
+    kind: PermissionKind,
 }
 
 #[derive(Default)]
@@ -175,6 +204,10 @@ pub struct ClaudeNativeSession {
     sdk_models: std::sync::Mutex<Vec<Value>>,
     commands: std::sync::Mutex<Vec<crate::client::AcpAvailableCommand>>,
     notifier: Option<NativeAgentNotificationSink>,
+    /// Mode active before Claude entered plan mode; restored on plan approval.
+    pre_plan_mode: std::sync::Mutex<Option<String>>,
+    /// Latest context occupancy and cumulative cost, replayed via `options()`.
+    context_usage: std::sync::Mutex<Option<AcpSessionContextUsage>>,
 }
 
 impl ClaudeNativeSession {
@@ -211,6 +244,8 @@ impl ClaudeNativeSession {
             sdk_models: std::sync::Mutex::new(Vec::new()),
             commands: std::sync::Mutex::new(Vec::new()),
             notifier,
+            pre_plan_mode: std::sync::Mutex::new(None),
+            context_usage: std::sync::Mutex::new(None),
         })
     }
 
@@ -336,7 +371,11 @@ impl ClaudeNativeSession {
             available_models,
             model_config_id: None,
             config_options: self.config_options(&models),
-            context_usage: None,
+            context_usage: self
+                .context_usage
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone(),
             capabilities: Some(super::ClaudeNativeDriver.capabilities()),
         }
     }
@@ -436,6 +475,9 @@ impl ClaudeNativeSession {
         let process = self.process.lock().await.clone();
         if let Some(process) = process.filter(|p| p.alive.load(Ordering::Acquire)) {
             process.request(control, Duration::from_secs(10)).await?;
+        }
+        if config_id == PERMISSION_MODE_CONFIG_ID {
+            self.note_mode_transition(&value);
         }
         *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = value.clone();
         if config_id == PERMISSION_MODE_CONFIG_ID {
@@ -761,8 +803,18 @@ impl ClaudeNativeSession {
                 Ok(Some(line)) if line.trim().is_empty() => continue,
                 Ok(Some(line)) => match serde_json::from_str::<Value>(&line) {
                     Ok(frame) => {
+                        let refresh_usage = frame["type"] == "result"
+                            && frame.get("parent_tool_use_id").is_none_or(Value::is_null);
                         if let Err(error) = self.route_frame(&process, frame).await {
                             break error.to_string();
+                        }
+                        if refresh_usage {
+                            // Never block the reader on a control round-trip.
+                            let session = self.clone();
+                            let process = process.clone();
+                            tokio::spawn(async move {
+                                session.refresh_context_usage(&process).await;
+                            });
                         }
                     }
                     Err(error) => break format!("Invalid Claude stream-json frame: {error}"),
@@ -835,6 +887,13 @@ impl ClaudeNativeSession {
             state.model = frame["model"].as_str().map(str::to_string);
             self.init_commands(&frame);
         }
+        if frame["type"] == "system"
+            && matches!(frame["subtype"].as_str(), Some("init" | "status"))
+        {
+            if let Some(mode) = frame["permissionMode"].as_str() {
+                self.observe_permission_mode(mode);
+            }
+        }
         if frame["type"] == "control_request" {
             if frame["request"]["subtype"] == "can_use_tool" {
                 self.handle_permission(process, &frame, &mut state).await?;
@@ -906,6 +965,9 @@ impl ClaudeNativeSession {
         }
         if let Some(projector) = state.projector.as_mut() {
             let events = projector.consume(&frame);
+            if frame["type"] == "result" {
+                self.publish_result_usage(&events, projector.total_cost_usd());
+            }
             self.enqueue(events).await?;
             // Background root responses sometimes end at message_stop without
             // a result; close that autonomous segment, but retain the process.
@@ -1192,6 +1254,7 @@ impl ClaudeNativeSession {
             tool_id: tool_id.clone(),
             input: request["input"].clone(),
             suggestions: request["permission_suggestions"].clone(),
+            kind: PermissionKind::of(request["tool_name"].as_str().unwrap_or_default()),
         };
         self.permissions.insert(permission_id.clone(), pending);
         let payload = permission_payload(&permission_id, &card_session_id, request);
@@ -1202,7 +1265,7 @@ impl ClaudeNativeSession {
         .await
         {
             if let Some((_, pending)) = self.permissions.remove(&permission_id) {
-                let _ = answer_permission(pending, false, false).await;
+                let _ = cancel_permission(pending).await;
             }
             return Err(service_error(format!(
                 "Claude permission delivery failed: {error}"
@@ -1216,18 +1279,126 @@ impl ClaudeNativeSession {
         request: &SubmitAcpPermissionResponseRequest,
     ) -> Option<OpenBitFunResult<()>> {
         let (_, pending) = self.permissions.remove(&request.permission_id)?;
-        let option = request.option_id.as_deref();
-        let allow = match option {
-            Some("allow_once" | "allow_always") => true,
-            Some("reject_once") => false,
-            None => request.approve,
-            Some(_) => {
+        let reply = match permission_reply(&pending, request) {
+            Ok(reply) => reply,
+            Err(error) => {
                 self.permissions
                     .insert(request.permission_id.clone(), pending);
-                return Some(Err(service_error("Unknown Claude permission option")));
+                return Some(Err(error));
             }
         };
-        Some(answer_permission(pending, allow, option == Some("allow_always")).await)
+        let approved_plan = (pending.kind == PermissionKind::PlanReview
+            && reply["behavior"] == "allow")
+            .then(|| self.plan_exit_mode());
+        let result = write_permission_reply(&pending, reply).await;
+        if let (Ok(()), Some(mode)) = (&result, approved_plan) {
+            // Claude leaves plan mode with the approval; mirror it right away.
+            self.observe_permission_mode(&mode);
+            self.remember(|p| p.permission_mode = Some(mode.clone()))
+                .await;
+        }
+        Some(result)
+    }
+
+    /// Permission mode restored when a plan is approved.
+    fn plan_exit_mode(&self) -> String {
+        self.pre_plan_mode
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+            .unwrap_or_else(|| "default".to_string())
+    }
+
+    /// Remember the mode active before entering plan mode.
+    fn note_mode_transition(&self, next: &str) {
+        let current = read_lock(&self.permission_mode);
+        let mut pre_plan = self
+            .pre_plan_mode
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if next == "plan" && current != "plan" {
+            *pre_plan = Some(current);
+        } else if next != "plan" {
+            *pre_plan = None;
+        }
+    }
+
+    /// Track a mode reported by Claude (system init/status) or implied by a
+    /// plan approval, and tell the UI to refresh its options.
+    fn observe_permission_mode(&self, mode: &str) {
+        if !PERMISSION_MODES.iter().any(|(id, _, _)| *id == mode)
+            || read_lock(&self.permission_mode) == mode
+        {
+            return;
+        }
+        self.note_mode_transition(mode);
+        *self
+            .permission_mode
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = mode.to_string();
+        self.notify(NativeAgentNotification::OptionsChanged);
+    }
+
+    fn publish_context_usage(&self, used: u64, size: u64, cost: Option<f64>) {
+        if size == 0 {
+            return;
+        }
+        let mut slot = self
+            .context_usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let cost = cost
+            .map(usd_cost)
+            .or_else(|| slot.as_ref().and_then(|usage| usage.cost.clone()));
+        let usage = AcpSessionContextUsage { used, size, cost };
+        *slot = Some(usage.clone());
+        drop(slot);
+        self.notify(NativeAgentNotification::ContextUsageUpdated(usage));
+    }
+
+    /// Context occupancy from the turn's usage event plus the result's cost.
+    fn publish_result_usage(&self, events: &[AgenticEvent], cost: Option<f64>) {
+        let usage = events.iter().find_map(|event| match event {
+            AgenticEvent::TokenUsageUpdated {
+                input_tokens,
+                max_context_tokens: Some(max),
+                ..
+            } => Some((*input_tokens as u64, *max as u64)),
+            _ => None,
+        });
+        if let Some((used, size)) = usage {
+            self.publish_context_usage(used, size, cost);
+        } else if let Some(amount) = cost {
+            let mut slot = self
+                .context_usage
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if let Some(usage) = slot.as_mut() {
+                usage.cost = Some(usd_cost(amount));
+            }
+        }
+    }
+
+    /// Ask the CLI for its own context accounting (`get_context_usage`, as
+    /// codexhost does); it includes system prompt, tools and memory files.
+    async fn refresh_context_usage(&self, process: &Arc<NativeProcess>) {
+        if !process.alive.load(Ordering::Acquire) {
+            return;
+        }
+        match process
+            .request(
+                json!({"subtype":"get_context_usage"}),
+                Duration::from_secs(10),
+            )
+            .await
+        {
+            Ok(response) => {
+                if let Some((used, size)) = parse_context_usage(&response) {
+                    self.publish_context_usage(used, size, None);
+                }
+            }
+            Err(error) => log::debug!("Claude get_context_usage failed: {error}"),
+        }
     }
 
     async fn clear_permissions(&self, turn_id: &str) {
@@ -1239,7 +1410,7 @@ impl ClaudeNativeSession {
             .collect();
         for id in ids {
             if let Some((_, pending)) = self.permissions.remove(&id) {
-                let _ = answer_permission(pending, false, false).await;
+                let _ = cancel_permission(pending).await;
             }
         }
     }
@@ -1365,19 +1536,166 @@ fn opens_autonomous_turn(frame: &Value) -> bool {
             || (frame["type"] == "stream_event" && frame["event"]["type"] == "message_start"))
 }
 
-async fn answer_permission(
-    pending: PendingPermission,
-    allow: bool,
-    always: bool,
-) -> OpenBitFunResult<()> {
-    let mut reply = if allow {
-        json!({"behavior":"allow", "updatedInput":pending.input, "toolUseID":pending.tool_id})
-    } else {
-        json!({"behavior":"deny", "message":"Permission denied by OpenBitFun", "toolUseID":pending.tool_id})
-    };
-    if allow && always && pending.suggestions.is_array() {
-        reply["updatedPermissions"] = pending.suggestions;
+fn denied(tool_id: &str, message: &str) -> Value {
+    json!({"behavior":"deny", "message":message, "toolUseID":tool_id,
+        "decisionClassification":"user_reject"})
+}
+
+fn allowed(tool_id: &str, input: Value, permanent: bool) -> Value {
+    json!({"behavior":"allow", "updatedInput":input, "toolUseID":tool_id,
+        "decisionClassification": if permanent { "user_permanent" } else { "user_temporary" }})
+}
+
+fn usd_cost(amount: f64) -> agent_client_protocol::schema::Cost {
+    agent_client_protocol::schema::Cost::new(amount, "USD")
+}
+
+/// Permission updates Claude suggested for one scope. Session scope covers
+/// `session`/`cliArg`; always scope covers the persisted settings files.
+fn scoped_suggestions(suggestions: &Value, always: bool) -> Vec<Value> {
+    suggestions
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|update| {
+            matches!(
+                (always, update["destination"].as_str()),
+                (false, Some("session" | "cliArg"))
+                    | (
+                        true,
+                        Some("userSettings" | "projectSettings" | "localSettings")
+                    )
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+/// `AskUserQuestion` answers keyed by question text, as Claude expects in
+/// `updatedInput.answers`. The UI keys answers by question index (or text);
+/// multi-select values are comma-joined like codexhost.
+fn question_answers(input: &Value, answers: Option<&Value>) -> OpenBitFunResult<Value> {
+    let questions = input["questions"]
+        .as_array()
+        .filter(|questions| !questions.is_empty())
+        .ok_or_else(|| service_error("Claude question request has no questions"))?;
+    let answers = answers
+        .and_then(Value::as_object)
+        .ok_or_else(|| service_error("Claude question answers are missing"))?;
+    let mut out = serde_json::Map::new();
+    for (index, question) in questions.iter().enumerate() {
+        let text = question["question"]
+            .as_str()
+            .ok_or_else(|| service_error("Claude question has no text"))?;
+        let answer = match answers.get(text).or_else(|| answers.get(&index.to_string())) {
+            Some(Value::String(answer)) => answer.trim().to_string(),
+            Some(Value::Array(values)) => values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+                .join(", "),
+            _ => String::new(),
+        };
+        if answer.is_empty() {
+            return Err(service_error(format!(
+                "Claude question is unanswered: {text}"
+            )));
+        }
+        out.insert(text.to_string(), Value::String(answer));
     }
+    Ok(Value::Object(out))
+}
+
+/// Build the `can_use_tool` response for a UI decision.
+fn permission_reply(
+    pending: &PendingPermission,
+    request: &SubmitAcpPermissionResponseRequest,
+) -> OpenBitFunResult<Value> {
+    let option = request.option_id.as_deref();
+    let tool_id = pending.tool_id.as_str();
+    match pending.kind {
+        PermissionKind::Question => {
+            let answer = match option {
+                Some("allow_once") => true,
+                Some("reject_once") => false,
+                None => request.approve,
+                Some(_) => return Err(service_error("Unknown Claude question option")),
+            };
+            if !answer {
+                return Ok(denied(tool_id, "User cancelled the Question"));
+            }
+            let mut input = pending.input.clone();
+            input["answers"] = question_answers(&pending.input, request.answers.as_ref())?;
+            Ok(allowed(tool_id, input, false))
+        }
+        PermissionKind::PlanReview => {
+            let approve = match option {
+                Some(APPROVE_PLAN_OPTION | "allow_once") => true,
+                Some(KEEP_PLANNING_OPTION | "reject_once") => false,
+                None => request.approve,
+                Some(_) => return Err(service_error("Unknown Claude plan review option")),
+            };
+            if !approve {
+                let message = match request
+                    .feedback
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|feedback| !feedback.is_empty())
+                {
+                    Some(feedback) => {
+                        format!("{KEEP_PLANNING_MESSAGE}\n\nUser feedback: {feedback}")
+                    }
+                    None => KEEP_PLANNING_MESSAGE.to_string(),
+                };
+                return Ok(denied(tool_id, &message));
+            }
+            if pending.input["plan"]
+                .as_str()
+                .is_none_or(|plan| plan.trim().is_empty())
+            {
+                return Err(service_error(
+                    "Claude did not provide plan text; keep planning instead",
+                ));
+            }
+            // Same wire shape as codexhost: the CLI itself leaves plan mode and
+            // restores the pre-plan mode; the session only mirrors that.
+            Ok(allowed(tool_id, pending.input.clone(), false))
+        }
+        PermissionKind::Approval => {
+            // None = deny; Some(None) = once; Some(Some(always)) = scoped.
+            let decision = match option {
+                Some("allow_once") => Some(None),
+                Some(ALLOW_SESSION_OPTION) => Some(Some(false)),
+                Some("allow_always") => Some(Some(true)),
+                Some("reject_once") => None,
+                None => request.approve.then_some(None),
+                Some(_) => return Err(service_error("Unknown Claude permission option")),
+            };
+            match decision {
+                None => Ok(denied(tool_id, "User denied the Tool request")),
+                Some(None) => Ok(allowed(tool_id, pending.input.clone(), false)),
+                Some(Some(always)) => {
+                    let updates = scoped_suggestions(&pending.suggestions, always);
+                    if updates.is_empty() {
+                        return Err(service_error(
+                            "Claude did not offer this permission scope",
+                        ));
+                    }
+                    let mut reply = allowed(tool_id, pending.input.clone(), true);
+                    reply["updatedPermissions"] = Value::Array(updates);
+                    Ok(reply)
+                }
+            }
+        }
+    }
+}
+
+async fn write_permission_reply(
+    pending: &PendingPermission,
+    reply: Value,
+) -> OpenBitFunResult<()> {
     pending
         .process
         .write(
@@ -1387,14 +1705,57 @@ async fn answer_permission(
         .await
 }
 
+/// Settle a request nobody will answer (turn ended, delivery failed).
+async fn cancel_permission(pending: PendingPermission) -> OpenBitFunResult<()> {
+    let message = match pending.kind {
+        PermissionKind::Question => "Claude Question is no longer pending",
+        _ => "Claude Tool approval is no longer pending",
+    };
+    let reply = denied(&pending.tool_id, message);
+    write_permission_reply(&pending, reply).await
+}
+
+/// `get_context_usage` response: `{totalTokens, maxTokens, model}`.
+fn parse_context_usage(response: &Value) -> Option<(u64, u64)> {
+    let used = response["totalTokens"].as_u64()?;
+    let size = response["maxTokens"].as_u64().filter(|size| *size > 0)?;
+    Some((used, size))
+}
+
 fn permission_payload(id: &str, session_id: &str, request: &Value) -> Value {
+    let tool_name = request["tool_name"].as_str().unwrap_or("tool");
+    let option =
+        |id: &str, name: &str, kind: &str| json!({"optionId":id, "name":name, "kind":kind});
+    let options = match PermissionKind::of(tool_name) {
+        // The question card answers through `answers`; the bar only skips.
+        PermissionKind::Question => vec![option("reject_once", "Skip", "reject_once")],
+        // The plan review bar renders these with the plan and a feedback box.
+        PermissionKind::PlanReview => vec![
+            option(APPROVE_PLAN_OPTION, "Approve plan", "allow_once"),
+            option(KEEP_PLANNING_OPTION, "Keep planning", "reject_once"),
+        ],
+        PermissionKind::Approval => {
+            let suggestions = &request["permission_suggestions"];
+            let mut options = vec![option("allow_once", "Allow once", "allow_once")];
+            if !scoped_suggestions(suggestions, false).is_empty() {
+                options.push(option(
+                    ALLOW_SESSION_OPTION,
+                    "Allow for this session",
+                    "allow_session",
+                ));
+            }
+            if !scoped_suggestions(suggestions, true).is_empty() {
+                options.push(option("allow_always", "Always allow", "allow_always"));
+            }
+            options.push(option("reject_once", "Reject", "reject_once"));
+            options
+        }
+    };
     json!({"permissionId":id, "sessionId":session_id, "toolCall":{
-        "toolCallId":request["tool_use_id"], "title":request["display_name"].as_str().unwrap_or_else(|| request["tool_name"].as_str().unwrap_or("tool")),
-        "kind":match native_tool_name(request["tool_name"].as_str().unwrap_or("tool")).as_str() { "ExecCommand" => "execute", "Read" => "read", "Write" | "Edit" => "edit", _ => "other" },
+        "toolCallId":request["tool_use_id"], "title":request["display_name"].as_str().unwrap_or(tool_name),
+        "kind":match native_tool_name(tool_name).as_str() { "ExecCommand" => "execute", "Read" => "read", "Write" | "Edit" => "edit", _ => "other" },
         "status":"pending", "rawInput":request["input"], "content":[]},
-        "options":[{"optionId":"allow_once", "name":"Allow once", "kind":"allow_once"},
-            {"optionId":"allow_always", "name":"Always allow", "kind":"allow_always"},
-            {"optionId":"reject_once", "name":"Reject", "kind":"reject_once"}]})
+        "options":options})
 }
 
 fn read_lock(slot: &std::sync::Mutex<String>) -> String {
