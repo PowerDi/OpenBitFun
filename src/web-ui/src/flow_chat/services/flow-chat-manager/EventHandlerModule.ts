@@ -11,6 +11,7 @@ import { bindSubmittedMessageScrollIntent } from '../submittedMessageScrollInten
 import { finishSubmittedMessagePreview, getSubmittedMessagePreview } from '../submittedMessagePresentation';
 import { FlowChatStore, mergeModelRoundAttemptDiagnostics } from '../../store/FlowChatStore';
 import { initializeAcpPlanState } from '../acpPlanState';
+import { initializeAcpBackgroundTaskState } from '../acpBackgroundTaskState';
 import { isSessionTurnRetired } from '../../store/sessionMutationStore';
 import { stateMachineManager } from '../../state-machine';
 import { SessionExecutionEvent, SessionExecutionState } from '../../state-machine/types';
@@ -954,6 +955,7 @@ export async function initializeEventListeners(
 
   await agenticEventListener.startListening(callbacks);
   const cleanupAcpPlanState = initializeAcpPlanState();
+  const cleanupAcpBackgroundTaskState = initializeAcpBackgroundTaskState();
 
   return () => {
     unlistenProgress();
@@ -963,6 +965,7 @@ export async function initializeEventListeners(
     unlistenMcpInteractionRequest();
     unlistenAcpPermissionRequest();
     cleanupAcpPlanState();
+    cleanupAcpBackgroundTaskState();
     agenticEventListener.stopListening();
   };
 }

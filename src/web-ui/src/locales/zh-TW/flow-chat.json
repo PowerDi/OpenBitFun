@@ -1553,6 +1553,7 @@
     "backgroundCommands": "背景命令（{{count}}）",
     "backgroundCommandEmpty": "目前沒有背景命令",
     "backgroundCommandUntitled": "背景命令",
+    "backgroundTaskSubagent": "子智能體：{{name}}",
     "backgroundCommandStatusRunning": "進行中",
     "backgroundCommandStatusFinished": "已結束",
     "backgroundCommandActions": "命令操作",

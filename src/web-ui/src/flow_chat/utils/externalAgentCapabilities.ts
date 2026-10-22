@@ -14,8 +14,9 @@
  * dispatch: dispatch target picker. Model/thinking/permission controls keep their
  * existing external option routing. Local Runtime recovery, event/history
  * persistence and ACP-provided commands/plan/context remain transport contracts.
- * plan and backgroundTasks are reserved facts: there
- * is no matching blanket ACP feature restriction to replace at those surfaces.
+ * backgroundTasks: external-agent background tasks in the header background list
+ * (with Stop). plan is a reserved fact: there is no matching blanket ACP feature
+ * restriction to replace at that surface.
  */
 import {
   ACPClientAPI,

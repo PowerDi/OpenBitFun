@@ -45,6 +45,10 @@ fn native_notification_sink(
                 "agentic://acp-session-options-changed",
                 serde_json::json!({"sessionId":session_id, "clientId":client_id}),
             ),
+            NativeAgentNotification::BackgroundTasksUpdated(tasks) => app_handle.emit(
+                "agentic://acp-background-tasks-updated",
+                serde_json::json!({"sessionId":session_id, "clientId":client_id, "tasks":tasks}),
+            ),
         };
         if let Err(error) = result {
             log::warn!("Failed to publish native agent update for {session_id}: {error}");
@@ -1170,6 +1174,34 @@ pub async fn rollback_acp_session_turn(
     }
     service
         .rollback_native_session(&request.session_id, &request.turn_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StopAcpSessionTaskRequest {
+    pub session_id: String,
+    pub client_id: String,
+    pub task_id: String,
+}
+
+/// Native agents only: stop one background task of a live session.
+#[tauri::command]
+pub async fn stop_acp_session_task(
+    state: State<'_, AppState>,
+    request: StopAcpSessionTaskRequest,
+) -> Result<(), String> {
+    let service = state
+        .acp_client_service
+        .as_ref()
+        .ok_or_else(|| "ACP client service not initialized".to_string())?;
+    service
+        .native_driver(&request.client_id)
+        .filter(|driver| driver.capabilities().background_tasks)
+        .ok_or_else(|| format!("{} does not support background tasks", request.client_id))?;
+    service
+        .stop_native_task(&request.session_id, &request.task_id)
         .await
         .map_err(|error| error.to_string())
 }

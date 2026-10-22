@@ -1553,6 +1553,7 @@
     "backgroundCommands": "Background commands ({{count}})",
     "backgroundCommandEmpty": "No background commands",
     "backgroundCommandUntitled": "Background command",
+    "backgroundTaskSubagent": "Subagent: {{name}}",
     "backgroundCommandStatusRunning": "Active",
     "backgroundCommandStatusFinished": "Finished",
     "backgroundCommandActions": "Command actions",

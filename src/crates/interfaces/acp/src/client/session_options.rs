@@ -101,6 +101,9 @@ pub struct AcpSessionOptions {
     pub config_options: Vec<AcpSessionConfigOption>,
     #[serde(default)]
     pub context_usage: Option<AcpSessionContextUsage>,
+    /// Native agents: current background tasks, for re-hydration.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub background_tasks: Vec<super::native::NativeBackgroundTask>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

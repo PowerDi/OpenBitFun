@@ -236,6 +236,36 @@ export interface AcpSessionOptions {
   modelConfigId?: string;
   configOptions: AcpSessionConfigOption[];
   contextUsage?: AcpContextUsage;
+  /** Native agents advertising `backgroundTasks`; omitted when empty. */
+  backgroundTasks?: AcpBackgroundTask[];
+}
+
+/** One background task run by an external agent (background shell, subagent, ...). */
+export interface AcpBackgroundTask {
+  id: string;
+  /** Agent-specific kind, e.g. Claude `local_bash` / `local_agent`. */
+  taskType?: string | null;
+  subagentType?: string | null;
+  description: string;
+  toolUseId?: string | null;
+  /** `running`, `completed`, `failed`, `killed` (or another agent status). */
+  status: string;
+  startedAtMs: number;
+  endedAtMs?: number | null;
+  summary?: string | null;
+  outputFile?: string | null;
+}
+
+export interface AcpBackgroundTasksUpdatedEvent {
+  sessionId: string;
+  clientId: string;
+  tasks: AcpBackgroundTask[];
+}
+
+export interface StopAcpSessionTaskRequest {
+  sessionId: string;
+  clientId: string;
+  taskId: string;
 }
 
 export interface AcpAvailableCommand {
@@ -570,6 +600,11 @@ export class ACPClientAPI {
     return api.invoke('rollback_acp_session_turn', { request });
   }
 
+  /** Native agents advertising `backgroundTasks` only. */
+  static async stopSessionTask(request: StopAcpSessionTaskRequest): Promise<void> {
+    return api.invoke('stop_acp_session_task', { request });
+  }
+
   /** Native agents advertising `history.fork` only. */
   static async forkSession(request: ForkAcpSessionRequest): Promise<CreateAcpFlowSessionResponse> {
     return api.invoke('fork_acp_session', { request });
@@ -610,6 +645,15 @@ export class ACPClientAPI {
 
   static onPlanUpdated(callback: (event: AcpPlanUpdatedEvent) => void): () => void {
     return api.listen<AcpPlanUpdatedEvent>('agentic://acp-plan-updated', callback);
+  }
+
+  static onBackgroundTasksUpdated(
+    callback: (event: AcpBackgroundTasksUpdatedEvent) => void
+  ): () => void {
+    return api.listen<AcpBackgroundTasksUpdatedEvent>(
+      'agentic://acp-background-tasks-updated',
+      callback
+    );
   }
 
   static onSessionOptionsChanged(

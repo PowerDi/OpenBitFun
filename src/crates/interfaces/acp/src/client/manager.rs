@@ -327,6 +327,21 @@ impl AcpClientService {
         session.rollback_last_turn(turn_id).await
     }
 
+    /// Background tasks of a prepared native session (empty when not prepared).
+    pub fn native_background_tasks(&self, session_id: &str) -> Vec<native::NativeBackgroundTask> {
+        self.native_session(session_id)
+            .map(|session| session.background_tasks())
+            .unwrap_or_default()
+    }
+
+    /// Stop one background task of a prepared native session.
+    pub async fn stop_native_task(&self, session_id: &str, task_id: &str) -> OpenBitFunResult<()> {
+        let session = self.native_session(session_id).ok_or_else(|| {
+            OpenBitFunError::Validation(format!("Native session is not prepared: {session_id}"))
+        })?;
+        session.stop_task(task_id).await
+    }
+
     /// Fork a native session through `turn_id`. The new session launches its
     /// agent from the source agent state on the first turn.
     pub async fn fork_native_session(

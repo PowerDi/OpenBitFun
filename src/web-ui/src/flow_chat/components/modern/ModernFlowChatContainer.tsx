@@ -70,6 +70,13 @@ import { parsePullRequestUrl } from '@/shared/utils/pullRequestLinks';
 import { createBackgroundCommandOutputTab, createReviewPlatformPullRequestDetailTab } from '@/shared/utils/tabUtils';
 import { externalAgentSupports } from '../../utils/externalAgentCapabilities';
 import { useExternalAgentCapabilities } from '../../hooks/useExternalAgentCapabilities';
+import {
+  hydrateAcpBackgroundTasks,
+  isAcpBackgroundTaskRunning,
+  useAcpBackgroundTaskStore,
+} from '../../services/acpBackgroundTaskState';
+import { acpSessionRef } from '../../utils/acpSession';
+import { ACPClientAPI, type AcpBackgroundTask } from '@/infrastructure/api/service-api/ACPClientAPI';
 import { flowChatStore } from '../../store/FlowChatStore';
 import { openBtwSessionInAuxPane } from '../../services/btwSessionPane';
 import { FlowChatSelectionBar } from '../../selection/FlowChatSelectionBar';
@@ -207,7 +214,45 @@ type BackgroundCommandSummary = {
   startedAt?: number;
   elapsedMs?: number;
   isStopping?: boolean;
+  externalTaskId?: string;
 };
+
+const EMPTY_ACP_BACKGROUND_TASKS: AcpBackgroundTask[] = [];
+
+function acpBackgroundTaskStatus(task: AcpBackgroundTask): BackgroundCommandSummary['status'] {
+  if (isAcpBackgroundTaskRunning(task)) return 'running';
+  switch (task.status) {
+    case 'failed':
+      return 'failed';
+    case 'killed':
+      return 'killed';
+    default:
+      return 'exited';
+  }
+}
+
+/** External-agent background tasks share the header's background command list. */
+function backgroundCommandSummaryFromAcpTask(
+  task: AcpBackgroundTask,
+  subagentTitle: (name: string) => string,
+): BackgroundCommandSummary {
+  const status = acpBackgroundTaskStatus(task);
+  const description = commandTitle(task.description);
+  const title = task.taskType === 'local_agent'
+    ? subagentTitle(description || task.subagentType || '')
+    : description;
+  return {
+    execSessionKey: `acp-task:${task.id}`,
+    execSessionId: -1,
+    title,
+    command: task.description,
+    status,
+    tty: false,
+    startedAt: task.startedAtMs,
+    elapsedMs: (status === 'running' ? Date.now() : task.endedAtMs ?? Date.now()) - task.startedAtMs,
+    externalTaskId: task.id,
+  };
+}
 
 const LATEST_TURN_AUTO_PIN_MAX_ATTEMPTS = 8;
 const HISTORY_INITIAL_CONTENT_PAINT_MAX_ATTEMPTS = 30;
@@ -2435,12 +2480,41 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     shouldDeferBackgroundCommandSnapshot,
   ]);
 
+  const acpTaskSession = useMemo(() => acpSessionRef(activeSession), [activeSession]);
+  const supportsAcpBackgroundTasks = externalCaps !== null
+    && externalAgentSupports(externalCaps, 'backgroundTasks')
+    && acpTaskSession !== null;
+  const acpBackgroundTasks = useAcpBackgroundTaskStore(state => (
+    supportsAcpBackgroundTasks && acpTaskSession
+      ? state.tasks.get(acpTaskSession.sessionId) ?? EMPTY_ACP_BACKGROUND_TASKS
+      : EMPTY_ACP_BACKGROUND_TASKS
+  ));
+  useEffect(() => {
+    if (!supportsAcpBackgroundTasks || !acpTaskSession) return;
+    // Seed from the latest cached options snapshot (e.g. after a reload; caps
+    // change identity when a new snapshot is cached). Live updates arrive
+    // through the background-task event.
+    hydrateAcpBackgroundTasks(
+      acpTaskSession.sessionId,
+      ACPClientAPI.getCachedSessionOptions({
+        sessionId: acpTaskSession.sessionId,
+        clientId: acpTaskSession.clientId,
+        remoteConnectionId: acpTaskSession.remoteConnectionId,
+      })?.backgroundTasks,
+    );
+  }, [acpTaskSession, externalCaps, supportsAcpBackgroundTasks]);
   const backgroundCommands = useMemo(
-    () => visibleBackgroundCommandActivitiesForSession(
-      backgroundCommandActivities,
-      activeSession?.sessionId,
-    ).map(backgroundCommandSummaryFromActivity),
-    [activeSession?.sessionId, backgroundCommandActivities],
+    () => [
+      ...visibleBackgroundCommandActivitiesForSession(
+        backgroundCommandActivities,
+        activeSession?.sessionId,
+      ).map(backgroundCommandSummaryFromActivity),
+      ...acpBackgroundTasks.map(task => backgroundCommandSummaryFromAcpTask(
+        task,
+        name => t('flowChatHeader.backgroundTaskSubagent', { name }),
+      )),
+    ],
+    [acpBackgroundTasks, activeSession?.sessionId, backgroundCommandActivities, t],
   );
   const [hasActiveSessionTreeDescendants, setHasActiveSessionTreeDescendants] = useState(() =>
     hasActiveSessionLineageDescendants(activeSession?.sessionId, flowChatStore.getState().sessions),
@@ -2554,6 +2628,10 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   }, [activeSession, t]);
 
   const handleOpenBackgroundCommandOutput = useCallback((command: FlowChatHeaderCommandSummary) => {
+    if (command.externalTaskId) {
+      // The external agent owns its task output; there is no host terminal to open.
+      return;
+    }
     createBackgroundCommandOutputTab({
       execSessionKey: command.execSessionKey,
       execSessionId: command.execSessionId,
@@ -2634,6 +2712,17 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     }
 
     try {
+      if (command.externalTaskId) {
+        if (!acpTaskSession) {
+          throw new Error('External agent session is unavailable');
+        }
+        await ACPClientAPI.stopSessionTask({
+          sessionId: acpTaskSession.sessionId,
+          clientId: acpTaskSession.clientId,
+          taskId: command.externalTaskId,
+        });
+        return;
+      }
       await agentAPI.controlBackgroundCommand({
         execSessionId: command.execSessionId,
         action: 'interrupt',
@@ -2650,7 +2739,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
         { duration: 5000 },
       );
     }
-  }, [t]);
+  }, [acpTaskSession, t]);
 
   const showMockBackgroundCommands = shouldShowMockBackgroundCommands();
   const headerBackgroundCommands = useMemo(

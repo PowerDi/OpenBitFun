@@ -9190,6 +9190,7 @@
           "evidence": [
             "command:start_acp_dialog_turn",
             "command:cancel_acp_dialog_turn",
+            "command:stop_acp_session_task",
             "command:submit_acp_permission_response",
             "command:create_acp_flow_session"
           ]

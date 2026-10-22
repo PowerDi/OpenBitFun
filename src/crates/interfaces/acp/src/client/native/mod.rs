@@ -32,6 +32,34 @@ pub enum NativeAgentNotification {
     ContextUsageUpdated(AcpSessionContextUsage),
     /// Session options (e.g. permission mode) changed outside a user request.
     OptionsChanged,
+    /// The agent's background tasks changed; the payload is the full list.
+    BackgroundTasksUpdated(Vec<NativeBackgroundTask>),
+}
+
+/// One background task run by the external agent (shell, subagent, ...).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct NativeBackgroundTask {
+    pub id: String,
+    /// Agent-specific kind, e.g. Claude `local_bash` / `local_agent`.
+    pub task_type: Option<String>,
+    pub subagent_type: Option<String>,
+    /// Command line or task description.
+    pub description: String,
+    pub tool_use_id: Option<String>,
+    /// `running`, `completed`, `failed`, `killed` (or another agent status).
+    pub status: String,
+    /// Host clock (Unix ms) when the host first observed the task.
+    pub started_at_ms: u64,
+    pub ended_at_ms: Option<u64>,
+    pub summary: Option<String>,
+    pub output_file: Option<String>,
+}
+
+impl NativeBackgroundTask {
+    pub fn is_running(&self) -> bool {
+        matches!(self.status.as_str(), "running" | "pending" | "paused")
+    }
 }
 
 /// Result of rolling back the latest turn of a native session.
@@ -119,6 +147,16 @@ pub trait NativeAgentSession: Send + Sync {
     ) -> OpenBitFunResult<NativeRollbackOutcome> {
         Err(openbitfun_core::util::errors::OpenBitFunError::Validation(
             "This native agent does not support rollback".into(),
+        ))
+    }
+    /// Latest background task list (also published as `BackgroundTasksUpdated`).
+    fn background_tasks(&self) -> Vec<NativeBackgroundTask> {
+        Vec::new()
+    }
+    /// Stop one running background task.
+    async fn stop_task(&self, _task_id: &str) -> OpenBitFunResult<()> {
+        Err(openbitfun_core::util::errors::OpenBitFunError::Validation(
+            "This native agent does not support background tasks".into(),
         ))
     }
     async fn shutdown(&self);

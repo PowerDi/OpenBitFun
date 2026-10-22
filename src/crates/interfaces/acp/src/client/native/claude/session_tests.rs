@@ -1341,3 +1341,97 @@ fn fork_launch_forks_source_transcript_at_turn_with_new_id() {
     );
     assert!(args.contains(&"--replay-user-messages".to_string()));
 }
+
+fn background_bash(id: &str) -> Value {
+    json!({"type":"system", "subtype":"task_started", "task_id":id, "description":"npm run dev",
+        "task_type":"local_bash", "is_backgrounded":true, "uuid":"u", "session_id":"s"})
+}
+
+#[tokio::test]
+async fn background_frames_between_turns_publish_tasks_and_stop_task_uses_control_request() {
+    let updates = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = updates.clone();
+    let (session, process, output) = fixture_with_notifier(Some(Arc::new(move |update| {
+        sink.lock().unwrap().push(update);
+    })));
+    *session.process.lock().await = Some(process.clone());
+    // No active turn: background frames must still be tracked.
+    session
+        .route_frame(&process, background_bash("b1"))
+        .await
+        .unwrap();
+    assert!(session.state.lock().await.projector.is_none());
+    assert!(matches!(&updates.lock().unwrap()[..],
+        [NativeAgentNotification::BackgroundTasksUpdated(tasks)] if tasks.len() == 1 && tasks[0].is_running()));
+    assert!(session.stop_task("unknown").await.is_err());
+
+    let stopper = session.clone();
+    let stop = tokio::spawn(async move { stopper.stop_task("b1").await });
+    let mut lines = BufReader::new(output).lines();
+    let sent: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(sent["type"], "control_request");
+    assert_eq!(
+        sent["request"],
+        json!({"subtype":"stop_task", "task_id":"b1"})
+    );
+    session
+        .route_frame(
+            &process,
+            json!({"type":"control_response", "response":{"subtype":"success",
+                "request_id":sent["request_id"], "response":{}}}),
+        )
+        .await
+        .unwrap();
+    stop.await.unwrap().unwrap();
+    session
+        .route_frame(
+            &process,
+            json!({"type":"system", "subtype":"task_notification", "task_id":"b1",
+                "status":"stopped", "output_file":"/tmp/b1", "summary":"", "uuid":"u", "session_id":"s"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(session.background_tasks()[0].status, "killed");
+}
+
+#[tokio::test(start_paused = true)]
+async fn idle_release_waits_for_running_background_tasks() {
+    let (session, process, _output) = fixture();
+    *session.process.lock().await = Some(process.clone());
+    session
+        .route_frame(&process, background_bash("b1"))
+        .await
+        .unwrap();
+    let period = Duration::from_secs(60);
+    let watcher = session.spawn_idle_release(process.clone(), period);
+    tokio::time::sleep(period * 3).await;
+    assert!(
+        process.alive.load(Ordering::Acquire),
+        "running task keeps the process"
+    );
+    session
+        .route_frame(
+            &process,
+            json!({"type":"system", "subtype":"background_tasks_changed", "tasks":[],
+                "uuid":"u", "session_id":"s"}),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(period * 3).await;
+    assert!(
+        !process.alive.load(Ordering::Acquire),
+        "idle process is released"
+    );
+    tokio::time::timeout(Duration::from_secs(1), watcher)
+        .await
+        .unwrap()
+        .unwrap();
+    // Released, not failed: the next turn lazily resumes the same transcript.
+    assert!(session.state.lock().await.projector.is_none());
+    assert!(session
+        .queue
+        .dequeue_batch(100)
+        .await
+        .iter()
+        .all(|e| !matches!(e.event, AgenticEvent::DialogTurnFailed { .. })));
+}

@@ -1790,6 +1790,7 @@ pub async fn run() {
             set_acp_session_config_option,
             rollback_acp_session_turn,
             fork_acp_session,
+            stop_acp_session_task,
             get_global_config_status,
             get_model_configs,
             get_ai_model_catalog,

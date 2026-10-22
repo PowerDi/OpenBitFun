@@ -42,6 +42,8 @@ export interface FlowChatHeaderCommandSummary {
   exitCode?: number;
   elapsedMs?: number;
   isStopping?: boolean;
+  /** Set for external-agent background tasks; they have no host exec session. */
+  externalTaskId?: string;
 }
 
 export interface FlowChatHeaderProps {

@@ -23,8 +23,10 @@ use tokio::sync::{oneshot, Mutex, Notify};
 use super::super::preferences::NativeAgentPreferences;
 use super::super::process::{Reader, Writer};
 use super::super::{
-    NativeAgentDriver, NativeAgentNotification, NativeAgentNotificationSink, NativeRollbackOutcome,
+    NativeAgentDriver, NativeAgentNotification, NativeAgentNotificationSink, NativeBackgroundTask,
+    NativeRollbackOutcome,
 };
+use super::background::ClaudeBackgroundTasks;
 use super::history::{resume_args, ClaudeHistory, PendingResume, RollbackPlan, TurnAnchor};
 use super::projector::{native_tool_name, ClaudeTurnProjector};
 use super::tasks::ClaudeTasks;
@@ -69,6 +71,9 @@ const THINKING_LEVELS: &[(&str, &str)] = &[
     ("max", "Max"),
 ];
 const INTERRUPT_GRACE: Duration = Duration::from_secs(3);
+/// Stop an idle CLI process (no turn, permission or running background task)
+/// after this long; the next turn resumes it with `--resume`.
+const IDLE_RELEASE_AFTER: Duration = Duration::from_secs(30 * 60);
 /// What the Agent SDK's `enableFileCheckpointing` sets; enables `rewind_files`.
 const FILE_CHECKPOINT_ENV: &str = "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING";
 /// Permission option ids beyond the ACP-standard allow_once/allow_always/reject_once.
@@ -215,6 +220,10 @@ pub struct ClaudeNativeSession {
     context_usage: std::sync::Mutex<Option<AcpSessionContextUsage>>,
     /// Claude transcript anchors per turn and the pending branch launch.
     history: std::sync::Mutex<ClaudeHistory>,
+    /// Background shells/subagents; they outlive turns but not the process.
+    background: std::sync::Mutex<ClaudeBackgroundTasks>,
+    /// Last process output or session request; drives the idle release.
+    last_activity: std::sync::Mutex<tokio::time::Instant>,
 }
 
 impl ClaudeNativeSession {
@@ -254,7 +263,123 @@ impl ClaudeNativeSession {
             pre_plan_mode: std::sync::Mutex::new(None),
             context_usage: std::sync::Mutex::new(None),
             history: std::sync::Mutex::new(ClaudeHistory::default()),
+            background: std::sync::Mutex::new(ClaudeBackgroundTasks::default()),
+            last_activity: std::sync::Mutex::new(tokio::time::Instant::now()),
         })
+    }
+
+    fn background(&self) -> std::sync::MutexGuard<'_, ClaudeBackgroundTasks> {
+        self.background
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    pub(crate) fn background_tasks(&self) -> Vec<NativeBackgroundTask> {
+        self.background().snapshot()
+    }
+
+    fn track_background(&self, process: &NativeProcess, frame: &Value) {
+        let mut background = self.background();
+        if background.consume(&process.id, frame, unix_ms()) {
+            let tasks = background.snapshot();
+            drop(background);
+            self.notify(NativeAgentNotification::BackgroundTasksUpdated(tasks));
+        }
+    }
+
+    fn touch(&self) {
+        *self
+            .last_activity
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = tokio::time::Instant::now();
+    }
+
+    fn last_activity(&self) -> tokio::time::Instant {
+        *self
+            .last_activity
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    /// One watcher per process: release it once the session has been idle for
+    /// `after`. Any frame or request resets the clock; a busy session (turn,
+    /// permission, running background task) is never released.
+    fn spawn_idle_release(
+        self: &Arc<Self>,
+        process: Arc<NativeProcess>,
+        after: Duration,
+    ) -> tokio::task::JoinHandle<()> {
+        let session = Arc::downgrade(self);
+        tokio::spawn(async move {
+            loop {
+                let deadline = match session.upgrade() {
+                    Some(session) => session.last_activity() + after,
+                    None => return,
+                };
+                tokio::time::sleep_until(deadline).await;
+                let Some(session) = session.upgrade() else {
+                    return;
+                };
+                if !process.alive.load(Ordering::Acquire) {
+                    return;
+                }
+                if session.last_activity() + after > tokio::time::Instant::now() {
+                    continue;
+                }
+                if session.release_if_idle(&process).await {
+                    return;
+                }
+                // Busy: check again a full period after it was last seen busy.
+                session.touch();
+            }
+        })
+    }
+
+    async fn release_if_idle(&self, process: &Arc<NativeProcess>) -> bool {
+        // Serialize with launch/submission so a starting turn is never cut.
+        let _guard = self.lifecycle.lock().await;
+        let slot = self.process.lock().await;
+        if !slot
+            .as_ref()
+            .is_some_and(|current| current.id == process.id)
+        {
+            // A newer process owns the session; this one is already retired.
+            return true;
+        }
+        let busy = self.state.lock().await.projector.is_some()
+            || !self.permissions.is_empty()
+            || self.background().has_running();
+        if busy {
+            return false;
+        }
+        log::info!(
+            "Releasing idle Claude native process: session_id={}",
+            self.session_id
+        );
+        drop(slot);
+        process.kill().await;
+        true
+    }
+
+    /// Stop one running background task through the live CLI process.
+    pub async fn stop_task(&self, task_id: &str) -> OpenBitFunResult<()> {
+        if !self.background().is_running(task_id) {
+            return Err(OpenBitFunError::Validation(format!(
+                "Claude background task is not running: {task_id}"
+            )));
+        }
+        let process = self
+            .process
+            .lock()
+            .await
+            .clone()
+            .filter(|p| p.alive.load(Ordering::Acquire))
+            .ok_or_else(|| service_error("Claude process is not running"))?;
+        self.touch();
+        process
+            .request(stop_task_request(task_id), Duration::from_secs(10))
+            .await
+            .map(|_| ())
     }
 
     pub(crate) fn claude_id(&self) -> String {
@@ -449,6 +574,7 @@ impl ClaudeNativeSession {
                 .unwrap_or_else(|error| error.into_inner())
                 .clone(),
             capabilities: Some(super::ClaudeNativeDriver.capabilities()),
+            background_tasks: self.background_tasks(),
         }
     }
 
@@ -563,8 +689,19 @@ impl ClaudeNativeSession {
 
     /// Launch the CLI and complete `initialize` without sending a user turn, so
     /// the model list is available before the first message.
+    /// Once the catalog is cached (e.g. after an idle release or an exit
+    /// between turns), options are served without relaunching; the next
+    /// turn resumes the process.
     pub async fn warm_up(self: &Arc<Self>) -> OpenBitFunResult<()> {
         let _guard = self.lifecycle.lock().await;
+        let catalog_cached = !self
+            .sdk_models
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_empty();
+        if catalog_cached {
+            return Ok(());
+        }
         self.ensure_process().await.map(|_| ())
     }
 
@@ -626,6 +763,7 @@ impl ClaudeNativeSession {
         original: Option<String>,
     ) -> OpenBitFunResult<()> {
         let _guard = self.lifecycle.lock().await;
+        self.touch();
         if self.state.lock().await.projector.is_some() {
             return Err(service_error("Claude session already has an active turn"));
         }
@@ -841,6 +979,8 @@ impl ClaudeNativeSession {
             session.read_loop(reader_process, reader, stderr_task).await;
         });
         drop(slot);
+        self.touch();
+        self.spawn_idle_release(process.clone(), IDLE_RELEASE_AFTER);
         match process
             .request(
                 json!({"subtype":"initialize", "hooks":null, "forwardSubagentText":true}),
@@ -912,6 +1052,7 @@ impl ClaudeNativeSession {
                 Ok(Some(line)) if line.trim().is_empty() => continue,
                 Ok(Some(line)) => match serde_json::from_str::<Value>(&line) {
                     Ok(frame) => {
+                        self.touch();
                         let refresh_usage = frame["type"] == "result"
                             && frame.get("parent_tool_use_id").is_none_or(Value::is_null);
                         if let Err(error) = self.route_frame(&process, frame).await {
@@ -948,8 +1089,20 @@ impl ClaudeNativeSession {
             .cloned()
             .collect::<Vec<_>>()
             .join("\n");
+        // Background tasks die with the process that ran them.
+        let ended = {
+            let mut background = self.background();
+            background
+                .process_ended(&process.id, unix_ms())
+                .then(|| background.snapshot())
+        };
+        if let Some(tasks) = ended {
+            self.notify(NativeAgentNotification::BackgroundTasksUpdated(tasks));
+        }
         // Hold the process fence while failing its turn. An old reader must
-        // never fail a turn submitted after a resume/restart.
+        // never fail a turn submitted after a resume/restart. Between turns
+        // there is nothing to fail: an idle exit or crash stays silent and
+        // the next turn lazily resumes the transcript.
         let slot = self.process.lock().await;
         let owns_turn = self.state.lock().await.process_id.as_deref() == Some(process.id.as_str());
         if slot.as_ref().is_some_and(|p| p.id == process.id) && owns_turn {
@@ -1016,6 +1169,7 @@ impl ClaudeNativeSession {
             return Ok(());
         }
         if frame["type"] == "system" {
+            self.track_background(process, &frame);
             match frame["subtype"].as_str() {
                 Some("commands_changed") => {
                     self.replace_commands(&frame["commands"]);
@@ -1789,9 +1943,27 @@ impl super::super::NativeAgentSession for ClaudeNativeSession {
     ) -> OpenBitFunResult<NativeRollbackOutcome> {
         ClaudeNativeSession::rollback_last_turn(&self, turn_id).await
     }
+    fn background_tasks(&self) -> Vec<NativeBackgroundTask> {
+        ClaudeNativeSession::background_tasks(self)
+    }
+    async fn stop_task(&self, task_id: &str) -> OpenBitFunResult<()> {
+        ClaudeNativeSession::stop_task(self, task_id).await
+    }
     async fn shutdown(&self) {
         ClaudeNativeSession::shutdown(self).await
     }
+}
+
+/// `stop_task` control request (also allowed while a turn is running).
+fn stop_task_request(task_id: &str) -> Value {
+    json!({"subtype":"stop_task", "task_id":task_id})
+}
+
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or_default()
 }
 
 fn opens_autonomous_turn(frame: &Value) -> bool {

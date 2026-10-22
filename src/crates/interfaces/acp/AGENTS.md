@@ -69,7 +69,10 @@ turn state and subagent projection stay with that driver. Its process is
 session-scoped; `result` ends a foreground segment, not the process. Preserve
 generation fences, PID-scoped shutdown, native tool IDs in permission cards,
 and the canonical EventQueue ingress. PID-tree helpers continue to use the
-existing ACP process supervisor.
+existing ACP process supervisor. Background tasks (`background.rs`) are
+tracked from `task_*` / `background_tasks_changed` frames between turns too;
+an idle process (no turn, permission or running background task) is released
+after `IDLE_RELEASE_AFTER` and the next turn resumes it.
 
 Verification from `src/crates` (memory streams; no Claude account or SSH host required):
 

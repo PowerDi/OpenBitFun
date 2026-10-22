@@ -1,4 +1,5 @@
 //! Claude Code stream-json identity, resume policy and session implementation.
+mod background;
 mod commands;
 mod errors;
 mod history;
@@ -48,6 +49,7 @@ impl NativeAgentDriver for ClaudeNativeDriver {
             thinking: true,
             commands: true,
             plan: true,
+            background_tasks: true,
             subagents: NativeSubagentCapabilities {
                 observe: true,
                 read_transcript: true,

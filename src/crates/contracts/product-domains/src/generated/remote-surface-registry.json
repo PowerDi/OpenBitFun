@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "fnv1a64:f849873447411af0",
+  "digest": "fnv1a64:879594b6ca1e42bb",
   "retiredCommandPrefixes": [
     {
       "prefix": "lsp_",
@@ -7958,6 +7958,18 @@
       "id": "stop_acp_client",
       "surface": "tauri_command",
       "remoteWorkspace": "LegacyUnaudited",
+      "peer": {
+        "kind": "proxied"
+      },
+      "cliPeer": {
+        "kind": "unsupported",
+        "reason": "the CLI peer host has no handler for this command"
+      }
+    },
+    {
+      "id": "stop_acp_session_task",
+      "surface": "tauri_command",
+      "remoteWorkspace": "RemoteRouted",
       "peer": {
         "kind": "proxied"
       },
