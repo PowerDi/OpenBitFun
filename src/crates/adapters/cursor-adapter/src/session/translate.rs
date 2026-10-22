@@ -55,6 +55,7 @@ impl Builder {
             self.candidate.fallback_title = self.candidate.title.clone();
         }
         self.turns.push(ExternalSessionTurn {
+            source_resume_entry_id: None,
             source_turn_id: id,
             timestamp: time.or(self.candidate.created_at).unwrap_or(0),
             user_text: text,

@@ -388,6 +388,7 @@ fn translate(
                         return Err("DeepSeek Harness session exceeds the turn limit".into());
                     }
                     turns.push(ExternalSessionTurn {
+                        source_resume_entry_id: None,
                         source_turn_id: turn_id,
                         timestamp: row["time"].as_u64().unwrap_or_default(),
                         user_text: text,

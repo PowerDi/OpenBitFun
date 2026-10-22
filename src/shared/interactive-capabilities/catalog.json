@@ -359,6 +359,7 @@
             "command:copy_session",
             "command:fork_session",
             "command:fork_acp_session",
+            "command:continue_imported_acp_session",
             "command:export_session_transcript",
             "command:archive_all_sessions",
             "command:get_session_lineage"

@@ -116,6 +116,10 @@ pub struct ExternalSessionTurn {
     pub items: Vec<ExternalSessionItem>,
     pub source_event_count: usize,
     pub status: ExternalSessionStatus,
+    /// Source-native id of the turn's last conversation entry, for ecosystems
+    /// whose own agent can resume its transcript at that position.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_resume_entry_id: Option<String>,
 }
 
 #[derive(Clone, Serialize)]

@@ -216,6 +216,7 @@ pub(super) fn read(
 
 fn empty_turn(id: String, timestamp: u64, status: ExternalSessionStatus) -> ExternalSessionTurn {
     ExternalSessionTurn {
+        source_resume_entry_id: None,
         source_turn_id: id,
         timestamp,
         user_text: String::new(),

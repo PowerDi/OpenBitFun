@@ -367,6 +367,7 @@ impl OpenCodeSessionReader {
                     }
                     user_turns.insert(message.id.clone(), turns.len());
                     turns.push(ExternalSessionTurn {
+                        source_resume_entry_id: None,
                         source_turn_id: message.id,
                         timestamp: data["time"]["created"].as_u64().unwrap_or(message.created),
                         user_text: text.join("\n\n"),

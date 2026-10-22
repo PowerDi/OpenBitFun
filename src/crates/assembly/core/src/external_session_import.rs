@@ -324,9 +324,14 @@ fn convert_document_turns(
                 id: format!("{turn_id}-user"),
                 content: source.user_text.clone(),
                 timestamp,
-                metadata: Some(
-                    json!({"importedFrom":document.candidate.ecosystem_id,"sourceTurnId":source.source_turn_id}),
-                ),
+                metadata: Some({
+                    let mut metadata = json!({"importedFrom":document.candidate.ecosystem_id,"sourceTurnId":source.source_turn_id});
+                    // Lets the source's own agent resume its transcript at this turn.
+                    if let Some(entry) = &source.source_resume_entry_id {
+                        metadata["sourceResumeEntryId"] = json!(entry);
+                    }
+                    metadata
+                }),
             },
         );
         turn.timestamp = timestamp;
@@ -544,6 +549,7 @@ mod tests {
             }))
             .unwrap(),
             turns: vec![ExternalSessionTurn {
+                source_resume_entry_id: None,
                 source_turn_id: "source-user".into(),
                 timestamp: 1000,
                 user_text: "Continue this task".into(),

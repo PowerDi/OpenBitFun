@@ -30,6 +30,7 @@ import {
 import { isSessionInUseError } from '@/infrastructure/api/errors/TauriCommandError';
 import { i18nService } from '@/infrastructure/i18n';
 import { driverForSession } from '../../session-drivers/registry';
+import { isAcpAgentType } from '../../utils/acpSession';
 import { assertSessionConversationCanSubmit, getSessionConversationCapability } from '../../session-drivers/conversationCapability';
 import type { SendMessageOptions, SubmissionDraft, TurnTracker } from '../../session-drivers/types';
 import { assertSessionSubmissionAllowed } from '../../store/sessionMutationStore';
@@ -279,8 +280,11 @@ async function sendMessageInternal(
       options?.onSessionForked?.(sessionId, branchId);
       // Do not replay the retired source placeholder over the host's corrected
       // branch mode. Keep valid composer selections, even when stored locally.
-      const continuationAgentType = agentType?.trim() === 'primary'
-        && (session.mode || session.config.agentType)?.trim() === 'primary'
+      // A native agent branch keeps its own mode; OpenBitFun composer modes do not apply.
+      const branch = context.flowChatStore.getState().sessions.get(branchId);
+      const continuationAgentType = isAcpAgentType(branch?.mode || branch?.config.agentType)
+        || (agentType?.trim() === 'primary'
+          && (session.mode || session.config.agentType)?.trim() === 'primary')
         ? undefined : agentType;
       return await sendMessageInternal(context, message, branchId, displayMessage, continuationAgentType, switchToMode, options);
     } finally {

@@ -109,6 +109,22 @@ pub trait NativeAgentDriver: Send + Sync {
             format!("{} sessions cannot be forked", self.session_label()),
         ))
     }
+    /// Custom-metadata keys that turn a branch of an imported `ecosystem_id`
+    /// transcript into a session of this agent, resuming the agent's own copy
+    /// of `source_session_id` after the last of `turns` (storage order).
+    fn import_metadata(
+        &self,
+        _ecosystem_id: &str,
+        _source_session_id: &str,
+        _turns: &[openbitfun_core::service::session::DialogTurnData],
+    ) -> OpenBitFunResult<serde_json::Map<String, serde_json::Value>> {
+        Err(openbitfun_core::util::errors::OpenBitFunError::Validation(
+            format!(
+                "{} cannot continue imported transcripts",
+                self.session_label()
+            ),
+        ))
+    }
     async fn open(
         &self,
         context: NativeAgentOpenContext,

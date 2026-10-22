@@ -349,6 +349,80 @@ impl AcpSessionPersistence {
         })
     }
 
+    /// Copy a followed external history view through `turn_id` into a new
+    /// session owned by `client_id`; `metadata` receives the source ecosystem,
+    /// its session id and the copied turns, and returns the driver keys. The
+    /// copy is deleted if that fails, so the source view stays the only record.
+    pub(crate) async fn branch_imported_session(
+        &self,
+        session_storage_path: &Path,
+        source_session_id: &str,
+        turn_id: &str,
+        client_id: &str,
+        metadata: impl FnOnce(
+            &str,
+            &str,
+            &[openbitfun_core::service::session::DialogTurnData],
+        ) -> OpenBitFunResult<serde_json::Map<String, Value>>,
+    ) -> OpenBitFunResult<CreateAcpFlowSessionRecordResponse> {
+        let source = self
+            .manager
+            .load_session_metadata(session_storage_path, source_session_id)
+            .await?
+            .ok_or_else(|| {
+                OpenBitFunError::NotFound(format!("Session not found: {source_session_id}"))
+            })?;
+        let (ecosystem, source_id) = imported_source_identity(&source).ok_or_else(|| {
+            OpenBitFunError::Validation("Session is not an imported external history".into())
+        })?;
+        let branch = self
+            .manager
+            .branch_external_history(session_storage_path, source_session_id, turn_id)
+            .await?;
+        let agent_type = format!("acp:{client_id}");
+        let result = async {
+            let turns = self
+                .manager
+                .load_session_turns(session_storage_path, &branch.session_id)
+                .await?;
+            let keys = metadata(&ecosystem, &source_id, &turns)?;
+            self.update_metadata(session_storage_path, &branch.session_id, |metadata| {
+                metadata.agent_type = agent_type.clone();
+                let mut custom = metadata.custom_metadata.take().unwrap_or_else(|| json!({}));
+                ensure_object(&mut custom)?;
+                custom["kind"] = json!("normal");
+                custom[CUSTOM_METADATA_PROVIDER_KEY] = json!(CUSTOM_METADATA_PROVIDER_VALUE);
+                custom[CUSTOM_METADATA_CLIENT_ID_KEY] = json!(client_id);
+                for (key, value) in keys {
+                    custom[key.as_str()] = value;
+                }
+                metadata.custom_metadata = Some(custom);
+                Ok(())
+            })
+            .await
+        }
+        .await;
+        if let Err(error) = result {
+            if let Err(cleanup) = self
+                .manager
+                .delete_session(session_storage_path, &branch.session_id)
+                .await
+            {
+                log::warn!(
+                    "Failed to remove incomplete imported session branch: session_id={} error={}",
+                    branch.session_id,
+                    cleanup
+                );
+            }
+            return Err(error);
+        }
+        Ok(CreateAcpFlowSessionRecordResponse {
+            session_id: branch.session_id,
+            session_name: branch.session_name,
+            agent_type,
+        })
+    }
+
     /// Refuse a rollback whose target is not the latest persisted turn.
     pub(crate) async fn ensure_latest_turn(
         &self,
@@ -408,4 +482,21 @@ fn ensure_object(value: &mut Value) -> OpenBitFunResult<()> {
             "Failed to initialize ACP session custom metadata".to_string(),
         ))
     }
+}
+
+/// Ecosystem and source session id of a followed external history view.
+fn imported_source_identity(metadata: &SessionMetadata) -> Option<(String, String)> {
+    let custom = metadata.custom_metadata.as_ref()?;
+    if custom.get("externalHistoryMode").and_then(Value::as_str) != Some("follow") {
+        return None;
+    }
+    let field = |key: &str| {
+        custom
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    Some((field("importedFrom")?, field("sourceSessionId")?))
 }

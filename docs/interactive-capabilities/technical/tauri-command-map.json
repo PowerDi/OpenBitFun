@@ -2,10 +2,10 @@
   "schemaVersion": 2,
   "generatedFrom": "src/shared/interactive-capabilities/catalog.json",
   "catalogDigest": "c7c38fecfad3e83e4a9f6f451a37edbf7d42ef399409238253f9a0fd124f879b",
-  "commandCount": 704,
+  "commandCount": 705,
   "coverage": {
-    "commandCount": 704,
-    "documentedCommandCount": 647,
+    "commandCount": 705,
+    "documentedCommandCount": 648,
     "implementationCommandCount": 57,
     "implementationDigest": "503b48eebc37750e50e0427d861e884dfa353a81aae32236e4bc2d7e0f5310e2"
   },
@@ -1609,6 +1609,22 @@
       "sourceFile": "src/apps/desktop/src/frontend_workbench.rs",
       "signature": "fn confirm_frontend_update( state: tauri::State<'_, Arc<FrontendWorkbenchManager>>, webview: tauri::WebviewWindow, request: FrontendUpdateDecisionRequest, ) -> Result<Value, String>",
       "remoteWorkspacePolicy": "LocalOnly"
+    },
+    {
+      "id": "continue_imported_acp_session",
+      "moduleId": "acp_client",
+      "capabilityId": "feature.ai-assistant",
+      "capabilityIds": [
+        "feature.ai-assistant"
+      ],
+      "documentedItemIds": [
+        "feature.ai-assistant:session-lifecycle"
+      ],
+      "visibility": "documented",
+      "rustPath": "continue_imported_acp_session",
+      "sourceFile": "src/apps/desktop/src/api/acp_client_api.rs",
+      "signature": "fn continue_imported_acp_session( state: State<'_, AppState>, request: ContinueImportedAcpSessionRequest, ) -> Result<CreateAcpFlowSessionRecordResponse, String>",
+      "remoteWorkspacePolicy": "RemoteUnsupported"
     },
     {
       "id": "control_background_command",

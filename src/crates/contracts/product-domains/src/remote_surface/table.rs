@@ -183,6 +183,7 @@ pub(super) const OPERATIONS: &[OperationDefinition] = &[
     op("computer_use_share_start",                                   LocalOnly,   Proxied,          CLI_NO_BROWSER_OR_OS_AUTOMATION),
     op("computer_use_share_targets",                                 LocalOnly,   Proxied,          CLI_NO_BROWSER_OR_OS_AUTOMATION),
     op("confirm_frontend_update",                                    LocalOnly,   ControllerLocal,  REFUSED),
+    op("continue_imported_acp_session",                              Unsupported, Proxied,          CLI_NOT_IMPLEMENTED),
     op("control_background_command",                                 Unaudited,   Proxied,          CLI_NOT_IMPLEMENTED),
     op("control_deep_review_queue",                                  Unaudited,   Proxied,          CLI_NOT_IMPLEMENTED),
     op("copy_session",                                               Routed,      Proxied,          CLI_NOT_IMPLEMENTED),

@@ -801,6 +801,33 @@ export async function reloadSessionTitle(
   });
 }
 
+/** Imported ecosystem -> native agent that resumes that ecosystem's own transcripts. */
+const IMPORTED_TRANSCRIPT_CLIENTS: Readonly<Record<string, string>> = {
+  'claude-code': 'claude-native',
+};
+
+/**
+ * Native agent that continues a followed imported transcript, or null to keep
+ * the OpenBitFun agent continuation. Imported transcripts are read on this
+ * machine, so remote workspaces keep the OpenBitFun path.
+ */
+export async function importedTranscriptClientId(
+  session: Pick<Session, 'externalHistory' | 'importedSource' | 'remoteConnectionId' | 'config'>,
+): Promise<string | null> {
+  if (session.externalHistory?.mode !== 'follow') return null;
+  const clientId = session.importedSource ? IMPORTED_TRANSCRIPT_CLIENTS[session.importedSource] : undefined;
+  if (!clientId || session.remoteConnectionId || session.config.remoteConnectionId) return null;
+  try {
+    const client = (await ACPClientAPI.getClients()).find(info => info.id === clientId);
+    if (!client?.enabled || client.capabilities?.history?.importTranscripts !== true) return null;
+    const probe = (await ACPClientAPI.probeClientRequirements()).find(item => item.id === clientId);
+    return probe?.runnable ? clientId : null;
+  } catch (error) {
+    log.warn('Native agent availability is unknown; continuing imported transcript locally', { clientId, error });
+    return null;
+  }
+}
+
 export async function forkChatSession(
   context: FlowChatContext,
   sourceSessionId: string,
@@ -830,6 +857,8 @@ export async function forkChatSession(
     && !externalAgentSupports(resolveExternalAgentCapabilities(sourceSession), 'history.fork')) {
     throw new Error('This external agent does not support forking');
   }
+  const importClientId = externalClientId ? null : await importedTranscriptClientId(sourceSession);
+  surfaceScope.assertCurrent('resolve imported transcript agent');
   const response = externalClientId
     ? await ACPClientAPI.forkSession({
       sourceSessionId,
@@ -837,13 +866,26 @@ export async function forkChatSession(
       turnId: sourceTurnId,
       workspaceId: requireSessionOwningWorkspaceId(sourceSession),
     })
-    : await sessionAPI.forkSession(
-      sourceSessionId,
-      sourceTurnId,
-      requireSessionOwningWorkspaceId(sourceSession));
+    : importClientId
+      ? await ACPClientAPI.continueImportedSession({
+        sourceSessionId,
+        clientId: importClientId,
+        turnId: sourceTurnId,
+        workspaceId: requireSessionOwningWorkspaceId(sourceSession),
+      })
+      : await sessionAPI.forkSession(
+        sourceSessionId,
+        sourceTurnId,
+        requireSessionOwningWorkspaceId(sourceSession));
   surfaceScope.assertCurrent('fork session');
+  if (importClientId) {
+    log.info('Continuing imported transcript in native agent session', {
+      sourceSessionId, sessionId: response.sessionId, clientId: importClientId,
+    });
+  }
 
-  if (sourceSession.externalHistory?.mode === 'follow'
+  // OpenBitFun permission modes do not apply to a native agent branch.
+  if (!importClientId && sourceSession.externalHistory?.mode === 'follow'
     && sourceSession.externalContinuationPermissionMode !== undefined) {
     await agentAPI.updateSessionPermissionMode({
       sessionId: response.sessionId,

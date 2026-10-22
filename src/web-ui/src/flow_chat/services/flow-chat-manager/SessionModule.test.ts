@@ -29,6 +29,7 @@ import type { Session } from '../../types/flow-chat';
 import type { ReviewTeamRunManifest } from '@/shared/services/reviewTeamService';
 import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
 import { notificationService } from '../../../shared/notification-system';
+import { ACPClientAPI } from '@/infrastructure/api/service-api/ACPClientAPI';
 
 const agentApiMocks = vi.hoisted(() => ({
   ensureCoordinatorSession: vi.fn(),
@@ -668,6 +669,46 @@ describe('forkChatSession', () => {
       remoteSshHost: 'source-host',
     });
     expect(flowChatStore.loadSessionHistory).toHaveBeenCalledWith('remote-fork', { deferFullHistoryUntilActive: true });
+  });
+
+  it('continues a followed Claude Code transcript in the native Claude agent when it is available', async () => {
+    const native = { id: 'claude-native', enabled: true, capabilities: { history: { importTranscripts: true } } };
+    vi.spyOn(ACPClientAPI, 'getClients').mockResolvedValue([native] as never);
+    vi.spyOn(ACPClientAPI, 'probeClientRequirements').mockResolvedValue([{ id: 'claude-native', runnable: true }] as never);
+    const continueImported = vi.spyOn(ACPClientAPI, 'continueImportedSession')
+      .mockResolvedValue({ sessionId: 'branch', sessionName: 'Branch', agentType: 'acp:claude-native' });
+    const source = createSession({
+      sessionId: 'source', importedSource: 'claude-code', externalHistory: { mode: 'follow' },
+      externalContinuationPermissionMode: 'auto_approve',
+    });
+    const { context, flowChatStore } = createContext(source);
+
+    await forkChatSession(context, 'source', 'viewed-turn');
+
+    expect(continueImported).toHaveBeenCalledExactlyOnceWith({
+      sourceSessionId: 'source', clientId: 'claude-native', turnId: 'viewed-turn', workspaceId: 'workspace-1',
+    });
+    expect(sessionApiMocks.forkSession).not.toHaveBeenCalled();
+    expect(agentApiMocks.updateSessionPermissionMode).not.toHaveBeenCalled();
+    expect(flowChatStore.getState().sessions.get('branch')).toMatchObject({ mode: 'acp:claude-native' });
+
+    // Unavailable agent, remote workspace and other ecosystems keep the OpenBitFun continuation.
+    for (const [clients, overrides] of [
+      [[{ ...native, enabled: false }], {}],
+      [[native], { remoteConnectionId: 'ssh-1' }],
+      [[native], { importedSource: 'codex' }],
+    ] as const) {
+      vi.mocked(ACPClientAPI.getClients).mockResolvedValue(clients as never);
+      const fallback = createSession({
+        sessionId: 'fallback', importedSource: 'claude-code', externalHistory: { mode: 'follow' }, ...overrides,
+      });
+      const fallbackContext = createContext(fallback).context;
+      sessionApiMocks.forkSession.mockResolvedValueOnce({ sessionId: 'fallback-branch', sessionName: 'Branch', agentType: 'Standard' });
+      await forkChatSession(fallbackContext, 'fallback', 'viewed-turn');
+    }
+    expect(sessionApiMocks.forkSession).toHaveBeenCalledTimes(3);
+    expect(continueImported).toHaveBeenCalledTimes(1);
+    vi.restoreAllMocks();
   });
 
   it('does not project a fork into a device selected while the host is responding', async () => {

@@ -43,6 +43,49 @@ impl PersistenceManager {
         Box::pin(self.branch_session_with_transient_source(workspace_path, request, None)).await
     }
 
+    /// Copy a followed external history view through `source_turn_id` into an
+    /// independent native session, as the first send into the view does.
+    /// Interfaces that hand the branch to another agent use this instead of
+    /// the Agent Runtime fork.
+    pub async fn branch_external_history(
+        &self,
+        workspace_path: &Path,
+        source_session_id: &str,
+        source_turn_id: &str,
+    ) -> OpenBitFunResult<SessionBranchResult> {
+        #[cfg(feature = "external-sources")]
+        {
+            let source = Box::pin(self.external_history_branch_source(
+                workspace_path,
+                source_session_id,
+                Some(source_turn_id),
+            ))
+            .await?
+            .ok_or_else(|| {
+                OpenBitFunError::Validation(
+                    "Session does not follow an external history".to_string(),
+                )
+            })?;
+            self.branch_transient_session(
+                workspace_path,
+                &SessionBranchRequest {
+                    source_session_id: source_session_id.to_string(),
+                    source_turn_id: source_turn_id.to_string(),
+                    boundary: SessionBranchBoundary::ThroughTurn,
+                },
+                source,
+            )
+            .await
+        }
+        #[cfg(not(feature = "external-sources"))]
+        {
+            let _ = (workspace_path, source_session_id, source_turn_id);
+            Err(OpenBitFunError::Validation(
+                "External session history is not available in this build".to_string(),
+            ))
+        }
+    }
+
     pub(crate) async fn branch_transient_session(
         &self,
         workspace_path: &Path,

@@ -480,6 +480,7 @@ fn translate(
                 }
                 let clean = clean_content(content, &mut warnings)?;
                 turns.push(ExternalSessionTurn {
+                    source_resume_entry_id: None,
                     source_turn_id: entry["id"].as_str().unwrap_or_default().into(),
                     timestamp: timestamp(&message["timestamp"])
                         .or_else(|| timestamp(&entry["timestamp"]))
@@ -583,6 +584,7 @@ fn translate(
                     .as_i64()
                     .map(|code| code == 0 && message["cancelled"] != true);
                 turns.push(ExternalSessionTurn {
+                    source_resume_entry_id: None,
                     source_turn_id: entry["id"].as_str().unwrap_or_default().into(),
                     timestamp: timestamp(&message["timestamp"]).unwrap_or_default(),
                     user_text: format!("Ran `{command}`"),

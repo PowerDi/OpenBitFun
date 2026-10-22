@@ -18,7 +18,7 @@ use crate::client::session_persistence::{
 };
 use async_trait::async_trait;
 use history::{ClaudeHistory, PendingResume};
-use openbitfun_core::service::session::SessionMetadata;
+use openbitfun_core::service::session::{DialogTurnData, SessionMetadata};
 use openbitfun_core::util::errors::{OpenBitFunError, OpenBitFunResult};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -59,7 +59,7 @@ impl NativeAgentDriver for ClaudeNativeDriver {
             history: super::capabilities::NativeHistoryCapabilities {
                 rollback_last_turn: true,
                 fork: true,
-                ..Default::default()
+                import_transcripts: true,
             },
             ..Default::default()
         }
@@ -71,6 +71,14 @@ impl NativeAgentDriver for ClaudeNativeDriver {
         copied_turn_ids: &[String],
     ) -> OpenBitFunResult<serde_json::Map<String, Value>> {
         claude_fork_metadata(source, turn_id, copied_turn_ids)
+    }
+    fn import_metadata(
+        &self,
+        ecosystem_id: &str,
+        source_session_id: &str,
+        turns: &[DialogTurnData],
+    ) -> OpenBitFunResult<serde_json::Map<String, Value>> {
+        claude_import_metadata(ecosystem_id, source_session_id, turns)
     }
     async fn open(
         &self,
@@ -207,6 +215,76 @@ fn claude_fork_metadata(
     Ok(keys)
 }
 
+/// Ecosystem id of Claude Code transcripts imported from `~/.claude/projects`.
+const CLAUDE_CODE_ECOSYSTEM: &str = "claude-code";
+
+/// A branch of an imported Claude Code transcript forks that transcript at the
+/// last copied turn under a new Claude session id, so the user's original
+/// transcript is never written. Imported turns carry the transcript uuids the
+/// reader recorded; they become anchors for later rollback and fork.
+fn claude_import_metadata(
+    ecosystem_id: &str,
+    source_session_id: &str,
+    turns: &[DialogTurnData],
+) -> OpenBitFunResult<serde_json::Map<String, Value>> {
+    if ecosystem_id != CLAUDE_CODE_ECOSYSTEM {
+        return Err(OpenBitFunError::Validation(format!(
+            "Claude native sessions cannot continue {ecosystem_id} transcripts"
+        )));
+    }
+    uuid::Uuid::parse_str(source_session_id).map_err(|_| {
+        OpenBitFunError::Validation("The Claude Code transcript id is not a session UUID".into())
+    })?;
+    let source_field = |turn: &DialogTurnData, key: &str| {
+        turn.user_message
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get(key))
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let resume_at = turns
+        .last()
+        .and_then(|turn| source_field(turn, "sourceResumeEntryId"))
+        .ok_or_else(|| {
+            OpenBitFunError::Validation(
+                "The viewed Claude Code history predates native continuation; reopen it to refresh and retry"
+                    .into(),
+            )
+        })?;
+    let anchors = turns
+        .iter()
+        .enumerate()
+        .map(|(index, turn)| history::TurnAnchor {
+            turn_id: turn.turn_id.clone(),
+            turn_index: index,
+            prompt_uuid: source_field(turn, "sourceTurnId"),
+            last_uuid: source_field(turn, "sourceResumeEntryId"),
+            prompt_replayed: false,
+        })
+        .collect();
+    let imported = ClaudeHistory {
+        turns: anchors,
+        pending: Some(PendingResume {
+            fork_from: Some(source_session_id.to_string()),
+            resume_at: Some(resume_at),
+        }),
+    };
+    let mut keys = serde_json::Map::new();
+    keys.insert(
+        CUSTOM_METADATA_REMOTE_SESSION_ID_KEY.into(),
+        json!(uuid::Uuid::new_v4().to_string()),
+    );
+    keys.insert(
+        CUSTOM_METADATA_RESUME_STRATEGY_KEY.into(),
+        json!("claude-native-prepared"),
+    );
+    keys.insert(CUSTOM_METADATA_LAST_RESUME_ERROR_KEY.into(), Value::Null);
+    keys.insert(history::METADATA_KEY.into(), imported.to_value());
+    Ok(keys)
+}
+
 fn claude_native_state_from_metadata(
     metadata: &SessionMetadata,
 ) -> OpenBitFunResult<(Option<String>, bool, usize)> {
@@ -288,6 +366,100 @@ mod claude_native_tests {
             Some(json!({"acpClientId":"claude-native", "acpRemoteSessionId":123}));
         assert!(claude_native_state_from_metadata(&metadata).is_err());
         assert_eq!(metadata.custom_metadata.unwrap()["acpRemoteSessionId"], 123);
+    }
+}
+
+#[cfg(test)]
+mod claude_import_tests {
+    use super::*;
+    use openbitfun_core::service::session::UserMessageData;
+
+    const SOURCE: &str = "22222222-2222-4222-8222-222222222222";
+
+    fn turn(id: &str, metadata: Value) -> DialogTurnData {
+        DialogTurnData::new(
+            id.into(),
+            0,
+            "branch".into(),
+            UserMessageData {
+                id: format!("{id}-user"),
+                content: "Prompt".into(),
+                timestamp: 1,
+                metadata: Some(metadata),
+            },
+        )
+    }
+
+    #[test]
+    fn imported_branch_forks_original_transcript_on_first_launch() {
+        let turns = [
+            turn(
+                "t0",
+                json!({"importedFrom":"claude-code","sourceTurnId":"u1","sourceResumeEntryId":"a1"}),
+            ),
+            turn(
+                "t1",
+                json!({"importedFrom":"claude-code","sourceTurnId":"u2","sourceResumeEntryId":"a2"}),
+            ),
+        ];
+        let keys = claude_import_metadata("claude-code", SOURCE, &turns).unwrap();
+        let mut custom = Value::Object(keys);
+        custom[CUSTOM_METADATA_CLIENT_ID_KEY] = json!(CLIENT_ID);
+        let mut metadata = SessionMetadata::new(
+            "branch".into(),
+            "Imported".into(),
+            "acp:claude-native".into(),
+            "primary".into(),
+        );
+        metadata.turn_count = turns.len();
+        metadata.custom_metadata = Some(custom.clone());
+        // Prepared under a new id: the first launch must not resume it as its own.
+        let (id, resume, index) = claude_native_state_from_metadata(&metadata).unwrap();
+        let id = id.unwrap();
+        assert_ne!(id, SOURCE);
+        assert!(!resume);
+        assert_eq!(index, 2);
+        let history = ClaudeHistory::from_metadata(Some(&custom));
+        assert_eq!(
+            history::resume_args(&id, resume, history.pending.as_ref()),
+            [
+                "--resume",
+                SOURCE,
+                "--fork-session",
+                "--session-id",
+                &id,
+                "--resume-session-at",
+                "a2"
+            ]
+        );
+        // Imported turns are anchored so later rollback/fork can find them.
+        let anchors: Vec<_> = history
+            .turns
+            .iter()
+            .map(|a| {
+                (
+                    a.turn_index,
+                    a.prompt_uuid.as_deref(),
+                    a.last_uuid.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            anchors,
+            [(0, Some("u1"), Some("a1")), (1, Some("u2"), Some("a2"))]
+        );
+    }
+
+    #[test]
+    fn import_refuses_other_ecosystems_and_views_without_resume_positions() {
+        let legacy = [turn(
+            "t0",
+            json!({"importedFrom":"claude-code","sourceTurnId":"u1"}),
+        )];
+        assert!(claude_import_metadata("claude-code", SOURCE, &legacy).is_err());
+        let current = [turn("t0", json!({"sourceResumeEntryId":"a1"}))];
+        assert!(claude_import_metadata("codex", SOURCE, &current).is_err());
+        assert!(claude_import_metadata("claude-code", "not-a-uuid", &current).is_err());
     }
 }
 

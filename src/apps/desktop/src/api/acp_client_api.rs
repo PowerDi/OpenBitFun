@@ -1206,6 +1206,54 @@ pub async fn stop_acp_session_task(
         .map_err(|error| error.to_string())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContinueImportedAcpSessionRequest {
+    /// Followed external history view to branch.
+    pub source_session_id: String,
+    pub client_id: String,
+    /// Copy history through this viewed turn.
+    pub turn_id: String,
+    /// Workspace identity; authoritative.
+    pub workspace_id: String,
+}
+
+/// Native agents advertising `history.importTranscripts` only: continue an
+/// imported transcript in the agent's own session. Imported transcripts live
+/// on this machine, so SSH workspaces are refused instead of resuming a
+/// transcript the remote agent does not have.
+#[tauri::command]
+pub async fn continue_imported_acp_session(
+    state: State<'_, AppState>,
+    request: ContinueImportedAcpSessionRequest,
+) -> Result<CreateAcpFlowSessionRecordResponse, String> {
+    let service = state
+        .acp_client_service
+        .as_ref()
+        .ok_or_else(|| "ACP client service not initialized".to_string())?;
+    let driver = service
+        .native_driver(&request.client_id)
+        .filter(|driver| driver.capabilities().history.import_transcripts)
+        .ok_or_else(|| format!("{} cannot continue imported transcripts", request.client_id))?;
+    let scope =
+        resolve_acp_workspace_scope(&state, Some(&request.workspace_id), None, None, None).await?;
+    if scope.remote_connection_id.is_some() {
+        return Err(format!(
+            "{} cannot continue imported transcripts in a remote workspace",
+            driver.session_label()
+        ));
+    }
+    service
+        .continue_imported_native_session(
+            &request.client_id,
+            &scope.session_storage_path,
+            &request.source_session_id,
+            &request.turn_id,
+        )
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// Native agents only: fork through a turn, branching the agent's own state.
 #[tauri::command]
 pub async fn fork_acp_session(

@@ -553,6 +553,7 @@ pub(super) mod tests {
             candidate,
             warnings: vec![],
             turns: vec![ExternalSessionTurn {
+                source_resume_entry_id: None,
                 source_turn_id: "source-turn".into(),
                 timestamp: 1234,
                 user_text: "Saved question".into(),

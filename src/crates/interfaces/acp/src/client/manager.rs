@@ -372,6 +372,30 @@ impl AcpClientService {
             .await
     }
 
+    /// Continue a followed imported transcript in a native agent session that
+    /// resumes the agent's own copy of the source conversation. The branch
+    /// copies the viewed turns through `turn_id`; the source view is unchanged.
+    pub async fn continue_imported_native_session(
+        &self,
+        client_id: &str,
+        session_storage_path: &Path,
+        source_session_id: &str,
+        turn_id: &str,
+    ) -> OpenBitFunResult<CreateAcpFlowSessionRecordResponse> {
+        let driver = self.native_driver(client_id).ok_or_else(|| {
+            OpenBitFunError::Validation(format!("Unknown native agent: {client_id}"))
+        })?;
+        self.session_persistence
+            .branch_imported_session(
+                session_storage_path,
+                source_session_id,
+                turn_id,
+                client_id,
+                |ecosystem, source_id, turns| driver.import_metadata(ecosystem, source_id, turns),
+            )
+            .await
+    }
+
     /// `workspace_id` is the persisted identity of the owning workspace;
     /// `workspace_path` is its execution root recorded as an IO projection.
     pub async fn create_flow_session_record(

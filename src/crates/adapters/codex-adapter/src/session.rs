@@ -626,6 +626,7 @@ impl Materializer {
                     "user" if !is_injected(&text) => {
                         self.finish();
                         self.turns.push(ExternalSessionTurn {
+                            source_resume_entry_id: None,
                             source_turn_id: format!("source-turn-{}", self.turns.len()),
                             timestamp: time,
                             user_text: text,
