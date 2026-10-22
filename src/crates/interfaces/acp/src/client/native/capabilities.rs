@@ -115,5 +115,7 @@ mod tests {
     fn claude_keeps_host_features_disabled() {
         let caps = ClaudeNativeDriver.capabilities();
         assert!(!caps.host_commands && !caps.voice_history && !caps.side_chat);
+        assert!(caps.history.rollback_last_turn && caps.history.fork);
+        assert!(!caps.history.import_transcripts);
     }
 }

@@ -27,6 +27,9 @@ import type { SessionTurnCatalog } from '@/shared/types/session-history';
 import { pendingQueueManager } from './flow-chat-manager/PendingQueueModule';
 import { resolveSessionDriverId } from '../session-drivers/resolve';
 import { SessionExecutionState, stateMachineManager } from '../state-machine';
+import { ACPClientAPI } from '@/infrastructure/api/service-api/ACPClientAPI';
+import { acpAgentTypeFromSession, acpClientIdFromAgentType } from '../utils/acpSession';
+import { externalAgentSupports, resolveExternalAgentCapabilities } from '../utils/externalAgentCapabilities';
 
 const log = createLogger('SessionRollbackService');
 
@@ -41,6 +44,21 @@ export interface RollbackSessionToTurnResult {
   restoredFiles: string[];
   fromTurnIndex: number;
   composerText?: string;
+  /** External agents: why workspace files were left untouched, when they were. */
+  filesNote?: string;
+}
+
+/**
+ * External-agent sessions keep their history in the agent, not in Runtime
+ * snapshots: they roll back through the agent's own contract or not at all.
+ */
+function externalRollbackClientId(session: Session): string | null {
+  const clientId = acpClientIdFromAgentType(acpAgentTypeFromSession(session));
+  if (!clientId) return null;
+  if (!externalAgentSupports(resolveExternalAgentCapabilities(session), 'history.rollbackLastTurn')) {
+    throw new Error('This external agent does not support history rollback');
+  }
+  return clientId;
 }
 
 async function reloadAuthoritativeSession(sessionId: string, scope: SurfaceScope): Promise<void> {
@@ -207,6 +225,47 @@ export async function rollbackSessionToTurn(
 
     const workspaceId = session.workspaceId ?? session.config.workspaceId;
     if (!workspaceId) throw new Error('Session workspace ID is unavailable; reload the workspace catalog');
+    const externalClientId = externalRollbackClientId(session);
+    if (externalClientId) {
+      const lastTurnId = session.dialogTurns[session.dialogTurns.length - 1]?.id;
+      if (lastTurnId !== request.targetTurnId) {
+        throw new Error('Only the latest turn of an external agent session can be rolled back');
+      }
+      let nativeOutcome: Awaited<ReturnType<typeof ACPClientAPI.rollbackSessionTurn>>;
+      try {
+        nativeOutcome = await ACPClientAPI.rollbackSessionTurn({
+          sessionId: request.sessionId,
+          clientId: externalClientId,
+          turnId: request.targetTurnId,
+          workspaceId,
+        });
+      } catch (error) {
+        if (!isOutcomeUnknownError(error) || !scope.isCurrent()) throw error;
+        return await reconcileUnknownRollback(request.sessionId, scope, lease, error);
+      }
+      scope.assertCurrent('apply native-agent session rollback');
+      markSessionTurnsRetired(request.sessionId, retiredTurnIds);
+      flowChatStore.retireRelaySessionTurns(request.sessionId, [...retiredTurnIds]);
+      retiredTurnIds.forEach(turnId => finishSubmittedMessagePreview(scope, request.sessionId, turnId));
+      refreshFiles(nativeOutcome.filesChanged);
+      try {
+        await reloadAuthoritativeSession(request.sessionId, scope);
+      } catch (error) {
+        if (scope.isCurrent()) {
+          requireSessionMutationReconciliation(
+            lease,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+        throw error;
+      }
+      return {
+        restoredFiles: nativeOutcome.filesChanged,
+        fromTurnIndex: Math.max(0, fromTurnIndex),
+        filesNote: nativeOutcome.filesRewound ? undefined : nativeOutcome.note ?? undefined,
+      };
+    }
+
     let outcome: Awaited<ReturnType<typeof agentAPI.rollbackSessionToTurn>>;
     try {
       outcome = await agentAPI.rollbackSessionToTurn({

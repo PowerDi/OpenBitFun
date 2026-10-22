@@ -783,6 +783,7 @@
     "rollbackDialogBulletFiles": "撤销从该轮开始的所有文件修改",
     "rollbackDialogBulletHistory": "删除该轮及之后的对话记录（不可恢复）",
     "rollbackSuccess": "已回滚并删除后续对话记录",
+    "rollbackFilesNotRestored": "已回滚对话，但工作区文件未恢复：{{reason}}",
     "rollbackFailed": "回滚失败",
     "rollbackOutcomeUnknown": "回滚结果未知。已从设备重新加载会话，请先查看历史再决定是否重试。",
     "rollbackOutcomeUnknownNotReloaded": "回滚结果未知，且无法从设备重新加载会话。请重新打开会话后再修改。",

@@ -15,8 +15,7 @@ use openbitfun_core::util::errors::OpenBitFunResult;
 use super::session_persistence::AcpSessionPersistence;
 use super::{
     AcpAvailableCommand, AcpPlanEntry, AcpSessionConfigValue, AcpSessionContextUsage,
-    AcpSessionOptions,
-    SubmitAcpPermissionResponseRequest,
+    AcpSessionOptions, SubmitAcpPermissionResponseRequest,
 };
 pub use capabilities::{NativeAgentCapabilities, NativeSubagentCapabilities};
 pub(crate) use preferences::NativeAgentPreferencesStore;
@@ -33,6 +32,17 @@ pub enum NativeAgentNotification {
     ContextUsageUpdated(AcpSessionContextUsage),
     /// Session options (e.g. permission mode) changed outside a user request.
     OptionsChanged,
+}
+
+/// Result of rolling back the latest turn of a native session.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct NativeRollbackOutcome {
+    /// Workspace files the agent's own checkpoint restored.
+    pub files_changed: Vec<String>,
+    pub files_rewound: bool,
+    /// Why files were left untouched, when they were.
+    pub note: Option<String>,
 }
 
 pub type NativeAgentNotificationSink = Arc<dyn Fn(NativeAgentNotification) + Send + Sync>;
@@ -57,6 +67,20 @@ pub trait NativeAgentDriver: Send + Sync {
     fn command(&self) -> &'static str;
     fn local_executable(&self) -> PathBuf;
     fn capabilities(&self) -> NativeAgentCapabilities;
+    /// Custom-metadata keys for a session forked from `source` through
+    /// `turn_id`; `copied_turn_ids` lists the copied turns in storage order.
+    /// The host copies OpenBitFun turns; the driver owns how its agent state
+    /// branches. Keys absent from the result keep the copied value.
+    fn fork_metadata(
+        &self,
+        _source: &serde_json::Value,
+        _turn_id: &str,
+        _copied_turn_ids: &[String],
+    ) -> OpenBitFunResult<serde_json::Map<String, serde_json::Value>> {
+        Err(openbitfun_core::util::errors::OpenBitFunError::Validation(
+            format!("{} sessions cannot be forked", self.session_label()),
+        ))
+    }
     async fn open(
         &self,
         context: NativeAgentOpenContext,
@@ -88,6 +112,15 @@ pub trait NativeAgentSession: Send + Sync {
     ) -> OpenBitFunResult<bool>;
     fn commands(&self) -> Vec<AcpAvailableCommand>;
     fn matches_scope(&self, path: &str, remote: Option<&str>) -> bool;
+    /// Drop the latest turn (`turn_id`) from the agent and its persisted history.
+    async fn rollback_last_turn(
+        self: Arc<Self>,
+        _turn_id: &str,
+    ) -> OpenBitFunResult<NativeRollbackOutcome> {
+        Err(openbitfun_core::util::errors::OpenBitFunError::Validation(
+            "This native agent does not support rollback".into(),
+        ))
+    }
     async fn shutdown(&self);
 }
 

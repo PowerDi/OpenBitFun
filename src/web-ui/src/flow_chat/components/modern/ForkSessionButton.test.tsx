@@ -49,6 +49,11 @@ vi.mock('../../store/FlowChatStore', () => ({
   },
 }));
 
+const externalCaps = vi.hoisted(() => ({ current: null as any }));
+vi.mock('../../hooks/useExternalAgentCapabilities', () => ({
+  useExternalAgentCapabilities: () => externalCaps.current,
+}));
+
 vi.mock('@/shared/notification-system', () => ({
   notificationService: {
     error: vi.fn(),
@@ -73,6 +78,7 @@ describe('ForkSessionButton', () => {
     root = createRoot(container);
     flowState.sessions = new Map();
     peerDevice.value = null;
+    externalCaps.current = null;
   });
 
   afterEach(() => {
@@ -110,6 +116,23 @@ describe('ForkSessionButton', () => {
     };
     act(() => {
       root.render(<ForkSessionButton sessionId="main-session" turnId="turn-2" />);
+    });
+    expect(container.querySelector('.model-round-item__fork-btn')).not.toBeNull();
+  });
+
+  it('shows the fork button for external agents only when they advertise history.fork', () => {
+    flowState.sessions = new Map([
+      ['acp-session', { sessionId: 'acp-session', sessionKind: 'normal' }],
+    ]);
+    externalCaps.current = { history: { fork: false } };
+    act(() => {
+      root.render(<ForkSessionButton sessionId="acp-session" turnId="turn-1" />);
+    });
+    expect(container.querySelector('.model-round-item__fork-btn')).toBeNull();
+
+    externalCaps.current = { history: { fork: true } };
+    act(() => {
+      root.render(<ForkSessionButton sessionId="acp-session" turnId="turn-2" />);
     });
     expect(container.querySelector('.model-round-item__fork-btn')).not.toBeNull();
   });

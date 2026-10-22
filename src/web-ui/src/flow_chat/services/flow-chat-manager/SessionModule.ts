@@ -10,6 +10,9 @@ import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
 import { configAPI } from '@/infrastructure/api/service-api/ConfigAPI';
 import { readProjectDefaults } from '@/infrastructure/config/services/ProjectDefaultsService';
 import { sessionAPI } from '@/infrastructure/api/service-api/SessionAPI';
+import { ACPClientAPI } from '@/infrastructure/api/service-api/ACPClientAPI';
+import { acpAgentTypeFromSession, acpClientIdFromAgentType } from '../../utils/acpSession';
+import { externalAgentSupports, resolveExternalAgentCapabilities } from '../../utils/externalAgentCapabilities';
 import { isSessionInUseError } from '@/infrastructure/api/errors/TauriCommandError';
 import { notificationService } from '../../../shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
@@ -925,10 +928,23 @@ export async function forkChatSession(
     sourceSessionId,
   );
 
-  const response = await sessionAPI.forkSession(
-    sourceSessionId,
-    sourceTurnId,
-    requireSessionOwningWorkspaceId(sourceSession));
+  // External agents own their conversation state; their fork branches it too.
+  const externalClientId = acpClientIdFromAgentType(acpAgentTypeFromSession(sourceSession));
+  if (externalClientId
+    && !externalAgentSupports(resolveExternalAgentCapabilities(sourceSession), 'history.fork')) {
+    throw new Error('This external agent does not support forking');
+  }
+  const response = externalClientId
+    ? await ACPClientAPI.forkSession({
+      sourceSessionId,
+      clientId: externalClientId,
+      turnId: sourceTurnId,
+      workspaceId: requireSessionOwningWorkspaceId(sourceSession),
+    })
+    : await sessionAPI.forkSession(
+      sourceSessionId,
+      sourceTurnId,
+      requireSessionOwningWorkspaceId(sourceSession));
   surfaceScope.assertCurrent('fork session');
 
   if (sourceSession.externalHistory?.mode === 'follow'

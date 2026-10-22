@@ -783,6 +783,7 @@
     "rollbackDialogBulletFiles": "Undo all file modifications from that turn onwards",
     "rollbackDialogBulletHistory": "Delete that turn and all following dialog records (irreversible)",
     "rollbackSuccess": "Rolled back and deleted subsequent dialog records",
+    "rollbackFilesNotRestored": "Rolled back the dialog, but workspace files were not restored: {{reason}}",
     "rollbackFailed": "Rollback failed",
     "rollbackOutcomeUnknown": "The rollback result is unknown. The session was reloaded from the device; check its history before retrying.",
     "rollbackOutcomeUnknownNotReloaded": "The rollback result is unknown and the session could not be reloaded from the device. Reopen the session before changing it.",

@@ -131,6 +131,28 @@ export interface CancelAcpDialogTurnRequest {
   remoteSshHost?: string;
 }
 
+export interface RollbackAcpSessionTurnRequest {
+  sessionId: string;
+  clientId: string;
+  /** Latest turn of the session; the host refuses any other turn. */
+  turnId: string;
+  workspaceId: string;
+}
+
+export interface RollbackAcpSessionTurnResponse {
+  filesChanged: string[];
+  filesRewound: boolean;
+  /** Why workspace files were left untouched, when they were. */
+  note?: string | null;
+}
+
+export interface ForkAcpSessionRequest {
+  sourceSessionId: string;
+  clientId: string;
+  turnId: string;
+  workspaceId: string;
+}
+
 export interface GetAcpSessionOptionsRequest {
   sessionId: string;
   clientId: string;
@@ -561,6 +583,18 @@ export class ACPClientAPI {
 
   static async cancelDialogTurn(request: CancelAcpDialogTurnRequest): Promise<void> {
     return api.invoke('cancel_acp_dialog_turn', { request });
+  }
+
+  /** Native agents advertising `history.rollbackLastTurn` only. */
+  static async rollbackSessionTurn(
+    request: RollbackAcpSessionTurnRequest,
+  ): Promise<RollbackAcpSessionTurnResponse> {
+    return api.invoke('rollback_acp_session_turn', { request });
+  }
+
+  /** Native agents advertising `history.fork` only. */
+  static async forkSession(request: ForkAcpSessionRequest): Promise<CreateAcpFlowSessionResponse> {
+    return api.invoke('fork_acp_session', { request });
   }
 
   static getSessionOptions(

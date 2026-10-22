@@ -48,6 +48,11 @@ export interface FlowChatContextValue {
    */
   activeSessionOverride?: Session | null;
   allowUserMessageRollback?: boolean;
+  /**
+   * External agents roll back through their own transcript: only the latest
+   * turn, and on SSH workspaces too (the agent restores files on its host).
+   */
+  externalAgentRollback?: boolean;
   allowUserMessageEdit?: boolean;
   /** Hides transcript actions when the visible projection omits internal turn input. */
   allowTranscriptExport?: boolean;
