@@ -203,7 +203,13 @@ async fn ask_user_question_answers_keyed_by_question_text() {
             "options":[{"label":"Auth", "description":""}, {"label":"Cache", "description":""}]}]});
     session.permissions.insert(
         "q1".into(),
-        pending(&process, "q1", PermissionKind::Question, input.clone(), Value::Null),
+        pending(
+            &process,
+            "q1",
+            PermissionKind::Question,
+            input.clone(),
+            Value::Null,
+        ),
     );
     // Missing answers are refused and keep the question pending.
     assert!(session
@@ -216,7 +222,13 @@ async fn ask_user_question_answers_keyed_by_question_text() {
     session.submit_permission(&request).await.unwrap().unwrap();
     session.permissions.insert(
         "q2".into(),
-        pending(&process, "q2", PermissionKind::Question, input.clone(), Value::Null),
+        pending(
+            &process,
+            "q2",
+            PermissionKind::Question,
+            input.clone(),
+            Value::Null,
+        ),
     );
     session
         .submit_permission(&decision("q2", false, Some("reject_once")))
@@ -252,7 +264,13 @@ async fn exit_plan_mode_approval_restores_mode_and_keep_planning_denies() {
     for id in ["e1", "e2"] {
         session.permissions.insert(
             id.into(),
-            pending(&process, id, PermissionKind::PlanReview, input.clone(), Value::Null),
+            pending(
+                &process,
+                id,
+                PermissionKind::PlanReview,
+                input.clone(),
+                Value::Null,
+            ),
         );
     }
     let mut keep = decision("e1", false, Some("keep_planning"));
@@ -275,7 +293,11 @@ async fn exit_plan_mode_approval_restores_mode_and_keep_planning_denies() {
     assert_eq!(approved["behavior"], "allow");
     assert_eq!(approved["updatedInput"], input);
     assert!(approved.get("updatedPermissions").is_none());
-    let payload = permission_payload("p", "s1", &json!({"tool_name":"ExitPlanMode", "input":input}));
+    let payload = permission_payload(
+        "p",
+        "s1",
+        &json!({"tool_name":"ExitPlanMode", "input":input}),
+    );
     assert_eq!(payload["options"][0]["optionId"], APPROVE_PLAN_OPTION);
     assert_eq!(payload["options"][1]["optionId"], KEEP_PLANNING_OPTION);
 }
@@ -286,7 +308,10 @@ fn context_usage_response_parses_codexhost_shape() {
         parse_context_usage(&json!({"totalTokens":42000, "maxTokens":200000, "model":"claude"})),
         Some((42000, 200000))
     );
-    assert_eq!(parse_context_usage(&json!({"totalTokens":1, "maxTokens":0})), None);
+    assert_eq!(
+        parse_context_usage(&json!({"totalTokens":1, "maxTokens":0})),
+        None
+    );
 }
 
 #[tokio::test]
@@ -443,13 +468,14 @@ fn permission_card_matches_existing_acp_frontend_contract() {
 
 #[test]
 fn ssh_command_quotes_posix_path_and_resumes_without_acp_adapter() {
-    let command = remote_command("/srv/my repo's files", &cli_args("uuid-1", true));
+    let command = remote_command("/srv/my repo's files", &cli_args("uuid-1", true, None));
     assert!(command.starts_with("bash -lc "));
     assert!(command.contains("exec claude"));
     assert!(command.contains("--resume uuid-1"));
     assert!(!command.contains("claude-agent-acp"));
     assert!(!command.contains("--session-id"));
-    assert_eq!(cli_args("uuid-1", false).last().unwrap(), "uuid-1");
+    assert!(command.contains("export CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true"));
+    assert_eq!(cli_args("uuid-1", false, None).last().unwrap(), "uuid-1");
 }
 
 #[tokio::test]
@@ -738,7 +764,7 @@ async fn submissions_reuse_stdin_across_two_foreground_turns() {
             .unwrap();
         let sent: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
         assert_eq!(sent["type"], "user");
-        assert_eq!(sent["session_id"], session.claude_session_id);
+        assert_eq!(sent["session_id"], session.claude_id());
         assert_eq!(sent["message"]["content"], input);
         session
             .route_frame(&process, json!({"type":"result", "subtype":"success"}))
@@ -1118,4 +1144,200 @@ async fn todo_write_publishes_session_plan_without_consuming_tool_cards() {
     assert!(
         matches!(&updates.lock().unwrap()[1], NativeAgentNotification::PlanUpdated { turn_id, entries } if turn_id == "t2" && entries.len() == 3)
     );
+}
+
+async fn finish_turn(
+    session: &Arc<ClaudeNativeSession>,
+    process: &Arc<NativeProcess>,
+    lines: &mut tokio::io::Lines<BufReader<DuplexStream>>,
+    turn_id: &str,
+    prompt_echo: &str,
+    last: &str,
+) -> Value {
+    session
+        .start_turn(turn_id.into(), "hello".into(), None)
+        .await
+        .unwrap();
+    let sent: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    for frame in [
+        json!({"type":"user", "uuid":prompt_echo, "isReplay":true, "parent_tool_use_id":null,
+            "message":{"role":"user", "content":"hello"}}),
+        // Subagent entries are not on the main chain.
+        json!({"type":"assistant", "uuid":"child-entry", "parent_tool_use_id":"task-1",
+            "message":{"id":"c1", "content":[]}}),
+        json!({"type":"assistant", "uuid":last, "parent_tool_use_id":null,
+            "message":{"id":format!("m-{turn_id}"), "content":[{"type":"text", "text":"hi"}]}}),
+        json!({"type":"result", "subtype":"success", "is_error":false}),
+    ] {
+        session.route_frame(process, frame).await.unwrap();
+    }
+    sent
+}
+
+#[tokio::test]
+async fn tracks_prompt_and_last_chain_uuid_per_turn() {
+    let (session, process, output) = fixture();
+    *session.process.lock().await = Some(process.clone());
+    let mut lines = BufReader::new(output).lines();
+    let sent = finish_turn(&session, &process, &mut lines, "t1", "echo-1", "a-1").await;
+    assert!(uuid::Uuid::parse_str(sent["uuid"].as_str().unwrap()).is_ok());
+    finish_turn(&session, &process, &mut lines, "t2", "echo-2", "a-2").await;
+    let history = session.history().clone();
+    let anchors: Vec<_> = history
+        .turns
+        .iter()
+        .map(|a| {
+            (
+                a.turn_id.as_str(),
+                a.turn_index,
+                a.prompt_uuid.as_deref(),
+                a.last_uuid.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        anchors,
+        [
+            ("t1", 0, Some("echo-1"), Some("a-1")),
+            ("t2", 1, Some("echo-2"), Some("a-2"))
+        ]
+    );
+    // Persisted shape round-trips through the tolerant reader.
+    let custom = json!({ super::super::history::METADATA_KEY: history.to_value() });
+    let restored = ClaudeHistory::from_metadata(Some(&custom));
+    assert_eq!(restored.turns[1].last_uuid.as_deref(), Some("a-2"));
+    // Legacy metadata (no key, or an unreadable value) yields no anchors.
+    assert!(ClaudeHistory::from_metadata(Some(&json!({})))
+        .turns
+        .is_empty());
+    let broken = json!({ super::super::history::METADATA_KEY: "garbage" });
+    assert!(ClaudeHistory::from_metadata(Some(&broken)).turns.is_empty());
+}
+
+#[tokio::test]
+async fn rollback_rewinds_files_then_resumes_at_previous_turn() {
+    let (session, process, output) = fixture();
+    *session.process.lock().await = Some(process.clone());
+    let mut lines = BufReader::new(output).lines();
+    finish_turn(&session, &process, &mut lines, "t1", "echo-1", "a-1").await;
+    finish_turn(&session, &process, &mut lines, "t2", "echo-2", "a-2").await;
+    let rolling = session.clone();
+    let task = tokio::spawn(async move { rolling.rollback_last_turn("t2").await });
+    let sent: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(sent["request"]["subtype"], "rewind_files");
+    assert_eq!(sent["request"]["user_message_id"], "echo-2");
+    session
+        .route_frame(
+            &process,
+            json!({"type":"control_response", "response":{"subtype":"success",
+            "request_id":sent["request_id"], "response":{"canRewind":true,
+            "filesChanged":["src/a.rs"], "insertions":1, "deletions":2}}}),
+        )
+        .await
+        .unwrap();
+    let outcome = task.await.unwrap().unwrap();
+    assert!(outcome.files_rewound);
+    assert_eq!(outcome.files_changed, ["src/a.rs"]);
+    assert!(!process.alive.load(Ordering::Acquire));
+    assert_eq!(session.state.lock().await.index, 1);
+    let history = session.history().clone();
+    assert_eq!(history.turns.len(), 1);
+    let id = session.claude_id();
+    let args = cli_args(&id, true, history.pending.as_ref());
+    let tail = &args[args.len() - 4..];
+    assert_eq!(
+        tail,
+        ["--resume", id.as_str(), "--resume-session-at", "a-1"]
+    );
+}
+
+#[tokio::test]
+async fn rollback_of_first_turn_starts_a_fresh_claude_session() {
+    let (session, process, output) = fixture();
+    *session.process.lock().await = Some(process.clone());
+    let mut lines = BufReader::new(output).lines();
+    finish_turn(&session, &process, &mut lines, "t1", "echo-1", "a-1").await;
+    let before = session.claude_id();
+    let rolling = session.clone();
+    let task = tokio::spawn(async move { rolling.rollback_last_turn("t1").await });
+    let sent: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    // A checkpoint failure is reported, not fatal.
+    session
+        .route_frame(
+            &process,
+            json!({"type":"control_response", "response":{"subtype":"success",
+            "request_id":sent["request_id"], "response":{"canRewind":false,
+            "error":"No file checkpoint found for this message."}}}),
+        )
+        .await
+        .unwrap();
+    let outcome = task.await.unwrap().unwrap();
+    assert!(!outcome.files_rewound);
+    assert!(outcome.note.unwrap().contains("No file checkpoint"));
+    assert_ne!(session.claude_id(), before);
+    assert!(!session.resume.load(Ordering::Acquire));
+    let history = session.history().clone();
+    assert!(history.turns.is_empty() && history.pending.is_none());
+    let args = cli_args(&session.claude_id(), false, None);
+    assert_eq!(args[args.len() - 2], "--session-id");
+}
+
+#[tokio::test]
+async fn rollback_is_refused_mid_turn_and_for_non_latest_or_legacy_turns() {
+    let (session, process, output) = fixture();
+    *session.process.lock().await = Some(process.clone());
+    let mut lines = BufReader::new(output).lines();
+    finish_turn(&session, &process, &mut lines, "t1", "echo-1", "a-1").await;
+    session
+        .start_turn("t2".into(), "again".into(), None)
+        .await
+        .unwrap();
+    let error = session.rollback_last_turn("t2").await.unwrap_err();
+    assert!(error.to_string().contains("Wait until"));
+    session
+        .route_frame(&process, json!({"type":"result", "subtype":"success"}))
+        .await
+        .unwrap();
+    assert!(session.rollback_last_turn("t1").await.is_err());
+    // Turns recorded before anchors existed cannot be targeted.
+    session.apply_history(ClaudeHistory::default());
+    let error = session.rollback_last_turn("t2").await.unwrap_err();
+    assert!(error.to_string().contains("recorded by this version"));
+    // A legacy predecessor without anchors leaves the position unknown.
+    session.apply_history(ClaudeHistory {
+        turns: vec![TurnAnchor {
+            turn_id: "t2".into(),
+            turn_index: 1,
+            prompt_uuid: Some("p".into()),
+            last_uuid: Some("l".into()),
+            ..Default::default()
+        }],
+        pending: None,
+    });
+    let error = session.rollback_last_turn("t2").await.unwrap_err();
+    assert!(error.to_string().contains("predate"));
+    assert!(process.alive.load(Ordering::Acquire));
+}
+
+#[test]
+fn fork_launch_forks_source_transcript_at_turn_with_new_id() {
+    let pending = PendingResume {
+        fork_from: Some("src-id".into()),
+        resume_at: Some("a-1".into()),
+    };
+    let args = cli_args("new-id", false, Some(&pending));
+    let tail = &args[args.len() - 7..];
+    assert_eq!(
+        tail,
+        [
+            "--resume",
+            "src-id",
+            "--fork-session",
+            "--session-id",
+            "new-id",
+            "--resume-session-at",
+            "a-1"
+        ]
+    );
+    assert!(args.contains(&"--replay-user-messages".to_string()));
 }

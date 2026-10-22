@@ -260,6 +260,128 @@ impl AcpSessionPersistence {
         .await
     }
 
+    /// Replace one driver-owned custom-metadata key, keeping every other field.
+    pub(crate) async fn set_custom_metadata(
+        &self,
+        session_storage_path: &Path,
+        openbitfun_session_id: &str,
+        key: &str,
+        value: Value,
+    ) -> OpenBitFunResult<()> {
+        self.update_metadata(session_storage_path, openbitfun_session_id, |metadata| {
+            let mut custom = metadata.custom_metadata.take().unwrap_or_else(|| json!({}));
+            ensure_object(&mut custom)?;
+            custom[key] = value;
+            metadata.custom_metadata = Some(custom);
+            Ok(())
+        })
+        .await
+    }
+
+    /// Copy turns through `turn_id` into a new session, then let `metadata`
+    /// replace driver-owned custom keys. The copy is deleted if that fails.
+    pub(crate) async fn branch_native_session(
+        &self,
+        session_storage_path: &Path,
+        source_session_id: &str,
+        turn_id: &str,
+        metadata: impl FnOnce(&Value, &[String]) -> OpenBitFunResult<serde_json::Map<String, Value>>,
+    ) -> OpenBitFunResult<CreateAcpFlowSessionRecordResponse> {
+        use openbitfun_core::agentic::persistence::SessionBranchRequest;
+        let source = self
+            .manager
+            .load_session_metadata(session_storage_path, source_session_id)
+            .await?
+            .ok_or_else(|| {
+                OpenBitFunError::NotFound(format!("Session not found: {source_session_id}"))
+            })?;
+        let source_custom = source.custom_metadata.clone().unwrap_or_else(|| json!({}));
+        let branch = self
+            .manager
+            .branch_session(
+                session_storage_path,
+                &SessionBranchRequest {
+                    source_session_id: source_session_id.to_string(),
+                    source_turn_id: turn_id.to_string(),
+                    boundary: Default::default(),
+                },
+            )
+            .await?;
+        let result = async {
+            let turn_ids = self
+                .manager
+                .load_session_turns(session_storage_path, &branch.session_id)
+                .await?
+                .into_iter()
+                .map(|turn| turn.turn_id)
+                .collect::<Vec<_>>();
+            let keys = metadata(&source_custom, &turn_ids)?;
+            self.update_metadata(session_storage_path, &branch.session_id, |metadata| {
+                let mut custom = metadata.custom_metadata.take().unwrap_or_else(|| json!({}));
+                ensure_object(&mut custom)?;
+                for (key, value) in keys {
+                    custom[key.as_str()] = value;
+                }
+                metadata.custom_metadata = Some(custom);
+                Ok(())
+            })
+            .await
+        }
+        .await;
+        if let Err(error) = result {
+            if let Err(cleanup) = self
+                .manager
+                .delete_session(session_storage_path, &branch.session_id)
+                .await
+            {
+                log::warn!(
+                    "Failed to remove incomplete native session fork: session_id={} error={}",
+                    branch.session_id,
+                    cleanup
+                );
+            }
+            return Err(error);
+        }
+        Ok(CreateAcpFlowSessionRecordResponse {
+            session_id: branch.session_id,
+            session_name: branch.session_name,
+            agent_type: branch.agent_type,
+        })
+    }
+
+    /// Refuse a rollback whose target is not the latest persisted turn.
+    pub(crate) async fn ensure_latest_turn(
+        &self,
+        session_storage_path: &Path,
+        openbitfun_session_id: &str,
+        turn_id: &str,
+    ) -> OpenBitFunResult<()> {
+        let turns = self
+            .manager
+            .load_session_turns(session_storage_path, openbitfun_session_id)
+            .await?;
+        match turns.iter().max_by_key(|turn| turn.turn_index) {
+            Some(latest) if latest.turn_id == turn_id => Ok(()),
+            Some(_) => Err(OpenBitFunError::Validation(
+                "Only the latest turn of a native agent session can be rolled back".into(),
+            )),
+            None => Err(OpenBitFunError::Validation(
+                "The turn to roll back has not been saved yet; retry shortly".into(),
+            )),
+        }
+    }
+
+    pub(crate) async fn truncate_turns_from(
+        &self,
+        session_storage_path: &Path,
+        openbitfun_session_id: &str,
+        turn_index: usize,
+    ) -> OpenBitFunResult<()> {
+        self.manager
+            .delete_dialog_turns_from(session_storage_path, openbitfun_session_id, turn_index)
+            .await
+    }
+
     async fn update_metadata(
         &self,
         session_storage_path: &Path,

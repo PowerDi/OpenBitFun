@@ -1109,3 +1109,96 @@ pub async fn submit_acp_permission_response(
         .await
         .map_err(|e| e.to_string())
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RollbackAcpSessionTurnRequest {
+    pub session_id: String,
+    pub client_id: String,
+    /// Latest turn to drop; any other turn is refused.
+    pub turn_id: String,
+    /// Workspace identity; authoritative.
+    pub workspace_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkAcpSessionRequest {
+    pub source_session_id: String,
+    pub client_id: String,
+    /// Copy history through this turn.
+    pub turn_id: String,
+    /// Workspace identity; authoritative.
+    pub workspace_id: String,
+}
+
+pub use openbitfun_acp::client::native::NativeRollbackOutcome as RollbackAcpSessionTurnResponse;
+
+/// Native agents only: drop the latest turn from the agent and its history.
+#[tauri::command]
+pub async fn rollback_acp_session_turn(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    request: RollbackAcpSessionTurnRequest,
+) -> Result<RollbackAcpSessionTurnResponse, String> {
+    let service = state
+        .acp_client_service
+        .as_ref()
+        .ok_or_else(|| "ACP client service not initialized".to_string())?;
+    let driver = service
+        .native_driver(&request.client_id)
+        .filter(|driver| driver.capabilities().history.rollback_last_turn)
+        .ok_or_else(|| format!("{} does not support rollback", request.client_id))?;
+    let scope =
+        resolve_acp_workspace_scope(&state, Some(&request.workspace_id), None, None, None).await?;
+    if service.native_session(&request.session_id).is_none() {
+        service
+            .prepare_native_session(
+                &request.client_id,
+                &request.session_id,
+                &scope.workspace_path,
+                scope.remote_connection_id.as_deref(),
+                &scope.session_storage_path,
+                Some(native_notification_sink(
+                    &app_handle,
+                    &request.session_id,
+                    &request.client_id,
+                )),
+            )
+            .await
+            .map_err(|error| format!("{}: {error}", driver.session_label()))?;
+    }
+    service
+        .rollback_native_session(&request.session_id, &request.turn_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Native agents only: fork through a turn, branching the agent's own state.
+#[tauri::command]
+pub async fn fork_acp_session(
+    state: State<'_, AppState>,
+    request: ForkAcpSessionRequest,
+) -> Result<CreateAcpFlowSessionRecordResponse, String> {
+    let service = state
+        .acp_client_service
+        .as_ref()
+        .ok_or_else(|| "ACP client service not initialized".to_string())?;
+    if !service
+        .native_driver(&request.client_id)
+        .is_some_and(|driver| driver.capabilities().history.fork)
+    {
+        return Err(format!("{} does not support forking", request.client_id));
+    }
+    let scope =
+        resolve_acp_workspace_scope(&state, Some(&request.workspace_id), None, None, None).await?;
+    service
+        .fork_native_session(
+            &request.client_id,
+            &scope.session_storage_path,
+            &request.source_session_id,
+            &request.turn_id,
+        )
+        .await
+        .map_err(|error| error.to_string())
+}

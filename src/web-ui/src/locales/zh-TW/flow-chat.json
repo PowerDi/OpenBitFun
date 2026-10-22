@@ -610,6 +610,7 @@
     "rollbackDialogBulletFiles": "撤銷從該輪開始的所有檔案修改",
     "rollbackDialogBulletHistory": "刪除該輪及之後的對話記錄（不可恢復）",
     "rollbackSuccess": "已回滾並刪除後續對話記錄",
+    "rollbackFilesNotRestored": "已回滾對話，但工作區檔案未還原：{{reason}}",
     "rollbackFailed": "回滾失敗",
     "saveEdit": "儲存並重跑",
     "cancelEdit": "取消",

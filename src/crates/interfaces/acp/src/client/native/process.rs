@@ -35,6 +35,8 @@ pub(super) struct ProcessConfig<'a> {
     pub remote_connection_id: Option<&'a str>,
     /// The driver renders its own command and protocol-specific arguments.
     pub remote_command: &'a str,
+    /// Extra environment for local launches; remote commands carry their own.
+    pub env: &'a [(&'a str, &'a str)],
 }
 
 pub(super) async fn spawn(config: ProcessConfig<'_>) -> OpenBitFunResult<ProcessIo> {
@@ -46,6 +48,7 @@ pub(super) async fn spawn(config: ProcessConfig<'_>) -> OpenBitFunResult<Process
         workspace_path,
         remote_connection_id,
         remote_command,
+        env,
     } = config;
     let (kill_tx, kill_rx) = oneshot::channel();
     let (terminated_tx, terminated_rx) = oneshot::channel();
@@ -84,6 +87,7 @@ pub(super) async fn spawn(config: ProcessConfig<'_>) -> OpenBitFunResult<Process
         configure_process_group(&mut command);
         command
             .args(args)
+            .envs(env.iter().copied())
             .current_dir(workspace_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

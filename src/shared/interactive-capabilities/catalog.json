@@ -358,6 +358,7 @@
             "command:delete_session",
             "command:copy_session",
             "command:fork_session",
+            "command:fork_acp_session",
             "command:export_session_transcript",
             "command:archive_all_sessions",
             "command:get_session_lineage"
@@ -1508,6 +1509,7 @@
             "command:get_snapshot_sessions",
             "command:rollback_session",
             "command:rollback_session_to_turn",
+            "command:rollback_acp_session_turn",
             "command:get_snapshot_system_stats"
           ]
         },

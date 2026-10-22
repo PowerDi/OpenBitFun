@@ -315,6 +315,48 @@ impl AcpClientService {
         Ok(())
     }
 
+    /// Roll back the latest turn of a prepared native session.
+    pub async fn rollback_native_session(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+    ) -> OpenBitFunResult<native::NativeRollbackOutcome> {
+        let session = self.native_session(session_id).ok_or_else(|| {
+            OpenBitFunError::Validation(format!("Native session is not prepared: {session_id}"))
+        })?;
+        session.rollback_last_turn(turn_id).await
+    }
+
+    /// Fork a native session through `turn_id`. The new session launches its
+    /// agent from the source agent state on the first turn.
+    pub async fn fork_native_session(
+        &self,
+        client_id: &str,
+        session_storage_path: &Path,
+        source_session_id: &str,
+        turn_id: &str,
+    ) -> OpenBitFunResult<CreateAcpFlowSessionRecordResponse> {
+        let driver = self.native_driver(client_id).ok_or_else(|| {
+            OpenBitFunError::Validation(format!("Unknown native agent: {client_id}"))
+        })?;
+        if let Some(source) = self.native_session(source_session_id) {
+            if source.client_id() != client_id {
+                return Err(OpenBitFunError::Validation(format!(
+                    "Session is not a {} session",
+                    driver.session_label()
+                )));
+            }
+        }
+        self.session_persistence
+            .branch_native_session(
+                session_storage_path,
+                source_session_id,
+                turn_id,
+                |custom, copied| driver.fork_metadata(custom, turn_id, copied),
+            )
+            .await
+    }
+
     /// `workspace_id` is the persisted identity of the owning workspace;
     /// `workspace_path` is its execution root recorded as an IO projection.
     pub async fn create_flow_session_record(

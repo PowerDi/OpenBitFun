@@ -2,10 +2,10 @@
   "schemaVersion": 2,
   "generatedFrom": "src/shared/interactive-capabilities/catalog.json",
   "catalogDigest": "c7c38fecfad3e83e4a9f6f451a37edbf7d42ef399409238253f9a0fd124f879b",
-  "commandCount": 701,
+  "commandCount": 703,
   "coverage": {
-    "commandCount": 701,
-    "documentedCommandCount": 644,
+    "commandCount": 703,
+    "documentedCommandCount": 646,
     "implementationCommandCount": 57,
     "implementationDigest": "503b48eebc37750e50e0427d861e884dfa353a81aae32236e4bc2d7e0f5310e2"
   },
@@ -2789,6 +2789,22 @@
       "remoteWorkspacePolicy": "LegacyUnaudited"
     },
     {
+      "id": "fork_acp_session",
+      "moduleId": "acp_client",
+      "capabilityId": "feature.ai-assistant",
+      "capabilityIds": [
+        "feature.ai-assistant"
+      ],
+      "documentedItemIds": [
+        "feature.ai-assistant:session-lifecycle"
+      ],
+      "visibility": "documented",
+      "rustPath": "fork_acp_session",
+      "sourceFile": "src/apps/desktop/src/api/acp_client_api.rs",
+      "signature": "fn fork_acp_session( state: State<'_, AppState>, request: ForkAcpSessionRequest, ) -> Result<CreateAcpFlowSessionRecordResponse, String>",
+      "remoteWorkspacePolicy": "RemoteRouted"
+    },
+    {
       "id": "fork_session",
       "moduleId": "session",
       "capabilityId": "feature.ai-assistant",
@@ -2931,7 +2947,7 @@
       "visibility": "documented",
       "rustPath": "get_acp_session_options",
       "sourceFile": "src/apps/desktop/src/api/acp_client_api.rs",
-      "signature": "fn get_acp_session_options( state: State<'_, AppState>, request: GetAcpSessionOptionsRequest, ) -> Result<AcpSessionOptions, String>",
+      "signature": "fn get_acp_session_options( state: State<'_, AppState>, app_handle: AppHandle, request: GetAcpSessionOptionsRequest, ) -> Result<AcpSessionOptions, String>",
       "remoteWorkspacePolicy": "LegacyUnaudited"
     },
     {
@@ -8534,6 +8550,22 @@
       "remoteWorkspacePolicy": "WorkspaceAgnostic"
     },
     {
+      "id": "rollback_acp_session_turn",
+      "moduleId": "acp_client",
+      "capabilityId": "feature.files-editor",
+      "capabilityIds": [
+        "feature.files-editor"
+      ],
+      "documentedItemIds": [
+        "feature.files-editor:snapshots-rollback"
+      ],
+      "visibility": "documented",
+      "rustPath": "rollback_acp_session_turn",
+      "sourceFile": "src/apps/desktop/src/api/acp_client_api.rs",
+      "signature": "fn rollback_acp_session_turn( state: State<'_, AppState>, app_handle: AppHandle, request: RollbackAcpSessionTurnRequest, ) -> Result<RollbackAcpSessionTurnResponse, String>",
+      "remoteWorkspacePolicy": "RemoteRouted"
+    },
+    {
       "id": "rollback_frontend_update",
       "moduleId": "frontend_workbench",
       "capabilityId": "feature.ai-assistant",
@@ -9044,7 +9076,7 @@
       "visibility": "documented",
       "rustPath": "set_acp_session_model",
       "sourceFile": "src/apps/desktop/src/api/acp_client_api.rs",
-      "signature": "fn set_acp_session_model( state: State<'_, AppState>, request: SetAcpSessionModelRequest, ) -> Result<AcpSessionOptions, String>",
+      "signature": "fn set_acp_session_model( state: State<'_, AppState>, app_handle: AppHandle, request: SetAcpSessionModelRequest, ) -> Result<AcpSessionOptions, String>",
       "remoteWorkspacePolicy": "LegacyUnaudited"
     },
     {

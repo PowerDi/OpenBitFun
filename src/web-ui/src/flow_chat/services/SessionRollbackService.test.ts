@@ -13,6 +13,12 @@ const sessions = vi.hoisted(() => new Map<string, any>());
 const historyViews = vi.hoisted(() => new Map<string, any>());
 
 vi.mock('@/infrastructure/api', () => ({ agentAPI: agentApiMock }));
+const acpApiMock = vi.hoisted(() => ({
+  rollbackSessionTurn: vi.fn(),
+  getCachedSessionOptions: vi.fn(() => undefined),
+  getCachedCapabilityClients: vi.fn((): any[] => []),
+}));
+vi.mock('@/infrastructure/api/service-api/ACPClientAPI', () => ({ ACPClientAPI: acpApiMock }));
 vi.mock('@/infrastructure/event-bus', () => ({ globalEventBus: eventBusMock }));
 vi.mock('../store/FlowChatStore', () => ({
   flowChatStore: {
@@ -65,6 +71,34 @@ describe('SessionRollbackService', () => {
         entries: [{ ordinal: 2, storageTurnIndex: 7, turnId: 'turn-7' }],
       },
     });
+  });
+
+  it('routes external agent sessions to the agent rollback and only for the latest turn', async () => {
+    const session = sessions.get('session-1');
+    session.config = { agentType: 'acp:claude-native' };
+    session.dialogTurns = [{ id: 'turn-6', storageTurnIndex: 6 }, { id: 'turn-7', storageTurnIndex: 7 }];
+    acpApiMock.getCachedCapabilityClients.mockReturnValue([
+      { id: 'claude-native', capabilities: { history: { rollbackLastTurn: true } } },
+    ]);
+    acpApiMock.rollbackSessionTurn.mockResolvedValue({
+      filesChanged: [], filesRewound: false, note: 'no checkpoint',
+    });
+
+    const result = await rollbackSessionToTurn({ sessionId: 'session-1', targetTurnId: 'turn-7', kind: 'rollback' });
+
+    expect(agentApiMock.rollbackSessionToTurn).not.toHaveBeenCalled();
+    expect(acpApiMock.rollbackSessionTurn).toHaveBeenCalledWith({
+      sessionId: 'session-1', clientId: 'claude-native', turnId: 'turn-7', workspaceId: 'local_workspace-1',
+    });
+    expect(result.filesNote).toBe('no checkpoint');
+    expect(isSessionTurnRetired('session-1', 'turn-7')).toBe(true);
+    await expect(rollbackSessionToTurn({ sessionId: 'session-1', targetTurnId: 'turn-6', kind: 'rollback' }))
+      .rejects.toThrow('Only the latest turn');
+
+    acpApiMock.getCachedCapabilityClients.mockReturnValue([]);
+    await expect(rollbackSessionToTurn({ sessionId: 'session-1', targetTurnId: 'turn-7', kind: 'rollback' }))
+      .rejects.toThrow('does not support history rollback');
+    expect(agentApiMock.rollbackSessionToTurn).not.toHaveBeenCalled();
   });
 
   it('refuses host-owned queued work before invoking rollback', async () => {

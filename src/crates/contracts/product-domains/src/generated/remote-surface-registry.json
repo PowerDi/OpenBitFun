@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "fnv1a64:1f41015e75434c3c",
+  "digest": "fnv1a64:f849873447411af0",
   "retiredCommandPrefixes": [
     {
       "prefix": "lsp_",
@@ -2313,6 +2313,18 @@
       "id": "fetch_mcp_app_resource",
       "surface": "tauri_command",
       "remoteWorkspace": "LegacyUnaudited",
+      "peer": {
+        "kind": "proxied"
+      },
+      "cliPeer": {
+        "kind": "unsupported",
+        "reason": "the CLI peer host has no handler for this command"
+      }
+    },
+    {
+      "id": "fork_acp_session",
+      "surface": "tauri_command",
+      "remoteWorkspace": "RemoteRouted",
       "peer": {
         "kind": "proxied"
       },
@@ -6629,6 +6641,18 @@
       "cliPeer": {
         "kind": "unsupported",
         "reason": "the CLI peer host does not run this desktop IDE surface"
+      }
+    },
+    {
+      "id": "rollback_acp_session_turn",
+      "surface": "tauri_command",
+      "remoteWorkspace": "RemoteRouted",
+      "peer": {
+        "kind": "proxied"
+      },
+      "cliPeer": {
+        "kind": "unsupported",
+        "reason": "the CLI peer host has no handler for this command"
       }
     },
     {

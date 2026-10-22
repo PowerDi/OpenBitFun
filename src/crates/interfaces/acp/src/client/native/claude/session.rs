@@ -22,7 +22,10 @@ use tokio::sync::{oneshot, Mutex, Notify};
 
 use super::super::preferences::NativeAgentPreferences;
 use super::super::process::{Reader, Writer};
-use super::super::{NativeAgentDriver, NativeAgentNotification, NativeAgentNotificationSink};
+use super::super::{
+    NativeAgentDriver, NativeAgentNotification, NativeAgentNotificationSink, NativeRollbackOutcome,
+};
+use super::history::{resume_args, ClaudeHistory, PendingResume, RollbackPlan, TurnAnchor};
 use super::projector::{native_tool_name, ClaudeTurnProjector};
 use super::tasks::ClaudeTasks;
 use crate::client::remote_shell::{remote_user_shell_command, shell_escape};
@@ -66,13 +69,14 @@ const THINKING_LEVELS: &[(&str, &str)] = &[
     ("max", "Max"),
 ];
 const INTERRUPT_GRACE: Duration = Duration::from_secs(3);
+/// What the Agent SDK's `enableFileCheckpointing` sets; enables `rewind_files`.
+const FILE_CHECKPOINT_ENV: &str = "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING";
 /// Permission option ids beyond the ACP-standard allow_once/allow_always/reject_once.
 const ALLOW_SESSION_OPTION: &str = "allow_session";
 const APPROVE_PLAN_OPTION: &str = "approve_plan";
 const KEEP_PLANNING_OPTION: &str = "keep_planning";
 /// Deny text codexhost sends when the user keeps Claude in plan mode.
-const KEEP_PLANNING_MESSAGE: &str =
-    "User chose to stay in plan mode. Do not begin implementation.";
+const KEEP_PLANNING_MESSAGE: &str = "User chose to stay in plan mode. Do not begin implementation.";
 
 struct NativeProcess {
     id: String,
@@ -185,7 +189,8 @@ struct ChildTranscript {
 
 pub struct ClaudeNativeSession {
     session_id: String,
-    pub(crate) claude_session_id: String,
+    /// Replaced only when rolling back the first turn starts a fresh transcript.
+    claude_session_id: std::sync::Mutex<String>,
     workspace_path: String,
     remote_connection_id: Option<String>,
     resume: AtomicBool,
@@ -208,6 +213,8 @@ pub struct ClaudeNativeSession {
     pre_plan_mode: std::sync::Mutex<Option<String>>,
     /// Latest context occupancy and cumulative cost, replayed via `options()`.
     context_usage: std::sync::Mutex<Option<AcpSessionContextUsage>>,
+    /// Claude transcript anchors per turn and the pending branch launch.
+    history: std::sync::Mutex<ClaudeHistory>,
 }
 
 impl ClaudeNativeSession {
@@ -224,7 +231,7 @@ impl ClaudeNativeSession {
     ) -> Arc<Self> {
         Arc::new(Self {
             session_id,
-            claude_session_id,
+            claude_session_id: std::sync::Mutex::new(claude_session_id),
             workspace_path,
             remote_connection_id,
             resume: AtomicBool::new(resume),
@@ -246,7 +253,72 @@ impl ClaudeNativeSession {
             notifier,
             pre_plan_mode: std::sync::Mutex::new(None),
             context_usage: std::sync::Mutex::new(None),
+            history: std::sync::Mutex::new(ClaudeHistory::default()),
         })
+    }
+
+    pub(crate) fn claude_id(&self) -> String {
+        read_lock(&self.claude_session_id)
+    }
+
+    fn history(&self) -> std::sync::MutexGuard<'_, ClaudeHistory> {
+        self.history
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    pub(in crate::client) fn apply_history(&self, history: ClaudeHistory) {
+        *self.history() = history;
+    }
+
+    async fn persist_history(&self) -> OpenBitFunResult<()> {
+        let Some((persistence, storage)) = &self.persistence else {
+            return Ok(());
+        };
+        let value = self.history().to_value();
+        persistence
+            .set_custom_metadata(
+                storage,
+                &self.session_id,
+                super::history::METADATA_KEY,
+                value,
+            )
+            .await
+    }
+
+    /// Record transcript uuids of root chain entries for the active turn.
+    fn track_anchor(&self, turn_id: &str, frame: &Value) {
+        if !frame.get("parent_tool_use_id").is_none_or(Value::is_null) {
+            return;
+        }
+        let Some(uuid) = frame["uuid"].as_str().filter(|uuid| !uuid.is_empty()) else {
+            return;
+        };
+        let chain_entry = matches!(frame["type"].as_str(), Some("assistant" | "user"))
+            || (frame["type"] == "system" && frame["subtype"] == "compact_boundary");
+        if !chain_entry {
+            return;
+        }
+        let mut history = self.history();
+        let Some(anchor) = history.anchor_mut(turn_id) else {
+            return;
+        };
+        // `--replay-user-messages` echoes the prompt; the first echo of the
+        // turn is authoritative even if the CLI assigned its own uuid.
+        let local_output = frame
+            .pointer("/message/content")
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.trim_start().starts_with("<local-command"));
+        if frame["type"] == "user"
+            && frame["isReplay"] == true
+            && frame["isSynthetic"] != true
+            && !local_output
+            && !anchor.prompt_replayed
+        {
+            anchor.prompt_replayed = true;
+            anchor.prompt_uuid = Some(uuid.to_string());
+        }
+        anchor.last_uuid = Some(uuid.to_string());
     }
 
     fn notify(&self, update: NativeAgentNotification) {
@@ -582,7 +654,7 @@ impl ClaudeNativeSession {
                 "Claude background response is still active; retry after it settles",
             ));
         }
-        self.begin_turn(&mut state, turn_id, input.clone(), original, false)
+        self.begin_turn(&mut state, turn_id.clone(), input.clone(), original, false)
             .await?;
         state.process_id = Some(process.id.clone());
         drop(state);
@@ -592,21 +664,37 @@ impl ClaudeNativeSession {
                     "Claude process exited before submission; retry to resume",
                 ));
             }
+            let prompt_uuid = uuid::Uuid::new_v4().to_string();
             process
-                .write(&json!({"type":"user", "session_id":self.claude_session_id,
-                "parent_tool_use_id":null, "message":{"role":"user", "content":input}}))
+                .write(
+                    &json!({"type":"user", "session_id":self.claude_id(), "uuid":prompt_uuid,
+                "parent_tool_use_id":null, "message":{"role":"user", "content":input}}),
+                )
                 .await?;
             self.resume.store(true, Ordering::Release);
+            {
+                // The branch now holds a user message; plain resume finds it.
+                let mut history = self.history();
+                history.pending = None;
+                if let Some(anchor) = history.anchor_mut(&turn_id) {
+                    if !anchor.prompt_replayed {
+                        anchor.prompt_uuid = Some(prompt_uuid);
+                    }
+                }
+            }
             if let Some((persistence, storage)) = &self.persistence {
                 persistence
                     .update_remote_session_state(
                         storage,
                         &self.session_id,
-                        &self.claude_session_id,
+                        &self.claude_id(),
                         "claude-native-stream-json",
                         None,
                     )
                     .await?;
+                if let Err(error) = self.persist_history().await {
+                    log::warn!("Failed to persist Claude native history anchors: {error}");
+                }
             }
             Ok(())
         }
@@ -638,6 +726,11 @@ impl ClaudeNativeSession {
         }])
         .await?;
         state.index += 1;
+        self.history().turns.push(TurnAnchor {
+            turn_id: turn_id.clone(),
+            turn_index: state.index - 1,
+            ..Default::default()
+        });
         let mut projector =
             ClaudeTurnProjector::new(&self.session_id, &turn_id, state.model.as_deref());
         if manual_compaction {
@@ -677,7 +770,22 @@ impl ClaudeNativeSession {
             return Ok(process.clone());
         }
         self.state.lock().await.autonomous_result_pending = false;
-        let mut args = cli_args(&self.claude_session_id, self.resume.load(Ordering::Acquire));
+        let pending = self.history().pending.clone();
+        if pending.as_ref().is_some_and(|p| p.fork_from.is_some()) {
+            // The CLI refuses `--session-id` of an existing transcript, and a
+            // prior fork launch may have created one. Until a user message
+            // lands on the branch the id is unreferenced, so each fork launch
+            // takes a new one; `start_turn` persists the id that was used.
+            *self
+                .claude_session_id
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = uuid::Uuid::new_v4().to_string();
+        }
+        let mut args = cli_args(
+            &self.claude_id(),
+            self.resume.load(Ordering::Acquire),
+            pending.as_ref(),
+        );
         set_flag(
             &mut args,
             "--permission-mode",
@@ -707,6 +815,7 @@ impl ClaudeNativeSession {
             workspace_path: &self.workspace_path,
             remote_connection_id: self.remote_connection_id.as_deref(),
             remote_command: &remote_command,
+            env: &[(FILE_CHECKPOINT_ENV, "true")],
         })
         .await?;
         let reader = io.reader;
@@ -886,9 +995,9 @@ impl ClaudeNativeSession {
         if frame["type"] == "system" && frame["subtype"] == "init" {
             state.model = frame["model"].as_str().map(str::to_string);
             self.init_commands(&frame);
+            self.adopt_reported_session_id(&frame).await;
         }
-        if frame["type"] == "system"
-            && matches!(frame["subtype"].as_str(), Some("init" | "status"))
+        if frame["type"] == "system" && matches!(frame["subtype"].as_str(), Some("init" | "status"))
         {
             if let Some(mode) = frame["permissionMode"].as_str() {
                 self.observe_permission_mode(mode);
@@ -963,6 +1072,9 @@ impl ClaudeNativeSession {
                 });
             }
         }
+        if let Some(turn_id) = state.projector.as_ref().map(|p| p.turn_id().to_string()) {
+            self.track_anchor(&turn_id, &frame);
+        }
         if let Some(projector) = state.projector.as_mut() {
             let events = projector.consume(&frame);
             if frame["type"] == "result" {
@@ -1001,6 +1113,9 @@ impl ClaudeNativeSession {
                     .to_string();
                 self.clear_permissions(&id).await;
                 self.settled.notify_waiters();
+                if let Err(error) = self.persist_history().await {
+                    log::warn!("Failed to persist Claude native history anchors: {error}");
+                }
             }
         }
         Ok(())
@@ -1466,6 +1581,149 @@ impl ClaudeNativeSession {
         Ok(())
     }
 
+    /// A fork launch should keep the `--session-id` we chose; if the CLI
+    /// reports another id, follow it so later resumes find the transcript.
+    async fn adopt_reported_session_id(&self, frame: &Value) {
+        let Some(reported) = frame["session_id"]
+            .as_str()
+            .filter(|id| uuid::Uuid::parse_str(id).is_ok())
+        else {
+            return;
+        };
+        if reported == self.claude_id() {
+            return;
+        }
+        log::warn!("Claude reported a different session id than requested; adopting it");
+        *self
+            .claude_session_id
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = reported.to_string();
+        if let Some((persistence, storage)) = &self.persistence {
+            let strategy = if self.resume.load(Ordering::Acquire) {
+                "claude-native-stream-json"
+            } else {
+                "claude-native-prepared"
+            };
+            if let Err(error) = persistence
+                .update_remote_session_state(storage, &self.session_id, reported, strategy, None)
+                .await
+            {
+                log::warn!("Failed to persist adopted Claude session id: {error}");
+            }
+        }
+    }
+
+    /// Drop the latest turn: restore its file edits from Claude's checkpoint,
+    /// stop the CLI, and make the next launch resume before that turn.
+    pub async fn rollback_last_turn(
+        self: &Arc<Self>,
+        turn_id: &str,
+    ) -> OpenBitFunResult<NativeRollbackOutcome> {
+        let _guard = self.lifecycle.lock().await;
+        if self.state.lock().await.projector.is_some() || !self.permissions.is_empty() {
+            return Err(OpenBitFunError::Validation(
+                "Wait until the Claude turn finishes before rolling back".into(),
+            ));
+        }
+        let (target, plan) = self
+            .history()
+            .rollback_plan(turn_id)
+            .map_err(OpenBitFunError::Validation)?;
+        if let Some((persistence, storage)) = &self.persistence {
+            persistence
+                .ensure_latest_turn(storage, &self.session_id, &target.turn_id)
+                .await?;
+        }
+        let mut outcome = NativeRollbackOutcome::default();
+        match target.prompt_uuid.as_deref() {
+            Some(prompt) => match self.rewind_files(prompt).await {
+                Ok(files) => {
+                    outcome.files_rewound = true;
+                    outcome.files_changed = files;
+                }
+                Err(error) => {
+                    log::warn!("Claude file rewind skipped during rollback: {error}");
+                    outcome.note = Some(format!("Files were not restored: {error}"));
+                }
+            },
+            None => {
+                outcome.note =
+                    Some("Files were not restored: the turn has no Claude checkpoint".into())
+            }
+        }
+        if let Some(process) = self.process.lock().await.clone() {
+            process.kill().await;
+        }
+        {
+            let mut history = self.history();
+            history
+                .turns
+                .retain(|anchor| anchor.turn_index < target.turn_index);
+            let fork_from = history.pending.as_ref().and_then(|p| p.fork_from.clone());
+            history.pending = match &plan {
+                RollbackPlan::Fresh => None,
+                RollbackPlan::ResumeAt(at) => Some(PendingResume {
+                    fork_from,
+                    resume_at: Some(at.clone()),
+                }),
+            };
+        }
+        let fresh = plan == RollbackPlan::Fresh;
+        if fresh {
+            // Nothing earlier reached Claude: continue in a new transcript.
+            *self
+                .claude_session_id
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = uuid::Uuid::new_v4().to_string();
+            self.resume.store(false, Ordering::Release);
+        }
+        self.state.lock().await.index = target.turn_index;
+        if let Some((persistence, storage)) = &self.persistence {
+            if fresh {
+                persistence
+                    .update_remote_session_state(
+                        storage,
+                        &self.session_id,
+                        &self.claude_id(),
+                        "claude-native-prepared",
+                        None,
+                    )
+                    .await?;
+            }
+            self.persist_history().await?;
+            persistence
+                .truncate_turns_from(storage, &self.session_id, target.turn_index)
+                .await?;
+        }
+        Ok(outcome)
+    }
+
+    /// `rewind_files` against the live (or freshly resumed) CLI process.
+    async fn rewind_files(self: &Arc<Self>, prompt_uuid: &str) -> OpenBitFunResult<Vec<String>> {
+        let process = self.ensure_process().await?;
+        let response = process
+            .request(
+                json!({"subtype":"rewind_files", "user_message_id":prompt_uuid, "dry_run":false}),
+                Duration::from_secs(60),
+            )
+            .await?;
+        if response["canRewind"] == false {
+            return Err(service_error(
+                response["error"]
+                    .as_str()
+                    .unwrap_or("Claude cannot rewind files for this turn")
+                    .to_string(),
+            ));
+        }
+        Ok(response["filesChanged"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect())
+    }
+
     pub(crate) async fn shutdown(&self) {
         let _ = self.cancel().await;
         let _guard = self.lifecycle.lock().await;
@@ -1524,6 +1782,12 @@ impl super::super::NativeAgentSession for ClaudeNativeSession {
     }
     fn matches_scope(&self, path: &str, remote: Option<&str>) -> bool {
         ClaudeNativeSession::matches_scope(self, path, remote)
+    }
+    async fn rollback_last_turn(
+        self: Arc<Self>,
+        turn_id: &str,
+    ) -> OpenBitFunResult<NativeRollbackOutcome> {
+        ClaudeNativeSession::rollback_last_turn(&self, turn_id).await
     }
     async fn shutdown(&self) {
         ClaudeNativeSession::shutdown(self).await
@@ -1587,7 +1851,10 @@ fn question_answers(input: &Value, answers: Option<&Value>) -> OpenBitFunResult<
         let text = question["question"]
             .as_str()
             .ok_or_else(|| service_error("Claude question has no text"))?;
-        let answer = match answers.get(text).or_else(|| answers.get(&index.to_string())) {
+        let answer = match answers
+            .get(text)
+            .or_else(|| answers.get(&index.to_string()))
+        {
             Some(Value::String(answer)) => answer.trim().to_string(),
             Some(Value::Array(values)) => values
                 .iter()
@@ -1679,9 +1946,7 @@ fn permission_reply(
                 Some(Some(always)) => {
                     let updates = scoped_suggestions(&pending.suggestions, always);
                     if updates.is_empty() {
-                        return Err(service_error(
-                            "Claude did not offer this permission scope",
-                        ));
+                        return Err(service_error("Claude did not offer this permission scope"));
                     }
                     let mut reply = allowed(tool_id, pending.input.clone(), true);
                     reply["updatedPermissions"] = Value::Array(updates);
@@ -1692,10 +1957,7 @@ fn permission_reply(
     }
 }
 
-async fn write_permission_reply(
-    pending: &PendingPermission,
-    reply: Value,
-) -> OpenBitFunResult<()> {
+async fn write_permission_reply(pending: &PendingPermission, reply: Value) -> OpenBitFunResult<()> {
     pending
         .process
         .write(
@@ -1803,7 +2065,7 @@ fn thinking_flag_settings(level: &str) -> Value {
     }
 }
 
-fn cli_args(id: &str, resume: bool) -> Vec<String> {
+fn cli_args(id: &str, resume: bool, pending: Option<&PendingResume>) -> Vec<String> {
     let mut args: Vec<String> = [
         "-p",
         "--input-format",
@@ -1821,14 +2083,13 @@ fn cli_args(id: &str, resume: bool) -> Vec<String> {
         "--allow-dangerously-skip-permissions",
         "--setting-sources",
         "user",
+        // Echo prompts with their transcript uuid (rollback/fork anchors).
+        "--replay-user-messages",
     ]
     .into_iter()
     .map(str::to_string)
     .collect();
-    args.extend([
-        if resume { "--resume" } else { "--session-id" }.into(),
-        id.into(),
-    ]);
+    args.extend(resume_args(id, resume, pending));
     args
 }
 
@@ -1838,7 +2099,10 @@ fn remote_command(path: &str, args: &[String]) -> String {
         .map(|arg| shell_escape(arg))
         .collect::<Vec<_>>()
         .join(" ");
-    remote_user_shell_command(&format!("cd {} && exec claude {args}", shell_escape(path)))
+    remote_user_shell_command(&format!(
+        "cd {} && export {FILE_CHECKPOINT_ENV}=true && exec claude {args}",
+        shell_escape(path)
+    ))
 }
 
 /// Map one SDK `models` entry to the external-client option shape. The SDK

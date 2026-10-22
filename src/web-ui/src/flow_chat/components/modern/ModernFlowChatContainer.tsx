@@ -567,6 +567,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const activeWorkspace = viewScope ? undefined : workspaceContext.activeWorkspace;
   const externalCaps = useExternalAgentCapabilities(activeSession?.sessionId);
   const allowUserMessageRollback = externalAgentSupports(externalCaps, 'history.rollbackLastTurn');
+  const externalAgentRollback = externalCaps !== null;
   const historyState = activeSession?.historyState;
   const hasRestoredTurnsPendingVirtualItems =
     historyState === 'ready' &&
@@ -986,6 +987,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     isHistoricalSession: activeSessionIsHistorical,
     contextRestoreState: activeSessionContextRestoreState,
     allowUserMessageRollback,
+    externalAgentRollback,
     onGroupToggle: handleExploreGroupToggle,
     onExploreGroupToggle: handleExploreGroupToggle,
     onExpandGroup: handleExpandGroup,
@@ -1006,6 +1008,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     activeSessionIsHistorical,
     activeSessionContextRestoreState,
     allowUserMessageRollback,
+    externalAgentRollback,
     handleExploreGroupToggle,
     handleExpandGroup,
     handleExpandAllInTurn,

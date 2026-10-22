@@ -129,6 +129,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
       activeSessionOverride,
       allowUserMessageRollback = true,
       allowUserMessageEdit = true,
+      externalAgentRollback = false,
     } = useFlowChatContext();
     const activeSessionFromStore = useActiveSession();
     const activeSession = activeSessionOverride ?? activeSessionFromStore;
@@ -209,12 +210,14 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
       () => resolveSessionRelationship(activeSession),
       [activeSession]
     );
-    const canShowRollbackAction = allowUserMessageRollback && !sessionRelationship.isSubagent;
-
     const currentSession = activeSessionOverride
       ?? (sessionId ? flowChatStore.getState().sessions.get(sessionId) ?? null : null)
       ?? activeSessionFromStore;
     const turnIndex = currentSession?.dialogTurns.findIndex(t => t.id === turnId) ?? -1;
+    const isLatestTurn = turnIndex >= 0 && turnIndex === (currentSession?.dialogTurns.length ?? 0) - 1;
+    const canShowRollbackAction = allowUserMessageRollback
+      && !sessionRelationship.isSubagent
+      && (!externalAgentRollback || isLatestTurn);
     const dialogTurn = turnIndex >= 0 ? currentSession?.dialogTurns[turnIndex] : null;
     const resolvedTurnStatus = dialogTurn?.status ?? turnStatus;
     const isFailed = resolvedTurnStatus === 'error';
@@ -249,7 +252,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
       canShowRollbackAction &&
       !!resolvedSessionId &&
       actionTurnIndex >= 0 &&
-      !isRemoteSession &&
+      (!isRemoteSession || (externalAgentRollback && !isDispatchSession)) &&
       !isFollowedSource &&
       isSessionIdle &&
       !sessionMutation &&
@@ -416,7 +419,11 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
           });
         }
 
-        notificationService.success(t('message.rollbackSuccess'));
+        if (result.filesNote) {
+          notificationService.warning(t('message.rollbackFilesNotRestored', { reason: result.filesNote }));
+        } else {
+          notificationService.success(t('message.rollbackSuccess'));
+        }
       } catch (error) {
         log.error('Rollback failed', error);
         notificationService.error(`${t('message.rollbackFailed')}: ${error instanceof Error ? error.message : String(error)}`);

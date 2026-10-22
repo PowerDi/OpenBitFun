@@ -5,6 +5,8 @@ import { flowChatManager } from '../../services/FlowChatManager';
 import { flowChatStore } from '../../store/FlowChatStore';
 import { resolveSessionRelationship } from '../../utils/sessionMetadata';
 import { createLogger } from '@/shared/utils/logger';
+import { useExternalAgentCapabilities } from '../../hooks/useExternalAgentCapabilities';
+import { externalAgentSupports } from '../../utils/externalAgentCapabilities';
 import { notificationService } from '@/shared/notification-system';
 
 const log = createLogger('ForkSessionButton');
@@ -22,8 +24,11 @@ export const ForkSessionButton: React.FC<ForkSessionButtonProps> = ({
   const [isForking, setIsForking] = useState(false);
   const session = sessionId ? flowChatStore.getState().sessions.get(sessionId) : undefined;
   const sessionRelationship = resolveSessionRelationship(session);
+  const externalCaps = useExternalAgentCapabilities(sessionId);
   const shouldHideForkAction =
-    sessionRelationship.isBtw || sessionRelationship.isSubagent;
+    sessionRelationship.isBtw
+    || sessionRelationship.isSubagent
+    || !externalAgentSupports(externalCaps, 'history.fork');
 
   const handleFork = useCallback(async () => {
     if (!sessionId || isForking) {
