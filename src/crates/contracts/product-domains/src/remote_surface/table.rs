@@ -766,6 +766,7 @@ pub(super) const OPERATIONS: &[OperationDefinition] = &[
     op("startup_window_control",                                     LocalOnly,   ControllerLocal,  REFUSED),
     op("steer_dialog_turn",                                          Agnostic,    Proxied,          CLI_NOT_IMPLEMENTED),
     op("stop_acp_client",                                            Unaudited,   Proxied,          CLI_NO_ACP_CLIENT_HOST),
+    op("stop_acp_session_task",                                      Routed,      Proxied,          CLI_NOT_IMPLEMENTED),
     op("stop_file_watch",                                            Unsupported, Proxied,          HANDLED),
     op("stop_mcp_server",                                            Unaudited,   Proxied,          CLI_NOT_IMPLEMENTED),
     op("submit_acp_permission_response",                             Unaudited,   Proxied,          CLI_NO_ACP_CLIENT_HOST),
