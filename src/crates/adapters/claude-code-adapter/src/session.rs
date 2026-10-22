@@ -365,10 +365,22 @@ fn translate(
     chain.reverse();
     let mut turns = Vec::<ExternalSessionTurn>::new();
     let mut tools = HashMap::<String, (usize, usize)>::new();
+    // Last main-chain entry before the current one: where `--resume-session-at`
+    // keeps a turn through, including its trailing tool results and notices.
+    let mut previous_uuid: Option<String> = None;
     for index in chain {
         let entry = &entries[index];
         if entry["isSidechain"] == true || entry["teamName"].is_string() {
             continue;
+        }
+        let before = previous_uuid.clone();
+        // Same entry kinds the native driver anchors on (messages and compaction).
+        if matches!(entry["type"].as_str(), Some("user" | "assistant"))
+            || entry["subtype"] == "compact_boundary"
+        {
+            if let Some(uuid) = entry["uuid"].as_str() {
+                previous_uuid = Some(uuid.to_owned());
+            }
         }
         if is_internal_user_entry(entry) {
             if is_interruption_entry(entry) {
@@ -424,7 +436,11 @@ fn translate(
                         "Attachment contents remain in Claude Code and are not copied or opened.",
                     );
                 }
+                if let Some(turn) = turns.last_mut() {
+                    turn.source_resume_entry_id = before.clone();
+                }
                 turns.push(ExternalSessionTurn {
+                    source_resume_entry_id: None,
                     source_turn_id: entry["uuid"].as_str().unwrap_or_default().into(),
                     timestamp: timestamp(&entry["timestamp"]).unwrap_or_default(),
                     user_text: text,
@@ -541,6 +557,9 @@ fn translate(
                 );
             }
         }
+    }
+    if let Some(turn) = turns.last_mut() {
+        turn.source_resume_entry_id = previous_uuid;
     }
     for turn in &mut turns {
         if turn

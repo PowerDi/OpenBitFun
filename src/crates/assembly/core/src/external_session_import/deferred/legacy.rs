@@ -175,6 +175,15 @@ fn unedited_prefix(
         let mut new = serde_json::to_value(new).map_err(index_error)?;
         normalize(&mut old);
         normalize(&mut new);
+        // Resume positions are source provenance added after older copies were made.
+        for turn in [&mut old, &mut new] {
+            if let Some(metadata) = turn
+                .pointer_mut("/userMessage/metadata")
+                .and_then(Value::as_object_mut)
+            {
+                metadata.remove("sourceResumeEntryId");
+            }
+        }
         if old != new {
             return Ok(false);
         }

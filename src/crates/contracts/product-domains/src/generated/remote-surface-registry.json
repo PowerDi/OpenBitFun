@@ -1260,6 +1260,18 @@
       }
     },
     {
+      "id": "continue_imported_acp_session",
+      "surface": "tauri_command",
+      "remoteWorkspace": "RemoteUnsupported",
+      "peer": {
+        "kind": "proxied"
+      },
+      "cliPeer": {
+        "kind": "unsupported",
+        "reason": "the CLI peer host has no handler for this command"
+      }
+    },
+    {
       "id": "control_background_command",
       "surface": "tauri_command",
       "remoteWorkspace": "LegacyUnaudited",

@@ -258,6 +258,16 @@ fn follows_latest_branch_and_retains_pre_compaction_history_without_summary_turn
             .collect::<Vec<_>>(),
         ["Original prompt", "Follow-up"]
     );
+    // Resume positions follow the selected chain, never the discarded branch;
+    // an earlier turn keeps through its trailing compaction entries.
+    assert_eq!(
+        document
+            .turns
+            .iter()
+            .map(|turn| turn.source_resume_entry_id.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("summary"), Some("a2")]
+    );
     assert!(document
         .warnings
         .iter()

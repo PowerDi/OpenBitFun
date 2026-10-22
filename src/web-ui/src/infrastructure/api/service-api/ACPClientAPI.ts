@@ -632,6 +632,11 @@ export class ACPClientAPI {
     return api.invoke('fork_acp_session', { request });
   }
 
+  /** Native agents advertising `history.importTranscripts` only; local workspaces. */
+  static async continueImportedSession(request: ForkAcpSessionRequest): Promise<CreateAcpFlowSessionResponse> {
+    return api.invoke('continue_imported_acp_session', { request });
+  }
+
   static getSessionOptions(
     request: GetAcpSessionOptionsRequest
   ): Promise<AcpSessionOptions> {
