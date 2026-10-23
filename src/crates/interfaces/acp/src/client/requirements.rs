@@ -497,7 +497,7 @@ fn find_executable(command: &str) -> Option<PathBuf> {
     find_executable_with_path(command, None)
 }
 
-fn find_executable_with_path(command: &str, configured_path: Option<&OsStr>) -> Option<PathBuf> {
+pub(crate) fn find_executable_with_path(command: &str, configured_path: Option<&OsStr>) -> Option<PathBuf> {
     let command_path = PathBuf::from(command);
     if command_path.components().count() > 1 {
         return executable_file(&command_path).then_some(command_path);
