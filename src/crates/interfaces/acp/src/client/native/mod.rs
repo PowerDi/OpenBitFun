@@ -2,6 +2,7 @@
 pub mod capabilities;
 pub mod claude;
 mod events;
+pub mod pi;
 pub(crate) mod preferences;
 mod process;
 pub(crate) mod title;
@@ -329,7 +330,8 @@ pub fn missing_local_workspace(path: &str, resumes: bool) -> Option<String> {
 }
 
 static CLAUDE: claude::ClaudeNativeDriver = claude::ClaudeNativeDriver;
-static DRIVERS: [&'static dyn NativeAgentDriver; 1] = [&CLAUDE];
+static PI: pi::PiNativeDriver = pi::PiNativeDriver;
+static DRIVERS: [&'static dyn NativeAgentDriver; 2] = [&CLAUDE, &PI];
 
 pub fn drivers() -> &'static [&'static dyn NativeAgentDriver] {
     &DRIVERS
