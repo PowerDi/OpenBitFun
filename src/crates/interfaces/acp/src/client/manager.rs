@@ -533,6 +533,8 @@ impl AcpClientService {
         client_id: &str,
         session_name: Option<String>,
     ) -> OpenBitFunResult<CreateAcpFlowSessionRecordResponse> {
+        // New sessions never record a retired preset id.
+        let client_id = super::legacy_presets::native_alias(client_id).unwrap_or(client_id);
         let started_at = Instant::now();
         let result = self
             .session_persistence
