@@ -979,8 +979,9 @@ async fn compaction_frames_emit_one_lifecycle_and_local_command_text() {
         for frame in [
             json!({"type":"system", "subtype":"status", "status":"compacting", "compact_metadata":{"pre_tokens":1000}}),
             json!({"type":"system", "subtype":"status", "status":"compacting"}),
-            json!({"type":"system", "subtype":"compact_boundary", "compact_metadata":{"trigger":trigger, "pre_tokens":1000}}),
+            // The CLI reports success before the boundary that carries the counts.
             json!({"type":"system", "subtype":"status", "compact_result":"success"}),
+            json!({"type":"system", "subtype":"compact_boundary", "compact_metadata":{"trigger":trigger, "pre_tokens":1000, "post_tokens":300}}),
             json!({"type":"system", "subtype":"local_command_output", "content":"Compacted context"}),
         ] {
             session.route_frame(&process, frame).await.unwrap();
@@ -1012,10 +1013,7 @@ async fn compaction_frames_emit_one_lifecycle_and_local_command_text() {
                     applied,
                     ..
                 } => {
-                    assert_eq!(
-                        (*tokens_before, *tokens_after, *applied),
-                        (1000, 1000, true)
-                    );
+                    assert_eq!((*tokens_before, *tokens_after, *applied), (1000, 300, true));
                     Some(compression_id)
                 }
                 _ => None,
