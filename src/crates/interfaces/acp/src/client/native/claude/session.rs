@@ -22,6 +22,7 @@ use tokio::sync::{oneshot, Mutex, Notify};
 
 use super::super::preferences::NativeAgentPreferences;
 use super::super::process::{Reader, Writer};
+use super::super::title::{self, TitleResolver};
 use super::super::{
     NativeAgentDriver, NativeAgentNotification, NativeAgentNotificationSink, NativeBackgroundTask,
     NativeRollbackOutcome, NativeTurnInput,
@@ -237,6 +238,8 @@ pub struct ClaudeNativeSession {
     background: std::sync::Mutex<ClaudeBackgroundTasks>,
     /// Last process output or session request; drives the idle release.
     last_activity: std::sync::Mutex<tokio::time::Instant>,
+    /// First-turn title generation; replaced in tests.
+    title_resolver: std::sync::Mutex<TitleResolver>,
 }
 
 impl ClaudeNativeSession {
@@ -278,6 +281,7 @@ impl ClaudeNativeSession {
             history: std::sync::Mutex::new(ClaudeHistory::default()),
             background: std::sync::Mutex::new(ClaudeBackgroundTasks::default()),
             last_activity: std::sync::Mutex::new(tokio::time::Instant::now()),
+            title_resolver: std::sync::Mutex::new(title::default_resolver()),
         })
     }
 
@@ -817,6 +821,9 @@ impl ClaudeNativeSession {
                 "Claude background response is still active; retry after it settles",
             ));
         }
+        let title_message = (state.index == 0)
+            .then(|| title::title_source(&input.text, original.as_deref()))
+            .flatten();
         self.begin_turn(
             &mut state,
             turn_id.clone(),
@@ -869,8 +876,69 @@ impl ClaudeNativeSession {
         if let Err(error) = &result {
             process.kill().await;
             self.fail_turn(&error.to_string()).await;
+        } else if let Some(message) = title_message {
+            self.spawn_title_generation(message);
         }
         result
+    }
+
+    /// Title the session from its first user message in the background; the
+    /// turn never waits for it. A rename made meanwhile is kept.
+    fn spawn_title_generation(self: &Arc<Self>, message: String) {
+        let session = self.clone();
+        let resolver = self
+            .title_resolver
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        tokio::spawn(async move {
+            let expected = match &session.persistence {
+                Some((persistence, storage)) => {
+                    match persistence
+                        .load_metadata(storage, &session.session_id)
+                        .await
+                    {
+                        Ok(Some(metadata)) => match title::expected_title(&metadata) {
+                            Some(expected) => Some(expected),
+                            None => return,
+                        },
+                        Ok(None) => return,
+                        Err(error) => {
+                            log::warn!("Claude session title skipped: {error}");
+                            return;
+                        }
+                    }
+                }
+                None => None,
+            };
+            let resolved = resolver(message).await;
+            if let (Some((persistence, storage)), Some(expected)) =
+                (&session.persistence, expected.as_deref())
+            {
+                match persistence
+                    .set_generated_title(storage, &session.session_id, expected, &resolved.title)
+                    .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        log::debug!("Claude session title skipped because the title changed");
+                        return;
+                    }
+                    Err(error) => {
+                        log::warn!("Claude session title persistence failed: {error}");
+                        return;
+                    }
+                }
+            }
+            let event = AgenticEvent::SessionTitleGenerated {
+                session_id: session.session_id.clone(),
+                title: resolved.title,
+                method: resolved.method.as_str().to_string(),
+            };
+            if let Err(error) = session.enqueue(vec![event]).await {
+                log::warn!("Claude session title event failed: {error}");
+            }
+        });
     }
 
     /// Write a user message for the running turn `turn_id`. The CLI queues it
