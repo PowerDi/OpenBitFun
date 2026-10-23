@@ -237,6 +237,8 @@ pub struct CodexNativeSession {
     notifier: Option<NativeAgentNotificationSink>,
     context_usage: std::sync::Mutex<Option<AcpSessionContextUsage>>,
     history: std::sync::Mutex<CodexHistory>,
+    /// One-time note for a session migrated from the retired Codex ACP preset.
+    legacy_notice: std::sync::Mutex<Option<String>>,
     last_activity: std::sync::Mutex<tokio::time::Instant>,
     title_resolver: std::sync::Mutex<TitleResolver>,
 }
@@ -281,6 +283,7 @@ impl CodexNativeSession {
             notifier,
             context_usage: std::sync::Mutex::new(None),
             history: std::sync::Mutex::new(CodexHistory::default()),
+            legacy_notice: std::sync::Mutex::new(None),
             last_activity: std::sync::Mutex::new(tokio::time::Instant::now()),
             title_resolver: std::sync::Mutex::new(title::default_resolver()),
         })
@@ -288,6 +291,10 @@ impl CodexNativeSession {
 
     pub(super) fn thread_id(&self) -> Option<String> {
         lock(&self.thread_id).clone()
+    }
+
+    pub(super) fn apply_legacy_notice(&self, notice: Option<String>) {
+        *lock(&self.legacy_notice) = notice;
     }
 
     pub(super) fn apply_history(&self, history: CodexHistory) {
@@ -918,11 +925,37 @@ impl CodexNativeSession {
         if manual_compaction {
             projector.mark_manual_compaction();
         }
-        self.enqueue(projector.open_pending_round()).await?;
+        let mut opening = projector.open_pending_round();
+        if let Some(notice) = lock(&self.legacy_notice).take() {
+            opening.extend(projector.notice_event(format!(
+                "{notice}
+
+"
+            )));
+            self.clear_legacy_notice().await;
+        }
+        self.enqueue(opening).await?;
         state.projector = Some(projector);
         state.codex_turn_id = None;
         state.process_id = None;
         Ok(())
+    }
+
+    /// The note is shown once; a failed write only means it may show again.
+    async fn clear_legacy_notice(&self) {
+        if let Some((persistence, storage)) = &self.persistence {
+            if let Err(error) = persistence
+                .set_custom_metadata(
+                    storage,
+                    &self.session_id,
+                    crate::client::legacy_presets::CUSTOM_METADATA_LEGACY_NOTICE_KEY,
+                    Value::Null,
+                )
+                .await
+            {
+                log::warn!("Failed to clear Codex legacy migration notice: {error}");
+            }
+        }
     }
 
     /// Title the session from its first user message in the background.

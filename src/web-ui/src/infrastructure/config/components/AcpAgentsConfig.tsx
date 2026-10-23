@@ -111,8 +111,6 @@ const SELF_MANAGED_INSTALL_PRESET_IDS = new Set(['omp']);
 const CLI_INSTALL_PACKAGES: Record<string, string> = {
   opencode: 'opencode-ai',
   dsh: '@deepseek-ai/dsh',
-  'claude-code': '@anthropic-ai/claude-code',
-  codex: '@openai/codex',
 };
 
 const PRESETS: AcpClientPreset[] = [
@@ -136,18 +134,6 @@ const PRESETS: AcpClientPreset[] = [
     name: 'Oh My Pi',
     command: 'omp',
     args: ['acp'],
-  },
-  {
-    id: 'claude-code',
-    name: 'Claude Code',
-    command: 'npx',
-    args: ['--yes', '@agentclientprotocol/claude-agent-acp@latest'],
-  },
-  {
-    id: 'codex',
-    name: 'Codex',
-    command: 'npx',
-    args: ['--yes', '@agentclientprotocol/codex-acp@latest'],
   },
 ];
 

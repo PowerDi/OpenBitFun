@@ -2,6 +2,7 @@ mod builtin_clients;
 mod config;
 mod dsh_profile;
 mod execution;
+mod legacy_presets;
 mod manager;
 pub mod native;
 mod prompt;

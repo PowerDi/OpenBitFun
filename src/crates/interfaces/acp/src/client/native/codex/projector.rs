@@ -721,6 +721,20 @@ impl CodexTurnProjector {
         });
     }
 
+    /// Host-authored text at the start of the turn (not Codex output).
+    /// Does not count as a final response.
+    pub(super) fn notice_event(&self, text: String) -> Option<AgenticEvent> {
+        let round_id = self.open_round.as_ref()?.round_id.clone();
+        Some(AgenticEvent::TextChunk {
+            session_id: self.session_id.clone(),
+            turn_id: self.turn_id.clone(),
+            round_id,
+            attempt_id: None,
+            attempt_index: None,
+            text,
+        })
+    }
+
     fn text_event(&mut self, text: String) -> Option<AgenticEvent> {
         let round_id = self.open_round.as_ref()?.round_id.clone();
         self.has_text = true;

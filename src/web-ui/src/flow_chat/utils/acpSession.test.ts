@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { acpAgentTypeFromSession, isAcpFlowSession } from './acpSession';
+import { acpAgentTypeFromSession, acpClientIdFromAgentType, isAcpFlowSession } from './acpSession';
 
 describe('acpSession utilities', () => {
   it('resolves ACP agent type from session config first', () => {
@@ -16,9 +16,17 @@ describe('acpSession utilities', () => {
     expect(
       acpAgentTypeFromSession({
         config: { agentType: 'Standard' },
-        mode: 'acp:codex',
+        mode: 'acp:opencode',
       } as any)
-    ).toBe('acp:codex');
+    ).toBe('acp:opencode');
+  });
+
+  it('maps sessions of retired ACP presets to their native drivers', () => {
+    expect(acpClientIdFromAgentType('acp:claude-code')).toBe('claude-native');
+    expect(acpClientIdFromAgentType('acp:codex')).toBe('codex-native');
+    expect(acpAgentTypeFromSession({ config: { agentType: 'acp:codex' }, mode: 'Standard' } as any))
+      .toBe('acp:codex-native');
+    expect(acpClientIdFromAgentType('acp:omp')).toBe('omp');
   });
 
   it('does not classify normal sessions as ACP sessions', () => {
