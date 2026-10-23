@@ -16,9 +16,12 @@ impl ClaudeFailure {
         if raw.is_empty() || raw == self.message {
             self.message.clone()
         } else {
-            format!("{}
+            format!(
+                "{}
 
-{raw}", self.message)
+{raw}",
+                self.message
+            )
         }
     }
 
@@ -61,6 +64,12 @@ pub(crate) fn classify(
             category: ErrorCategory::InvalidRequest,
             raw: raw.to_string(),
         };
+    } else if has(&["unknown option", "error: unknown argument"]) {
+        // CLIs older than the init-frame gate reject newer flags at startup.
+        (
+            ErrorCategory::InvalidRequest,
+            "This Claude Code version does not support a required option. Run `claude update`, then retry.",
+        )
     } else if has(&[
         "command not found",
         "not recognized as an internal or external command",
@@ -112,7 +121,12 @@ pub(crate) fn classify(
             ErrorCategory::RateLimit,
             "Claude API rate limit reached. Wait a moment and retry.",
         )
-    } else if has(&["overloaded", "api error: 529", "api error: 503", "api error: 500"]) {
+    } else if has(&[
+        "overloaded",
+        "api error: 529",
+        "api error: 503",
+        "api error: 500",
+    ]) {
         (
             ErrorCategory::ProviderUnavailable,
             "The Claude API is temporarily overloaded or unavailable. Retry shortly.",
@@ -146,7 +160,9 @@ pub(crate) fn classify(
         )
     } else {
         return ClaudeFailure {
-            message: first_line(raw).unwrap_or("Claude Code turn failed").to_string(),
+            message: first_line(raw)
+                .unwrap_or("Claude Code turn failed")
+                .to_string(),
             category: ErrorCategory::Unknown,
             raw: raw.to_string(),
         };

@@ -1073,9 +1073,6 @@ impl ClaudeNativeSession {
             }
         }
         let executable = local_executable();
-        // Refuse a CLI too old for this driver's protocol before launching it.
-        super::cli::ensure_supported_version(&executable, self.remote_connection_id.as_deref())
-            .await?;
         let remote_command = remote_command(&self.workspace_path, &args);
         let io = super::super::process::spawn(super::super::process::ProcessConfig {
             client_id: CLIENT_ID,
@@ -1284,6 +1281,8 @@ impl ClaudeNativeSession {
             state.autonomous_result_pending = false;
         }
         if frame["type"] == "system" && frame["subtype"] == "init" {
+            // Ends the reader, which fails the turn with the update hint.
+            super::cli::check_reported_version(frame["claude_code_version"].as_str())?;
             state.model = frame["model"].as_str().map(str::to_string);
             self.init_commands(&frame);
             self.adopt_reported_session_id(&frame).await;

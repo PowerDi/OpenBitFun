@@ -1,17 +1,12 @@
 //! Claude Code CLI install facts: version parsing, minimum-version policy,
 //! install-method detection, official install guidance and `claude update`.
-use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Mutex;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
-use openbitfun_core::service::remote_ssh::workspace_state::get_remote_workspace_manager;
 use openbitfun_core::util::errors::{OpenBitFunError, OpenBitFunResult};
 
 use crate::client::config::{AcpRequirementProbeItem, NativeCliInstallMethod, NativeCliStatus};
-use crate::client::requirements::{
-    command_error_summary, probe_executable, probe_remote_executable, run_command_with_timeout,
-};
+use crate::client::requirements::{command_error_summary, run_command_with_timeout};
 
 /// Lowest Claude Code release the stream-json driver supports. The driver
 /// relies on `--replay-user-messages`, `--resume-session-at`, and the
@@ -120,78 +115,13 @@ pub(crate) fn too_old_message(found: &str) -> String {
     )
 }
 
-/// Hosts whose Claude version already passed the gate. Keyed by local path and
-/// modification time, or by remote connection id; only passes are cached.
-static VERIFIED: Mutex<Option<HashMap<String, ()>>> = Mutex::new(None);
-
-fn local_gate_key(executable: &Path) -> Option<String> {
-    let modified = std::fs::metadata(executable)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
-        .map(|elapsed| elapsed.as_millis())
-        .unwrap_or_default();
-    Some(format!("local:{}:{modified}", executable.display()))
-}
-
-fn already_verified(key: &str) -> bool {
-    VERIFIED
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .as_ref()
-        .is_some_and(|map| map.contains_key(key))
-}
-
-fn mark_verified(key: String) {
-    VERIFIED
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .get_or_insert_with(HashMap::new)
-        .insert(key, ());
-}
-
-/// Gate a launch on [`MIN_VERSION`]. Unreadable or unparsable versions are
-/// logged and allowed; a missing CLI is left to the launch error path.
-pub(crate) async fn ensure_supported_version(
-    executable: &Path,
-    remote_connection_id: Option<&str>,
-) -> OpenBitFunResult<()> {
-    let key = match remote_connection_id {
-        Some(connection) => Some(format!("remote:{connection}")),
-        None => local_gate_key(executable),
-    };
-    if key.as_deref().is_some_and(already_verified) {
-        return Ok(());
-    }
-    let probe = match remote_connection_id {
-        Some(connection) => {
-            let ssh = match get_remote_workspace_manager() {
-                Some(manager) => manager.get_ssh_manager().await,
-                None => None,
-            };
-            let Some(ssh) = ssh else {
-                log::warn!("Claude version check skipped: SSH manager unavailable");
-                return Ok(());
-            };
-            probe_remote_executable(&ssh, connection, "claude", None).await
-        }
-        None => probe_executable(&executable.to_string_lossy()).await,
-    };
-    gate_probe(&probe)?;
-    if let (Some(key), Some(_)) = (key, probe.version.as_deref().and_then(parse_version)) {
-        mark_verified(key);
-    }
-    Ok(())
-}
-
-fn gate_probe(probe: &AcpRequirementProbeItem) -> OpenBitFunResult<()> {
-    let Some(version) = probe.version.as_deref() else {
-        if probe.installed {
-            log::warn!(
-                "Claude version check skipped: version unavailable error={:?}",
-                probe.error
-            );
-        }
+/// Gate a running CLI on [`MIN_VERSION`] using the `claude_code_version` it
+/// reports in its `system/init` frame, so launches never pay for a separate
+/// `claude --version` round trip (slow over SSH or a poor network).
+/// Missing or unparsable versions are logged and allowed.
+pub(crate) fn check_reported_version(reported: Option<&str>) -> OpenBitFunResult<()> {
+    let Some(version) = reported else {
+        log::warn!("Claude version check skipped: init frame has no claude_code_version");
         return Ok(());
     };
     match is_too_old(version) {
@@ -202,7 +132,7 @@ fn gate_probe(probe: &AcpRequirementProbeItem) -> OpenBitFunResult<()> {
         ))),
         Some(false) => Ok(()),
         None => {
-            log::warn!("Claude version check skipped: unparsable version output={version}");
+            log::warn!("Claude version check skipped: unparsable version {version}");
             Ok(())
         }
     }
@@ -220,14 +150,6 @@ pub(crate) async fn run_update(executable: &Path) -> OpenBitFunResult<String> {
             "`claude update` failed: {}",
             command_error_summary(&output.stderr, &output.stdout)
         )));
-    }
-    // The binary may have been replaced; re-check on the next launch.
-    if let Some(map) = VERIFIED
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .as_mut()
-    {
-        map.retain(|key, _| !key.starts_with("local:"));
     }
     let mut text = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -313,18 +235,16 @@ mod tests {
 
     #[test]
     fn min_version_gate_blocks_only_parsed_old_versions() {
-        let old = gate_probe(&item(true, Some("2.0.77 (Claude Code)"), None))
-            .expect_err("old CLI must be refused");
+        let old = check_reported_version(Some("2.0.77")).expect_err("old CLI must be refused");
         let message = old.to_string();
         assert!(
             message.contains("2.0.77") && message.contains(MIN_VERSION),
             "{message}"
         );
         assert!(message.contains("claude update"), "{message}");
-        assert!(gate_probe(&item(true, Some("2.1.302 (Claude Code)"), None)).is_ok());
-        assert!(gate_probe(&item(true, Some("unknown build"), None)).is_ok());
-        assert!(gate_probe(&item(true, None, None)).is_ok());
-        assert!(gate_probe(&item(false, None, None)).is_ok());
+        assert!(check_reported_version(Some("2.1.302")).is_ok());
+        assert!(check_reported_version(Some("unknown build")).is_ok());
+        assert!(check_reported_version(None).is_ok());
     }
 
     #[test]
