@@ -10280,6 +10280,22 @@
       "remoteWorkspacePolicy": "LocalOnly"
     },
     {
+      "id": "steer_acp_dialog_turn",
+      "moduleId": "acp_client",
+      "capabilityId": "setting.tools.acp",
+      "capabilityIds": [
+        "setting.tools.acp"
+      ],
+      "documentedItemIds": [
+        "setting.tools.acp:dialog-permissions"
+      ],
+      "visibility": "documented",
+      "rustPath": "steer_acp_dialog_turn",
+      "sourceFile": "src/apps/desktop/src/api/acp_client_api.rs",
+      "signature": "fn steer_acp_dialog_turn( state: State<'_, AppState>, request: SteerAcpDialogTurnRequest, ) -> Result<SteerAcpDialogTurnResponse, String>",
+      "remoteWorkspacePolicy": "RemoteRouted"
+    },
+    {
       "id": "steer_dialog_turn",
       "moduleId": "agentic",
       "capabilityId": "feature.ai-assistant",

@@ -286,6 +286,20 @@ export interface StopAcpSessionTaskRequest {
   taskId: string;
 }
 
+export interface SteerAcpDialogTurnRequest {
+  sessionId: string;
+  clientId: string;
+  dialogTurnId: string;
+  content: string;
+  displayContent?: string;
+  imageContexts?: unknown[];
+}
+
+export interface SteerAcpDialogTurnResponse {
+  success: boolean;
+  steeringId: string;
+}
+
 export interface AcpAvailableCommand {
   name: string;
   description: string;
@@ -649,6 +663,11 @@ export class ACPClientAPI {
   /** Native agents advertising `backgroundTasks` only. */
   static async stopSessionTask(request: StopAcpSessionTaskRequest): Promise<void> {
     return api.invoke('stop_acp_session_task', { request });
+  }
+
+  /** Native agents advertising `input.steering` only. */
+  static async steerDialogTurn(request: SteerAcpDialogTurnRequest): Promise<SteerAcpDialogTurnResponse> {
+    return api.invoke('steer_acp_dialog_turn', { request });
   }
 
   /** Native agents advertising `history.fork` only. */

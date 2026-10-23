@@ -149,6 +149,11 @@ impl ClaudeTurnProjector {
         &self.turn_id
     }
 
+    /// Index of the latest model round (0 before the first one).
+    pub(crate) fn current_round_index(&self) -> usize {
+        self.round_index.saturating_sub(1)
+    }
+
     pub(crate) fn is_finished(&self) -> bool {
         self.finished
     }

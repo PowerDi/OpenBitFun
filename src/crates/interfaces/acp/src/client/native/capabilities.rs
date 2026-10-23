@@ -117,5 +117,6 @@ mod tests {
         assert!(!caps.host_commands && !caps.voice_history && !caps.side_chat);
         assert!(caps.history.rollback_last_turn && caps.history.fork);
         assert!(caps.history.import_transcripts);
+        assert!(caps.input.images && caps.input.steering && !caps.input.queue);
     }
 }

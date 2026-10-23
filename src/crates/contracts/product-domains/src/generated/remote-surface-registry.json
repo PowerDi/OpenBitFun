@@ -7954,6 +7954,18 @@
       }
     },
     {
+      "id": "steer_acp_dialog_turn",
+      "surface": "tauri_command",
+      "remoteWorkspace": "RemoteRouted",
+      "peer": {
+        "kind": "proxied"
+      },
+      "cliPeer": {
+        "kind": "unsupported",
+        "reason": "the CLI peer host has no handler for this command"
+      }
+    },
+    {
       "id": "steer_dialog_turn",
       "surface": "tauri_command",
       "remoteWorkspace": "WorkspaceAgnostic",
