@@ -8364,6 +8364,18 @@
       }
     },
     {
+      "id": "update_native_agent_cli",
+      "surface": "tauri_command",
+      "remoteWorkspace": "RemoteUnsupported",
+      "peer": {
+        "kind": "proxied"
+      },
+      "cliPeer": {
+        "kind": "unsupported",
+        "reason": "the CLI peer host has no handler for this command"
+      }
+    },
+    {
       "id": "update_session_mode",
       "surface": "tauri_command",
       "remoteWorkspace": "RemoteRouted",

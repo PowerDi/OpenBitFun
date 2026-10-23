@@ -54,7 +54,14 @@ pub(crate) fn classify(
     let lower = raw.to_lowercase();
     let has = |needles: &[&str]| needles.iter().any(|needle| lower.contains(needle));
     let launch_failed = lower.contains("launch failed");
-    let (category, message) = if has(&[
+    let (category, message) = if lower.contains("older than the minimum supported version") {
+        // The gate's text already carries the found/minimum versions.
+        return ClaudeFailure {
+            message: first_line(raw).unwrap_or(raw).to_string(),
+            category: ErrorCategory::InvalidRequest,
+            raw: raw.to_string(),
+        };
+    } else if has(&[
         "command not found",
         "not recognized as an internal or external command",
     ]) || (launch_failed
@@ -204,6 +211,9 @@ mod tests {
             assert!(failure.message.contains(needle), "{}", failure.message);
             assert_eq!(failure.raw, raw);
         }
+        let old = classify(&super::super::cli::too_old_message("2.0.77"), None, None);
+        assert_eq!(old.category, ErrorCategory::InvalidRequest);
+        assert!(old.message.contains("claude update"), "{}", old.message);
         let unknown = classify("\nsomething odd\nmore", None, None);
         assert_eq!(unknown.message, "something odd");
     }

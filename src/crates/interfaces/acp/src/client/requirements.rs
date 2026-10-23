@@ -411,7 +411,7 @@ pub(crate) fn apply_command_environment(
     }
 }
 
-async fn run_command_with_timeout<I, S>(
+pub(crate) async fn run_command_with_timeout<I, S>(
     program: &OsStr,
     args: I,
     timeout: Duration,
@@ -423,6 +423,8 @@ where
     let mut command = openbitfun_core::util::process_manager::create_tokio_command(program);
     command.args(args);
     apply_command_environment(&mut command, None);
+    // A timed-out check must not leave the child running.
+    command.kill_on_drop(true);
     match tokio::time::timeout(timeout, command.output()).await {
         Ok(Ok(output)) => Ok(output),
         Ok(Err(error)) => Err(error.to_string()),
@@ -448,7 +450,7 @@ fn parse_version_text(output: &[u8]) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn command_error_summary(stderr: &[u8], stdout: &[u8]) -> String {
+pub(crate) fn command_error_summary(stderr: &[u8], stdout: &[u8]) -> String {
     let stderr = String::from_utf8_lossy(stderr).trim().to_string();
     if !stderr.is_empty() {
         return truncate_error(stderr);

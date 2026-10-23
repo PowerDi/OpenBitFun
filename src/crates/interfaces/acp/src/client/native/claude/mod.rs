@@ -1,5 +1,6 @@
 //! Claude Code stream-json identity, resume policy and session implementation.
 mod background;
+mod cli;
 mod commands;
 mod errors;
 mod history;
@@ -41,6 +42,17 @@ impl NativeAgentDriver for ClaudeNativeDriver {
     }
     fn local_executable(&self) -> std::path::PathBuf {
         session::local_executable()
+    }
+    fn cli_status(
+        &self,
+        tool: &crate::client::AcpRequirementProbeItem,
+        windows: bool,
+        remote: bool,
+    ) -> Option<crate::client::config::NativeCliStatus> {
+        Some(cli::cli_status(tool, windows, remote))
+    }
+    async fn update_cli(&self) -> OpenBitFunResult<String> {
+        cli::run_update(&session::local_executable()).await
     }
     fn capabilities(&self) -> NativeAgentCapabilities {
         NativeAgentCapabilities {
