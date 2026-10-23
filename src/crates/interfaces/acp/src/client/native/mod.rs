@@ -75,6 +75,92 @@ pub struct NativeRollbackOutcome {
 
 pub type NativeAgentNotificationSink = Arc<dyn Fn(NativeAgentNotification) + Send + Sync>;
 
+/// Image formats native agents accept as inline prompt content.
+pub const NATIVE_IMAGE_MEDIA_TYPES: [&str; 4] =
+    ["image/png", "image/jpeg", "image/gif", "image/webp"];
+/// Per-image cap on decoded bytes (the Anthropic API limit for base64 images).
+pub const NATIVE_IMAGE_MAX_BYTES: usize = 5 * 1024 * 1024;
+
+/// One inline image of a native turn or steering message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeImageInput {
+    /// Normalized media type, one of [`NATIVE_IMAGE_MEDIA_TYPES`].
+    pub media_type: String,
+    /// Base64 payload without the `data:` prefix.
+    pub data: String,
+}
+
+impl NativeImageInput {
+    /// Build from a base64 `data:` URL; `mime_type` fills an empty declared
+    /// type. The host resolves file attachments into data URLs first. The
+    /// workspace may be remote: images travel through the agent's stdin.
+    pub fn from_data_url(mime_type: &str, data_url: &str) -> OpenBitFunResult<Self> {
+        let validation = openbitfun_core::util::errors::OpenBitFunError::Validation;
+        let (header, data) = data_url
+            .trim()
+            .strip_prefix("data:")
+            .and_then(|rest| rest.split_once(','))
+            .filter(|(header, _)| header.ends_with(";base64"))
+            .ok_or_else(|| validation("Image data URL is not base64 encoded".into()))?;
+        let declared = header.trim_end_matches(";base64");
+        let media_type = if declared.is_empty() {
+            mime_type
+        } else {
+            declared
+        };
+        let media_type = match media_type.trim().to_ascii_lowercase().as_str() {
+            "image/jpg" => "image/jpeg".to_string(),
+            other => other.to_string(),
+        };
+        if !NATIVE_IMAGE_MEDIA_TYPES.contains(&media_type.as_str()) {
+            return Err(validation(format!("Unsupported image type: {media_type}")));
+        }
+        let data = data.trim();
+        let well_formed = !data.is_empty()
+            && data.len() % 4 == 0
+            && data
+                .trim_end_matches('=')
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'+' || byte == b'/');
+        if !well_formed {
+            return Err(validation("Invalid image data URL".into()));
+        }
+        let padding = data.len() - data.trim_end_matches('=').len();
+        if data.len() / 4 * 3 - padding > NATIVE_IMAGE_MAX_BYTES {
+            return Err(validation(format!(
+                "Image is larger than {} MB",
+                NATIVE_IMAGE_MAX_BYTES / (1024 * 1024)
+            )));
+        }
+        Ok(Self {
+            media_type,
+            data: data.to_string(),
+        })
+    }
+}
+
+/// User input of a native turn or steering message.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NativeTurnInput {
+    pub text: String,
+    pub images: Vec<NativeImageInput>,
+}
+
+impl From<String> for NativeTurnInput {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            images: Vec::new(),
+        }
+    }
+}
+
+impl From<&str> for NativeTurnInput {
+    fn from(text: &str) -> Self {
+        text.to_string().into()
+    }
+}
+
 /// Prepared host resources. Provider identity and resume policy belong to the driver.
 pub struct NativeAgentOpenContext {
     pub session_id: String,
@@ -155,9 +241,21 @@ pub trait NativeAgentSession: Send + Sync {
     async fn start_turn(
         self: Arc<Self>,
         turn_id: String,
-        input: String,
+        input: NativeTurnInput,
         original: Option<String>,
     ) -> OpenBitFunResult<()>;
+    /// Deliver a user message to the running turn `turn_id` (`input.steering`).
+    /// Returns the steering id the host renders the message under.
+    async fn steer(
+        self: Arc<Self>,
+        _turn_id: &str,
+        _input: NativeTurnInput,
+        _display: Option<String>,
+    ) -> OpenBitFunResult<String> {
+        Err(openbitfun_core::util::errors::OpenBitFunError::Validation(
+            "This native agent does not support steering".into(),
+        ))
+    }
     async fn cancel(&self) -> OpenBitFunResult<()>;
     async fn set_model(&self, id: &str) -> OpenBitFunResult<AcpSessionOptions>;
     async fn set_config_option(

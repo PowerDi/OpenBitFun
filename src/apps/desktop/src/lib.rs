@@ -1792,6 +1792,7 @@ pub async fn run() {
             rollback_acp_session_turn,
             fork_acp_session,
             stop_acp_session_task,
+            steer_acp_dialog_turn,
             continue_imported_acp_session,
             get_global_config_status,
             get_model_configs,

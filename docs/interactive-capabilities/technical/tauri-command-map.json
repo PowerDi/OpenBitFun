@@ -2,10 +2,10 @@
   "schemaVersion": 2,
   "generatedFrom": "src/shared/interactive-capabilities/catalog.json",
   "catalogDigest": "c7c38fecfad3e83e4a9f6f451a37edbf7d42ef399409238253f9a0fd124f879b",
-  "commandCount": 706,
+  "commandCount": 707,
   "coverage": {
-    "commandCount": 706,
-    "documentedCommandCount": 649,
+    "commandCount": 707,
+    "documentedCommandCount": 650,
     "implementationCommandCount": 57,
     "implementationDigest": "503b48eebc37750e50e0427d861e884dfa353a81aae32236e4bc2d7e0f5310e2"
   },
@@ -10319,6 +10319,22 @@
       "sourceFile": "src/apps/desktop/src/api/system_api.rs",
       "signature": "fn startup_window_control( state: State<'_, AppState>, startup_trace: State<'_, DesktopStartupTrace>, app: tauri::AppHandle, request: StartupWindowControlRequest, ) -> Result<StartupWindowControlResponse, String>",
       "remoteWorkspacePolicy": "LocalOnly"
+    },
+    {
+      "id": "steer_acp_dialog_turn",
+      "moduleId": "acp_client",
+      "capabilityId": "setting.tools.acp",
+      "capabilityIds": [
+        "setting.tools.acp"
+      ],
+      "documentedItemIds": [
+        "setting.tools.acp:dialog-permissions"
+      ],
+      "visibility": "documented",
+      "rustPath": "steer_acp_dialog_turn",
+      "sourceFile": "src/apps/desktop/src/api/acp_client_api.rs",
+      "signature": "fn steer_acp_dialog_turn( state: State<'_, AppState>, request: SteerAcpDialogTurnRequest, ) -> Result<SteerAcpDialogTurnResponse, String>",
+      "remoteWorkspacePolicy": "RemoteRouted"
     },
     {
       "id": "steer_dialog_turn",

@@ -315,6 +315,20 @@ impl AcpClientService {
         Ok(())
     }
 
+    /// Deliver a steering message to the running turn of a prepared native session.
+    pub async fn steer_native_session(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        input: native::NativeTurnInput,
+        display: Option<String>,
+    ) -> OpenBitFunResult<String> {
+        let session = self.native_session(session_id).ok_or_else(|| {
+            OpenBitFunError::Validation(format!("Native session is not prepared: {session_id}"))
+        })?;
+        session.steer(turn_id, input, display).await
+    }
+
     /// Roll back the latest turn of a prepared native session.
     pub async fn rollback_native_session(
         &self,

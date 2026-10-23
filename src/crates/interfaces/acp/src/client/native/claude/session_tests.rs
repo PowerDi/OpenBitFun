@@ -1435,3 +1435,153 @@ async fn idle_release_waits_for_running_background_tasks() {
         .iter()
         .all(|e| !matches!(e.event, AgenticEvent::DialogTurnFailed { .. })));
 }
+
+#[test]
+fn image_input_becomes_base64_content_blocks_after_text() {
+    use crate::client::native::NativeImageInput;
+    // "PNG" in base64; a jpg alias normalizes to image/jpeg.
+    let png = NativeImageInput::from_data_url("image/png", "data:image/png;base64,UE5H").unwrap();
+    let jpeg = NativeImageInput::from_data_url("image/jpg", "data:;base64,UE5H").unwrap();
+    assert_eq!(jpeg.media_type, "image/jpeg");
+    assert!(
+        NativeImageInput::from_data_url("image/svg+xml", "data:image/svg+xml;base64,UE5H").is_err()
+    );
+    assert!(NativeImageInput::from_data_url("image/png", "data:image/png,raw").is_err());
+    assert!(NativeImageInput::from_data_url("image/png", "data:image/png;base64,U$5H").is_err());
+
+    let input = NativeTurnInput {
+        text: "look".into(),
+        images: vec![png, jpeg],
+    };
+    let frame = user_frame("c1", "u1", &input, None);
+    assert_eq!(
+        frame["message"]["content"],
+        json!([
+            {"type":"text", "text":"look"},
+            {"type":"image", "source":{"type":"base64", "media_type":"image/png", "data":"UE5H"}},
+            {"type":"image", "source":{"type":"base64", "media_type":"image/jpeg", "data":"UE5H"}},
+        ])
+    );
+    assert!(frame.get("priority").is_none());
+    // Text-only input keeps the plain string content.
+    assert_eq!(
+        user_frame("c1", "u1", &"hi".into(), None)["message"]["content"],
+        "hi"
+    );
+}
+
+async fn running_turn(
+    session: &Arc<ClaudeNativeSession>,
+    process: &Arc<NativeProcess>,
+    lines: &mut tokio::io::Lines<BufReader<DuplexStream>>,
+) {
+    session
+        .start_turn("t1".into(), "hello".into(), None)
+        .await
+        .unwrap();
+    let _prompt = lines.next_line().await.unwrap().unwrap();
+    for frame in [
+        json!({"type":"user", "uuid":"echo-1", "isReplay":true, "parent_tool_use_id":null,
+            "message":{"role":"user", "content":"hello"}}),
+        json!({"type":"assistant", "uuid":"a-1", "parent_tool_use_id":null,
+            "message":{"id":"m1", "content":[{"type":"tool_use", "id":"tool-1", "name":"Bash",
+                "input":{"command":"ls"}}]}}),
+    ] {
+        session.route_frame(process, frame).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn steering_folds_into_running_turn_without_opening_a_turn() {
+    let (session, process, output) = fixture();
+    *session.process.lock().await = Some(process.clone());
+    let mut lines = BufReader::new(output).lines();
+    running_turn(&session, &process, &mut lines).await;
+    assert!(session.steer("other", "x".into(), None).await.is_err());
+    let steering_id = session.steer("t1", "use pnpm".into(), None).await.unwrap();
+    let sent: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(sent["uuid"], steering_id);
+    assert_eq!(sent["priority"], "next");
+    assert_eq!(sent["message"]["content"], "use pnpm");
+    for frame in [
+        json!({"type":"user", "parent_tool_use_id":null, "uuid":"r-1",
+            "message":{"role":"user", "content":[{"type":"tool_result", "tool_use_id":"tool-1", "content":"ok"}]}}),
+        json!({"type":"user", "uuid":steering_id, "isReplay":true, "parent_tool_use_id":null,
+            "message":{"role":"user", "content":"use pnpm"}}),
+        json!({"type":"assistant", "uuid":"a-2", "parent_tool_use_id":null,
+            "message":{"id":"m2", "content":[{"type":"text", "text":"ok"}]}}),
+        json!({"type":"result", "subtype":"success", "is_error":false,
+            "user_message_uuids":[steering_id]}),
+    ] {
+        session.route_frame(&process, frame).await.unwrap();
+    }
+    let events = session.queue.dequeue_batch(200).await;
+    let started = events
+        .iter()
+        .filter(|e| matches!(e.event, AgenticEvent::DialogTurnStarted { .. }))
+        .count();
+    assert_eq!(started, 1, "a folded steer does not open a turn");
+    let steered: Vec<_> = events
+        .iter()
+        .filter_map(|e| match &e.event {
+            AgenticEvent::UserSteeringInjected {
+                turn_id,
+                steering_id,
+                content,
+                ..
+            } => Some((turn_id.clone(), steering_id.clone(), content.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        steered,
+        [(
+            "t1".to_string(),
+            steering_id.clone(),
+            "use pnpm".to_string()
+        )]
+    );
+    let history = session.history().clone();
+    assert_eq!(history.turns.len(), 1);
+    assert_eq!(history.turns[0].prompt_uuid.as_deref(), Some("echo-1"));
+    assert_eq!(history.turns[0].last_uuid.as_deref(), Some("a-2"));
+    assert!(session.state.lock().await.steers.is_empty());
+}
+
+#[tokio::test]
+async fn steer_taken_after_the_turn_ends_opens_its_own_turn() {
+    let (session, process, output) = fixture();
+    *session.process.lock().await = Some(process.clone());
+    let mut lines = BufReader::new(output).lines();
+    running_turn(&session, &process, &mut lines).await;
+    let steering_id = session.steer("t1", "next step".into(), None).await.unwrap();
+    let _ = lines.next_line().await.unwrap().unwrap();
+    for frame in [
+        json!({"type":"result", "subtype":"success", "is_error":false}),
+        json!({"type":"user", "uuid":steering_id, "isReplay":true, "parent_tool_use_id":null,
+            "message":{"role":"user", "content":"next step"}}),
+        json!({"type":"assistant", "uuid":"a-3", "parent_tool_use_id":null,
+            "message":{"id":"m3", "content":[{"type":"text", "text":"done"}]}}),
+        json!({"type":"result", "subtype":"success", "is_error":false}),
+    ] {
+        session.route_frame(&process, frame).await.unwrap();
+    }
+    let inputs: Vec<_> = session
+        .queue
+        .dequeue_batch(200)
+        .await
+        .into_iter()
+        .filter_map(|e| match e.event {
+            AgenticEvent::DialogTurnStarted { user_input, .. } => Some(user_input),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(inputs, ["hello", "next step"]);
+    let history = session.history().clone();
+    assert_eq!(history.turns.len(), 2);
+    assert_eq!(
+        history.turns[1].prompt_uuid.as_deref(),
+        Some(steering_id.as_str())
+    );
+    assert_eq!(history.turns[1].last_uuid.as_deref(), Some("a-3"));
+}

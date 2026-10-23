@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "fnv1a64:78c46244874a4dfb",
+  "digest": "fnv1a64:cb78e345615d9d13",
   "retiredCommandPrefixes": [
     {
       "prefix": "lsp_",
@@ -7952,6 +7952,18 @@
       "cliPeer": {
         "kind": "unsupported",
         "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
+      }
+    },
+    {
+      "id": "steer_acp_dialog_turn",
+      "surface": "tauri_command",
+      "remoteWorkspace": "RemoteRouted",
+      "peer": {
+        "kind": "proxied"
+      },
+      "cliPeer": {
+        "kind": "unsupported",
+        "reason": "the CLI peer host has no handler for this command"
       }
     },
     {

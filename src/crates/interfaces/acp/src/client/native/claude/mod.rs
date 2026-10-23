@@ -73,6 +73,13 @@ impl NativeAgentDriver for ClaudeNativeDriver {
                 fork: true,
                 import_transcripts: true,
             },
+            // `queue` stays off: the host dialog queue drives OpenBitFun
+            // turns only; queued Claude messages drain from the composer queue.
+            input: super::capabilities::NativeInputCapabilities {
+                images: true,
+                steering: true,
+                queue: false,
+            },
             ..Default::default()
         }
     }

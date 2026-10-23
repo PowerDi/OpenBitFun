@@ -24,7 +24,7 @@ use super::super::preferences::NativeAgentPreferences;
 use super::super::process::{Reader, Writer};
 use super::super::{
     NativeAgentDriver, NativeAgentNotification, NativeAgentNotificationSink, NativeBackgroundTask,
-    NativeRollbackOutcome,
+    NativeRollbackOutcome, NativeTurnInput,
 };
 use super::background::ClaudeBackgroundTasks;
 use super::history::{resume_args, ClaudeHistory, PendingResume, RollbackPlan, TurnAnchor};
@@ -181,6 +181,19 @@ struct TurnState {
     /// Subagent transcripts keyed by the parent `Agent`/`Task` tool_use id.
     children: std::collections::HashMap<String, ChildTranscript>,
     tasks: ClaudeTasks,
+    /// Steering messages written to stdin and not yet taken in by Claude.
+    steers: Vec<PendingSteer>,
+}
+
+/// A mid-turn user message queued in the CLI with `priority:"next"`. Claude
+/// folds it into the running turn between tool rounds; if the turn ends
+/// first, the CLI runs it as its own turn.
+#[derive(Debug, Clone)]
+struct PendingSteer {
+    uuid: String,
+    text: String,
+    display: Option<String>,
+    process_id: String,
 }
 
 /// One Claude subagent projected as a read-only child session. Claude Code
@@ -412,7 +425,9 @@ impl ClaudeNativeSession {
     }
 
     /// Record transcript uuids of root chain entries for the active turn.
-    fn track_anchor(&self, turn_id: &str, frame: &Value) {
+    /// `folded` marks the echo of a steering message taken into the turn: it
+    /// extends the chain but is never the turn's prompt.
+    fn track_anchor(&self, turn_id: &str, frame: &Value, folded: bool) {
         if !frame.get("parent_tool_use_id").is_none_or(Value::is_null) {
             return;
         }
@@ -438,6 +453,7 @@ impl ClaudeNativeSession {
             && frame["isReplay"] == true
             && frame["isSynthetic"] != true
             && !local_output
+            && !folded
             && !anchor.prompt_replayed
         {
             anchor.prompt_replayed = true;
@@ -759,7 +775,7 @@ impl ClaudeNativeSession {
     pub async fn start_turn(
         self: &Arc<Self>,
         turn_id: String,
-        input: String,
+        input: NativeTurnInput,
         original: Option<String>,
     ) -> OpenBitFunResult<()> {
         let _guard = self.lifecycle.lock().await;
@@ -774,7 +790,7 @@ impl ClaudeNativeSession {
                 self.begin_turn(
                     &mut *self.state.lock().await,
                     turn_id,
-                    input,
+                    input.text,
                     original,
                     false,
                 )
@@ -792,8 +808,14 @@ impl ClaudeNativeSession {
                 "Claude background response is still active; retry after it settles",
             ));
         }
-        self.begin_turn(&mut state, turn_id.clone(), input.clone(), original, false)
-            .await?;
+        self.begin_turn(
+            &mut state,
+            turn_id.clone(),
+            input.text.clone(),
+            original,
+            false,
+        )
+        .await?;
         state.process_id = Some(process.id.clone());
         drop(state);
         let result: OpenBitFunResult<()> = async {
@@ -804,10 +826,7 @@ impl ClaudeNativeSession {
             }
             let prompt_uuid = uuid::Uuid::new_v4().to_string();
             process
-                .write(
-                    &json!({"type":"user", "session_id":self.claude_id(), "uuid":prompt_uuid,
-                "parent_tool_use_id":null, "message":{"role":"user", "content":input}}),
-                )
+                .write(&user_frame(&self.claude_id(), &prompt_uuid, &input, None))
                 .await?;
             self.resume.store(true, Ordering::Release);
             {
@@ -843,6 +862,116 @@ impl ClaudeNativeSession {
             self.fail_turn(&error.to_string()).await;
         }
         result
+    }
+
+    /// Write a user message for the running turn `turn_id`. The CLI queues it
+    /// with `priority:"next"` and folds it in between tool rounds; the echo
+    /// (`--replay-user-messages`) or the result's `user_message_uuids`
+    /// confirms it. Returns the steering id (the message uuid).
+    pub async fn steer(
+        self: &Arc<Self>,
+        turn_id: &str,
+        input: NativeTurnInput,
+        display: Option<String>,
+    ) -> OpenBitFunResult<String> {
+        if input.text.trim().is_empty() && input.images.is_empty() {
+            return Err(OpenBitFunError::Validation(
+                "Steering content cannot be empty".into(),
+            ));
+        }
+        let _guard = self.lifecycle.lock().await;
+        self.touch();
+        let process = self
+            .process
+            .lock()
+            .await
+            .clone()
+            .filter(|process| process.alive.load(Ordering::Acquire))
+            .ok_or_else(|| service_error("Claude process is not running"))?;
+        let uuid = uuid::Uuid::new_v4().to_string();
+        {
+            let mut state = self.state.lock().await;
+            if state.projector.as_ref().map(ClaudeTurnProjector::turn_id) != Some(turn_id) {
+                return Err(service_error("Claude turn is no longer running"));
+            }
+            state.steers.push(PendingSteer {
+                uuid: uuid.clone(),
+                text: input.text.clone(),
+                display,
+                process_id: process.id.clone(),
+            });
+        }
+        // Never hold the turn state across a write: a large image may block on
+        // a full pipe while the reader needs the state to drain stdout.
+        let frame = user_frame(&self.claude_id(), &uuid, &input, Some("next"));
+        if let Err(error) = process.write(&frame).await {
+            self.state
+                .lock()
+                .await
+                .steers
+                .retain(|steer| steer.uuid != uuid);
+            return Err(error);
+        }
+        Ok(uuid)
+    }
+
+    /// Settle pending steering messages the CLI reports as taken in: their
+    /// replay echo (`uuid`) or a result's `user_message_uuids`. Inside a turn
+    /// they render as steering items; the echo of one that the CLI runs after
+    /// the turn ended opens that turn instead.
+    async fn settle_steers(&self, state: &mut TurnState, frame: &Value) -> OpenBitFunResult<()> {
+        if state.steers.is_empty() || !frame.get("parent_tool_use_id").is_none_or(Value::is_null) {
+            return Ok(());
+        }
+        let taken: Vec<&str> = match frame["type"].as_str() {
+            Some("user") if frame["isReplay"] == true => {
+                frame["uuid"].as_str().into_iter().collect()
+            }
+            Some("result") => frame["user_message_uuids"]
+                .as_array()
+                .map(|ids| ids.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        for uuid in taken {
+            let Some(position) = state.steers.iter().position(|steer| steer.uuid == uuid) else {
+                continue;
+            };
+            let steer = state.steers.remove(position);
+            let Some(projector) = state.projector.as_ref() else {
+                // The turn ended before Claude took the message in; the CLI
+                // now runs it as its own turn, anchored on this echo.
+                self.begin_turn(
+                    state,
+                    uuid::Uuid::new_v4().to_string(),
+                    steer.text.clone(),
+                    steer.display.clone(),
+                    false,
+                )
+                .await?;
+                continue;
+            };
+            let event = AgenticEvent::UserSteeringInjected {
+                session_id: self.session_id.clone(),
+                turn_id: projector.turn_id().to_string(),
+                round_index: projector.current_round_index(),
+                steering_id: steer.uuid.clone(),
+                display_content: steer.display.clone().unwrap_or_else(|| steer.text.clone()),
+                content: steer.text,
+            };
+            self.enqueue(vec![event]).await?;
+        }
+        Ok(())
+    }
+
+    /// Whether `frame` is the echo of a steering message folded into the turn
+    /// (not the turn's own prompt).
+    fn is_steer_echo(state: &TurnState, frame: &Value) -> bool {
+        frame["type"] == "user"
+            && frame["isReplay"] == true
+            && frame["uuid"]
+                .as_str()
+                .is_some_and(|uuid| state.steers.iter().any(|steer| steer.uuid == uuid))
     }
 
     async fn begin_turn(
@@ -1102,6 +1231,12 @@ impl ClaudeNativeSession {
         if let Some(tasks) = ended {
             self.notify(NativeAgentNotification::BackgroundTasksUpdated(tasks));
         }
+        // Steering messages die with the CLI queue that held them.
+        self.state
+            .lock()
+            .await
+            .steers
+            .retain(|steer| steer.process_id != process.id);
         // Hold the process fence while failing its turn. An old reader must
         // never fail a turn submitted after a resume/restart. Between turns
         // there is nothing to fail: an idle exit or crash stays silent and
@@ -1200,6 +1335,8 @@ impl ClaudeNativeSession {
                 _ => {}
             }
         }
+        let folded = state.projector.is_some() && Self::is_steer_echo(&state, &frame);
+        self.settle_steers(&mut state, &frame).await?;
         if state.projector.is_none() && opens_autonomous_turn(&frame) {
             self.begin_turn(
                 &mut state,
@@ -1230,7 +1367,7 @@ impl ClaudeNativeSession {
             }
         }
         if let Some(turn_id) = state.projector.as_ref().map(|p| p.turn_id().to_string()) {
-            self.track_anchor(&turn_id, &frame);
+            self.track_anchor(&turn_id, &frame, folded);
         }
         if let Some(projector) = state.projector.as_mut() {
             let events = projector.consume(&frame);
@@ -1904,10 +2041,18 @@ impl super::super::NativeAgentSession for ClaudeNativeSession {
     async fn start_turn(
         self: Arc<Self>,
         turn_id: String,
-        input: String,
+        input: NativeTurnInput,
         original: Option<String>,
     ) -> OpenBitFunResult<()> {
         ClaudeNativeSession::start_turn(&self, turn_id, input, original).await
+    }
+    async fn steer(
+        self: Arc<Self>,
+        turn_id: &str,
+        input: NativeTurnInput,
+        display: Option<String>,
+    ) -> OpenBitFunResult<String> {
+        ClaudeNativeSession::steer(&self, turn_id, input, display).await
     }
     async fn cancel(&self) -> OpenBitFunResult<()> {
         ClaudeNativeSession::cancel(self).await
@@ -1955,6 +2100,35 @@ impl super::super::NativeAgentSession for ClaudeNativeSession {
     async fn shutdown(&self) {
         ClaudeNativeSession::shutdown(self).await
     }
+}
+
+/// Stream-json user frame. Images become `image` content blocks after the
+/// text; text-only input keeps the plain string content.
+fn user_frame(
+    claude_id: &str,
+    uuid: &str,
+    input: &NativeTurnInput,
+    priority: Option<&str>,
+) -> Value {
+    let content = if input.images.is_empty() {
+        Value::String(input.text.clone())
+    } else {
+        let mut blocks = Vec::with_capacity(input.images.len() + 1);
+        if !input.text.trim().is_empty() {
+            blocks.push(json!({"type":"text", "text":input.text}));
+        }
+        blocks.extend(input.images.iter().map(|image| {
+            json!({"type":"image", "source":{"type":"base64",
+                "media_type":image.media_type, "data":image.data}})
+        }));
+        Value::Array(blocks)
+    };
+    let mut frame = json!({"type":"user", "session_id":claude_id, "uuid":uuid,
+        "parent_tool_use_id":null, "message":{"role":"user", "content":content}});
+    if let Some(priority) = priority {
+        frame["priority"] = json!(priority);
+    }
+    frame
 }
 
 /// `stop_task` control request (also allowed while a turn is running).

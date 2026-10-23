@@ -2,13 +2,16 @@
 
 use crate::api::app_state::AppState;
 use crate::startup_trace::DesktopStartupTrace;
-use openbitfun_acp::client::native::{NativeAgentNotification, NativeAgentNotificationSink};
+use openbitfun_acp::client::native::{
+    NativeAgentNotification, NativeAgentNotificationSink, NativeImageInput, NativeTurnInput,
+};
 use openbitfun_acp::client::{
     AcpAvailableCommand, AcpClientInfo, AcpClientPermissionResponse, AcpClientRequirementProbe,
     AcpClientStreamEvent, AcpSessionOptions, CreateAcpFlowSessionRecordResponse,
     SetAcpSessionConfigOptionRequest, SetAcpSessionModelRequest,
     SubmitAcpPermissionResponseRequest,
 };
+use openbitfun_core::agentic::image_analysis::ImageContextData;
 use openbitfun_core::service::workspace::WorkspaceInfo;
 use openbitfun_runtime_ports::SessionStorePort;
 use serde::{Deserialize, Serialize};
@@ -203,6 +206,50 @@ pub struct StartAcpDialogTurnRequest {
     pub remote_ssh_host: Option<String>,
     #[serde(default)]
     pub timeout_seconds: Option<u64>,
+    /// Native agents advertising `input.images` only.
+    #[serde(default)]
+    pub image_contexts: Option<Vec<ImageContextData>>,
+}
+
+/// Resolve composer image attachments into inline native-agent images.
+fn native_turn_input(
+    text: String,
+    image_contexts: Option<Vec<ImageContextData>>,
+) -> Result<NativeTurnInput, String> {
+    let images = crate::api::agentic_api::resolve_missing_image_payloads(
+        image_contexts.unwrap_or_default(),
+    )?
+    .into_iter()
+    .map(|image| {
+        let data_url = match image
+            .data_url
+            .as_deref()
+            .filter(|url| !url.trim().is_empty())
+        {
+            Some(url) => url.to_string(),
+            None => {
+                // File attachments live on this host even for remote
+                // workspaces; inline them because the agent reads stdin only.
+                use base64::Engine as _;
+                let path = image
+                    .image_path
+                    .as_deref()
+                    .filter(|path| !path.trim().is_empty())
+                    .ok_or_else(|| "Image attachment has no data".to_string())?;
+                let bytes = std::fs::read(path)
+                    .map_err(|error| format!("Failed to read image attachment: {error}"))?;
+                format!(
+                    "data:{};base64,{}",
+                    image.mime_type,
+                    base64::engine::general_purpose::STANDARD.encode(bytes)
+                )
+            }
+        };
+        NativeImageInput::from_data_url(&image.mime_type, &data_url)
+            .map_err(|error| error.to_string())
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+    Ok(NativeTurnInput { text, images })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -534,10 +581,29 @@ pub async fn start_acp_dialog_turn(
             )
             .await
             .map_err(|error| error.to_string())?;
+        let has_images = request
+            .image_contexts
+            .as_ref()
+            .is_some_and(|images| !images.is_empty());
+        if has_images && !driver.capabilities().input.images {
+            return Err(format!(
+                "{} does not accept image attachments",
+                driver.session_label()
+            ));
+        }
+        let input = native_turn_input(user_input, request.image_contexts.clone())?;
         return session
-            .start_turn(turn_id, user_input, Some(original_user_input))
+            .start_turn(turn_id, input, Some(original_user_input))
             .await
             .map_err(|error| error.to_string());
+    }
+    if request
+        .image_contexts
+        .as_ref()
+        .is_some_and(|images| !images.is_empty())
+    {
+        // Generic ACP prompts are text-only here; refuse instead of dropping images.
+        return Err("This ACP agent does not accept image attachments".to_string());
     }
 
     app_handle
@@ -1220,6 +1286,67 @@ pub async fn stop_acp_session_task(
         .stop_native_task(&request.session_id, &request.task_id)
         .await
         .map_err(|error| error.to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SteerAcpDialogTurnRequest {
+    pub session_id: String,
+    pub client_id: String,
+    pub dialog_turn_id: String,
+    pub content: String,
+    #[serde(default)]
+    pub display_content: Option<String>,
+    #[serde(default)]
+    pub image_contexts: Option<Vec<ImageContextData>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SteerAcpDialogTurnResponse {
+    pub success: bool,
+    pub steering_id: String,
+}
+
+/// Native agents advertising `input.steering` only: deliver a user message to
+/// the running turn of a live session.
+#[tauri::command]
+pub async fn steer_acp_dialog_turn(
+    state: State<'_, AppState>,
+    request: SteerAcpDialogTurnRequest,
+) -> Result<SteerAcpDialogTurnResponse, String> {
+    let service = state
+        .acp_client_service
+        .as_ref()
+        .ok_or_else(|| "ACP client service not initialized".to_string())?;
+    let driver = service
+        .native_driver(&request.client_id)
+        .filter(|driver| driver.capabilities().input.steering)
+        .ok_or_else(|| format!("{} does not support steering", request.client_id))?;
+    let has_images = request
+        .image_contexts
+        .as_ref()
+        .is_some_and(|images| !images.is_empty());
+    if has_images && !driver.capabilities().input.images {
+        return Err(format!(
+            "{} does not accept image attachments",
+            driver.session_label()
+        ));
+    }
+    let input = native_turn_input(request.content, request.image_contexts)?;
+    let steering_id = service
+        .steer_native_session(
+            &request.session_id,
+            &request.dialog_turn_id,
+            input,
+            request.display_content,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(SteerAcpDialogTurnResponse {
+        success: true,
+        steering_id,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
