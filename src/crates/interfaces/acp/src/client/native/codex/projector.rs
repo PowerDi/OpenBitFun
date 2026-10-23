@@ -108,12 +108,6 @@ impl CodexTurnProjector {
         self.compaction_trigger = "manual";
     }
 
-    pub(crate) fn set_model_name(&mut self, model: &str) {
-        if !model.trim().is_empty() {
-            self.model_name = model.to_string();
-        }
-    }
-
     pub(crate) fn open_pending_round(&mut self) -> Vec<AgenticEvent> {
         let mut out = Vec::new();
         if self.open_round.is_none() && !self.finished {
@@ -127,7 +121,12 @@ impl CodexTurnProjector {
 
     /// Ensure the card of an approval request exists; `item/started` for the
     /// same item id is deduplicated later.
-    pub(crate) fn permission_tool(&mut self, item_id: &str, tool_name: &str, params: Value) -> Vec<AgenticEvent> {
+    pub(crate) fn permission_tool(
+        &mut self,
+        item_id: &str,
+        tool_name: &str,
+        params: Value,
+    ) -> Vec<AgenticEvent> {
         let mut out = Vec::new();
         if self.finished {
             return out;
@@ -147,7 +146,8 @@ impl CodexTurnProjector {
             "item/started" => self.item_started(&params["item"], &mut out),
             "item/completed" => self.item_completed(&params["item"], &mut out),
             "item/agentMessage/delta" => {
-                let (Some(id), Some(delta)) = (params["itemId"].as_str(), params["delta"].as_str()) else {
+                let (Some(id), Some(delta)) = (params["itemId"].as_str(), params["delta"].as_str())
+                else {
                     return out;
                 };
                 if delta.is_empty() {
@@ -155,11 +155,15 @@ impl CodexTurnProjector {
                 }
                 self.close_thinking(&mut out);
                 self.begin_output_round(&mut out);
-                self.streamed_text.entry(id.to_string()).or_default().push_str(delta);
+                self.streamed_text
+                    .entry(id.to_string())
+                    .or_default()
+                    .push_str(delta);
                 out.extend(self.text_event(delta.to_string()));
             }
             "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta" => {
-                let (Some(id), Some(delta)) = (params["itemId"].as_str(), params["delta"].as_str()) else {
+                let (Some(id), Some(delta)) = (params["itemId"].as_str(), params["delta"].as_str())
+                else {
                     return out;
                 };
                 if delta.is_empty() {
@@ -171,7 +175,10 @@ impl CodexTurnProjector {
                 out.extend(self.thinking_event(delta.to_string(), false));
             }
             "item/reasoning/summaryPartAdded" => {
-                if params["itemId"].as_str().is_some_and(|id| self.streamed_reasoning.contains(id)) {
+                if params["itemId"]
+                    .as_str()
+                    .is_some_and(|id| self.streamed_reasoning.contains(id))
+                {
                     out.extend(self.thinking_event("\n\n".to_string(), false));
                 }
             }
@@ -195,7 +202,10 @@ impl CodexTurnProjector {
                 if params["willRetry"].as_bool() != Some(true) {
                     let error = &params["error"];
                     self.error = Some((
-                        error["message"].as_str().unwrap_or("Codex error").to_string(),
+                        error["message"]
+                            .as_str()
+                            .unwrap_or("Codex error")
+                            .to_string(),
                         super::errors::error_info_tag(&error["codexErrorInfo"]),
                     ));
                 }
@@ -286,7 +296,10 @@ impl CodexTurnProjector {
                 if code.is_none() {
                     code = self.error.as_ref().and_then(|(_, code)| code.clone());
                 }
-                if let Some(details) = error["additionalDetails"].as_str().filter(|d| !d.trim().is_empty()) {
+                if let Some(details) = error["additionalDetails"]
+                    .as_str()
+                    .filter(|d| !d.trim().is_empty())
+                {
                     message = format!("{message}\n{details}");
                 }
                 out.extend(self.fail_classified(&message, code.as_deref()));
@@ -295,7 +308,9 @@ impl CodexTurnProjector {
     }
 
     fn item_started(&mut self, item: &Value, out: &mut Vec<AgenticEvent>) {
-        let Some(id) = item["id"].as_str() else { return };
+        let Some(id) = item["id"].as_str() else {
+            return;
+        };
         match item["type"].as_str() {
             Some("commandExecution") => {
                 self.close_thinking(out);
@@ -316,7 +331,9 @@ impl CodexTurnProjector {
     }
 
     fn item_completed(&mut self, item: &Value, out: &mut Vec<AgenticEvent>) {
-        let Some(id) = item["id"].as_str() else { return };
+        let Some(id) = item["id"].as_str() else {
+            return;
+        };
         match item["type"].as_str() {
             Some("agentMessage") => {
                 let full = item["text"].as_str().unwrap_or_default();
@@ -349,12 +366,19 @@ impl CodexTurnProjector {
                     self.begin_tool_round(out);
                     self.start_tool(id, "ExecCommand", command_params(item), out);
                 }
-                let output = item["aggregatedOutput"].as_str().unwrap_or_default().to_string();
+                let output = item["aggregatedOutput"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
                 let exit_code = item["exitCode"].as_i64();
                 match item["status"].as_str() {
                     Some("declined") => self.fail_tool(id, "The command was declined", out),
                     Some("failed") if exit_code.is_none() => {
-                        let error = if output.trim().is_empty() { "Command failed".to_string() } else { output };
+                        let error = if output.trim().is_empty() {
+                            "Command failed".to_string()
+                        } else {
+                            output
+                        };
                         self.fail_tool(id, &error, out)
                     }
                     _ => {
@@ -369,9 +393,16 @@ impl CodexTurnProjector {
                 let ids = self.file_card_ids(id);
                 for card in ids {
                     match item["status"].as_str() {
-                        Some("declined") => self.fail_tool(&card, "The file change was declined", out),
+                        Some("declined") => {
+                            self.fail_tool(&card, "The file change was declined", out)
+                        }
                         Some("failed") => self.fail_tool(&card, "The file change failed", out),
-                        _ => self.complete_tool(&card, json!({"result": "Applied", "success": true}), "Applied".into(), out),
+                        _ => self.complete_tool(
+                            &card,
+                            json!({"result": "Applied", "success": true}),
+                            "Applied".into(),
+                            out,
+                        ),
                     }
                 }
             }
@@ -382,7 +413,9 @@ impl CodexTurnProjector {
                 self.complete_compaction(out);
             }
             Some(_) => {
-                let Some((name, params)) = generic_tool(item) else { return };
+                let Some((name, params)) = generic_tool(item) else {
+                    return;
+                };
                 if !self.started_tools.contains(id) {
                     self.begin_tool_round(out);
                     self.start_tool(id, &name, params, out);
@@ -406,7 +439,11 @@ impl CodexTurnProjector {
         self.begin_tool_round(out);
         let mut cards = Vec::with_capacity(changes.len());
         for (index, change) in changes.iter().enumerate() {
-            let card = if index == 0 { item_id.to_string() } else { format!("{item_id}:{index}") };
+            let card = if index == 0 {
+                item_id.to_string()
+            } else {
+                format!("{item_id}:{index}")
+            };
             let (name, params) = file_change_params(change);
             self.start_tool(&card, name, params, out);
             cards.push(card);
@@ -427,17 +464,29 @@ impl CodexTurnProjector {
         }
     }
 
-    fn start_tool(&mut self, tool_id: &str, tool_name: &str, params: Value, out: &mut Vec<AgenticEvent>) {
+    fn start_tool(
+        &mut self,
+        tool_id: &str,
+        tool_name: &str,
+        params: Value,
+        out: &mut Vec<AgenticEvent>,
+    ) {
         if !self.started_tools.insert(tool_id.to_string()) {
             return;
         }
-        let Some(round) = self.open_round.as_mut() else { return };
+        let Some(round) = self.open_round.as_mut() else {
+            return;
+        };
         round.has_tool_calls = true;
         let round_id = round.round_id.clone();
         self.total_tools += 1;
         self.tools.insert(
             tool_id.to_string(),
-            ToolCall { tool_name: tool_name.to_string(), round_id: round_id.clone(), started_at: std::time::Instant::now() },
+            ToolCall {
+                tool_name: tool_name.to_string(),
+                round_id: round_id.clone(),
+                started_at: std::time::Instant::now(),
+            },
         );
         out.push(self.tool_event(
             &round_id,
@@ -449,8 +498,16 @@ impl CodexTurnProjector {
         ));
     }
 
-    fn complete_tool(&mut self, tool_id: &str, result: Value, text: String, out: &mut Vec<AgenticEvent>) {
-        let Some(call) = self.tools.remove(tool_id) else { return };
+    fn complete_tool(
+        &mut self,
+        tool_id: &str,
+        result: Value,
+        text: String,
+        out: &mut Vec<AgenticEvent>,
+    ) {
+        let Some(call) = self.tools.remove(tool_id) else {
+            return;
+        };
         let event = ToolEventData::Completed {
             identity: ToolEventIdentity::direct(tool_id, call.tool_name.clone()),
             result: normalize_tool_result(&call.tool_name, result),
@@ -466,7 +523,9 @@ impl CodexTurnProjector {
     }
 
     fn fail_tool(&mut self, tool_id: &str, error: &str, out: &mut Vec<AgenticEvent>) {
-        let Some(call) = self.tools.remove(tool_id) else { return };
+        let Some(call) = self.tools.remove(tool_id) else {
+            return;
+        };
         let event = ToolEventData::Failed {
             identity: ToolEventIdentity::direct(tool_id, call.tool_name),
             error: error.to_string(),
@@ -529,7 +588,9 @@ impl CodexTurnProjector {
     }
 
     fn complete_compaction(&mut self, out: &mut Vec<AgenticEvent>) {
-        let Some((compression_id, started_at)) = self.compaction.take() else { return };
+        let Some((compression_id, started_at)) = self.compaction.take() else {
+            return;
+        };
         self.compression_count += 1;
         let tokens_before = self.last_context_tokens;
         // Codex reports the compacted size with the next usage update.
@@ -566,7 +627,11 @@ impl CodexTurnProjector {
         let tokens = |key: &str| last.get(key).and_then(Value::as_u64).unwrap_or(0) as usize;
         let input = tokens("inputTokens");
         let output = tokens("outputTokens");
-        let total = last.get("totalTokens").and_then(Value::as_u64).map(|t| t as usize).unwrap_or(input + output);
+        let total = last
+            .get("totalTokens")
+            .and_then(Value::as_u64)
+            .map(|t| t as usize)
+            .unwrap_or(input + output);
         self.last_context_tokens = total;
         Some(AgenticEvent::TokenUsageUpdated {
             session_id: self.session_id.clone(),
@@ -576,7 +641,10 @@ impl CodexTurnProjector {
             input_tokens: input,
             output_tokens: Some(output),
             total_tokens: total,
-            max_context_tokens: usage.get("modelContextWindow").and_then(Value::as_u64).map(|w| w as usize),
+            max_context_tokens: usage
+                .get("modelContextWindow")
+                .and_then(Value::as_u64)
+                .map(|w| w as usize),
             is_subagent: false,
             cached_tokens: Some(tokens("cachedInputTokens")),
             token_details: None,
@@ -617,7 +685,11 @@ impl CodexTurnProjector {
         });
         self.round_index += 1;
         self.total_rounds += 1;
-        self.open_round = Some(OpenRound { round_id, has_tool_calls: false, placeholder: false });
+        self.open_round = Some(OpenRound {
+            round_id,
+            has_tool_calls: false,
+            placeholder: false,
+        });
     }
 
     fn close_thinking(&mut self, out: &mut Vec<AgenticEvent>) {
@@ -628,7 +700,9 @@ impl CodexTurnProjector {
 
     fn close_round(&mut self, out: &mut Vec<AgenticEvent>) {
         self.close_thinking(out);
-        let Some(round) = self.open_round.take() else { return };
+        let Some(round) = self.open_round.take() else {
+            return;
+        };
         out.push(AgenticEvent::ModelRoundCompleted {
             session_id: self.session_id.clone(),
             turn_id: self.turn_id.clone(),
@@ -756,7 +830,11 @@ fn generic_outcome(item: &Value) -> Result<String, String> {
                 })
                 .unwrap_or_default();
             if item["success"] == false || item["status"] == "failed" {
-                Err(if text.is_empty() { "Tool call failed".into() } else { text })
+                Err(if text.is_empty() {
+                    "Tool call failed".into()
+                } else {
+                    text
+                })
             } else {
                 Ok(text)
             }
@@ -795,7 +873,10 @@ pub(crate) fn file_change_params(change: &Value) -> (&'static str, Value) {
     let diff = change["diff"].as_str().unwrap_or_default();
     match change["kind"]["type"].as_str() {
         Some("add") => {
-            let content = if diff.lines().all(|line| line.starts_with('+') || line.is_empty()) {
+            let content = if diff
+                .lines()
+                .all(|line| line.starts_with('+') || line.is_empty())
+            {
                 diff.lines()
                     .filter(|line| !line.starts_with("+++"))
                     .map(|line| line.strip_prefix('+').unwrap_or(line))
@@ -842,9 +923,15 @@ mod tests {
             .iter()
             .map(|event| match event {
                 AgenticEvent::ToolEvent { tool_event, .. } => match tool_event {
-                    ToolEventData::Started { identity, .. } => format!("tool_started:{}", identity.tool_name),
-                    ToolEventData::Completed { identity, .. } => format!("tool_completed:{}", identity.tool_name),
-                    ToolEventData::Failed { identity, .. } => format!("tool_failed:{}", identity.tool_name),
+                    ToolEventData::Started { identity, .. } => {
+                        format!("tool_started:{}", identity.tool_name)
+                    }
+                    ToolEventData::Completed { identity, .. } => {
+                        format!("tool_completed:{}", identity.tool_name)
+                    }
+                    ToolEventData::Failed { identity, .. } => {
+                        format!("tool_failed:{}", identity.tool_name)
+                    }
                     ToolEventData::Cancelled { .. } => "tool_cancelled".into(),
                     _ => "tool_other".into(),
                 },
@@ -856,7 +943,11 @@ mod tests {
                 AgenticEvent::DialogTurnCompleted { .. } => "turn_completed".into(),
                 AgenticEvent::DialogTurnFailed { .. } => "turn_failed".into(),
                 AgenticEvent::DialogTurnCancelled { .. } => "turn_cancelled".into(),
-                other => format!("{other:?}").split_whitespace().next().unwrap_or("").to_string(),
+                other => format!("{other:?}")
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_string(),
             })
             .collect()
     }
@@ -897,16 +988,30 @@ mod tests {
         assert_eq!(
             kinds(&events),
             [
-                "round_started", "thinking:false", "thinking:true",
-                "tool_started:ExecCommand", "tool_completed:ExecCommand",
-                "tool_started:Edit", "tool_completed:Edit",
-                "round_completed", "round_started", "text:Do", "text:ne", "usage",
-                "round_completed", "turn_completed",
+                "round_started",
+                "thinking:false",
+                "thinking:true",
+                "tool_started:ExecCommand",
+                "tool_completed:ExecCommand",
+                "tool_started:Edit",
+                "tool_completed:Edit",
+                "round_completed",
+                "round_started",
+                "text:Do",
+                "text:ne",
+                "usage",
+                "round_completed",
+                "turn_completed",
             ]
         );
         let edit = events.iter().find_map(|event| match event {
-            AgenticEvent::ToolEvent { tool_event: ToolEventData::Started { identity, params, .. }, .. }
-                if identity.tool_name == "Edit" => Some(params.clone()),
+            AgenticEvent::ToolEvent {
+                tool_event:
+                    ToolEventData::Started {
+                        identity, params, ..
+                    },
+                ..
+            } if identity.tool_name == "Edit" => Some(params.clone()),
             _ => None,
         });
         let edit = edit.unwrap();
@@ -917,27 +1022,54 @@ mod tests {
     #[test]
     fn approval_card_is_reused_and_failed_turn_is_classified() {
         let mut projector = CodexTurnProjector::new("s1", "t1", None);
-        let mut events = projector.permission_tool("c1", "ExecCommand", json!({"command":"rm -rf x"}));
+        let mut events =
+            projector.permission_tool("c1", "ExecCommand", json!({"command":"rm -rf x"}));
         events.extend(run(
             &mut projector,
             &[
-                ("item/started", json!({"item":{"type":"commandExecution","id":"c1","command":"rm -rf x",
-                    "status":"inProgress"}})),
-                ("item/completed", json!({"item":{"type":"commandExecution","id":"c1","status":"declined"}})),
-                ("error", json!({"willRetry":true,"error":{"message":"retrying"}})),
-                ("turn/completed", json!({"turn":{"id":"ct1","status":"failed",
-                    "error":{"message":"unexpected status 401","codexErrorInfo":"unauthorized"}}})),
+                (
+                    "item/started",
+                    json!({"item":{"type":"commandExecution","id":"c1","command":"rm -rf x",
+                    "status":"inProgress"}}),
+                ),
+                (
+                    "item/completed",
+                    json!({"item":{"type":"commandExecution","id":"c1","status":"declined"}}),
+                ),
+                (
+                    "error",
+                    json!({"willRetry":true,"error":{"message":"retrying"}}),
+                ),
+                (
+                    "turn/completed",
+                    json!({"turn":{"id":"ct1","status":"failed",
+                    "error":{"message":"unexpected status 401","codexErrorInfo":"unauthorized"}}}),
+                ),
             ],
         ));
         assert_eq!(
             kinds(&events),
-            ["round_started", "tool_started:ExecCommand", "tool_failed:ExecCommand", "round_completed", "turn_failed"]
+            [
+                "round_started",
+                "tool_started:ExecCommand",
+                "tool_failed:ExecCommand",
+                "round_completed",
+                "turn_failed"
+            ]
         );
-        let Some(AgenticEvent::DialogTurnFailed { error, error_category, .. }) = events.last() else {
+        let Some(AgenticEvent::DialogTurnFailed {
+            error,
+            error_category,
+            ..
+        }) = events.last()
+        else {
             panic!("turn failure");
         };
         assert!(error.contains("codex login"), "{error}");
-        assert_eq!(error_category, &Some(openbitfun_events::agentic::ErrorCategory::Auth));
+        assert_eq!(
+            error_category,
+            &Some(openbitfun_events::agentic::ErrorCategory::Auth)
+        );
     }
 
     #[test]
@@ -946,14 +1078,26 @@ mod tests {
         let events = run(
             &mut projector,
             &[
-                ("item/started", json!({"item":{"type":"mcpToolCall","id":"m1","server":"docs","tool":"search",
-                    "arguments":{"q":"x"},"status":"inProgress"}})),
-                ("turn/completed", json!({"turn":{"id":"ct1","status":"interrupted"}})),
+                (
+                    "item/started",
+                    json!({"item":{"type":"mcpToolCall","id":"m1","server":"docs","tool":"search",
+                    "arguments":{"q":"x"},"status":"inProgress"}}),
+                ),
+                (
+                    "turn/completed",
+                    json!({"turn":{"id":"ct1","status":"interrupted"}}),
+                ),
             ],
         );
         assert_eq!(
             kinds(&events),
-            ["round_started", "tool_started:mcp__docs__search", "tool_cancelled", "round_completed", "turn_cancelled"]
+            [
+                "round_started",
+                "tool_started:mcp__docs__search",
+                "tool_cancelled",
+                "round_completed",
+                "turn_cancelled"
+            ]
         );
         assert!(projector.is_finished());
     }

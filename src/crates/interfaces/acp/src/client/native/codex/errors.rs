@@ -125,7 +125,13 @@ pub(crate) fn classify(raw: &str, code: Option<&str>) -> CodexFailure {
         _ => {}
     }
     if lower.contains("launch failed")
-        && has(&["not found", "cannot find", "no such file", "os error 2", "program not found"])
+        && has(&[
+            "not found",
+            "cannot find",
+            "no such file",
+            "os error 2",
+            "program not found",
+        ])
     {
         return failure(
             "Codex CLI was not found. Install it with `npm install -g @openai/codex`, then retry.",
@@ -161,7 +167,10 @@ pub(crate) fn classify(raw: &str, code: Option<&str>) -> CodexFailure {
         );
     }
     if has(&["timed out", "timeout"]) {
-        return failure("Codex did not respond in time. Retry.", ErrorCategory::Timeout);
+        return failure(
+            "Codex did not respond in time. Retry.",
+            ErrorCategory::Timeout,
+        );
     }
     let first = raw
         .lines()
@@ -186,8 +195,11 @@ mod tests {
             ErrorCategory::Auth
         );
         assert_eq!(
-            classify("x", error_info_tag(&json!({"httpConnectionFailed":{"httpStatusCode":502}})).as_deref())
-                .category,
+            classify(
+                "x",
+                error_info_tag(&json!({"httpConnectionFailed":{"httpStatusCode":502}})).as_deref()
+            )
+            .category,
             ErrorCategory::Network
         );
         assert_eq!(
