@@ -96,6 +96,9 @@ struct Compaction {
     id: String,
     tokens_before: usize,
     started_at: std::time::Instant,
+    /// `compact_result: success` arrived; the token counts come with the
+    /// `compact_boundary` frame, which the CLI may send afterwards.
+    succeeded: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -288,10 +291,18 @@ impl ClaudeTurnProjector {
                 id,
                 tokens_before,
                 started_at: std::time::Instant::now(),
+                succeeded: false,
             });
             self.compaction_settled = false;
         }
         if !boundary && outcome.is_none() {
+            return;
+        }
+        if !boundary && outcome == Some("success") && metadata["pre_tokens"].as_u64().is_none() {
+            // Wait for the boundary's token counts instead of settling on 0.
+            if let Some(compaction) = self.compaction.as_mut() {
+                compaction.succeeded = true;
+            }
             return;
         }
         let compaction = self.compaction.take().expect("started compaction");
@@ -309,6 +320,15 @@ impl ClaudeTurnProjector {
             });
             return;
         }
+        self.complete_compaction(compaction, metadata, out);
+    }
+
+    fn complete_compaction(
+        &mut self,
+        compaction: Compaction,
+        metadata: &Value,
+        out: &mut Vec<AgenticEvent>,
+    ) {
         self.compression_count += 1;
         let tokens_before = metadata["pre_tokens"]
             .as_u64()
@@ -685,8 +705,10 @@ impl ClaudeTurnProjector {
                             .iter()
                             .filter_map(Value::as_str)
                             .collect::<Vec<_>>()
-                            .join("
-")
+                            .join(
+                                "
+",
+                            )
                     })
                 })
                 .filter(|text| !text.trim().is_empty())
@@ -699,6 +721,12 @@ impl ClaudeTurnProjector {
         }
         match outcome {
             TurnOutcome::Completed => {
+                if self.compaction.as_ref().is_some_and(|c| c.succeeded) {
+                    // Success was reported but no boundary followed.
+                    let compaction = self.compaction.take().expect("pending compaction");
+                    self.compaction_settled = true;
+                    self.complete_compaction(compaction, &Value::Null, out);
+                }
                 self.fail_compaction("Claude turn ended before compaction completion", out);
                 // A result with tools still open is a protocol gap; close them
                 // so cards do not spin forever.
