@@ -44,9 +44,7 @@
   "presets": {
     "opencode": { "description": "Native ACP support." },
     "dsh": { "description": "Uses OpenBitFun's bundled ACP bridge and the model settings from dsh." },
-    "omp": { "description": "Native ACP support." },
-    "claudeCode": { "description": "Connects through the official ACP adapter." },
-    "codex": { "description": "Connects through the official ACP adapter." }
+    "omp": { "description": "Native ACP support." }
   },
   "registry": {
     "title": "Agents",
