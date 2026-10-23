@@ -1604,3 +1604,56 @@ async fn workspace_binding_locks_after_the_first_transcript() {
     });
     assert!(forked.workspace_bound().await);
 }
+
+#[tokio::test]
+async fn only_the_first_user_turn_generates_a_title_in_the_background() {
+    use openbitfun_core::agentic::session::{ResolvedSessionTitle, SessionTitleMethod};
+    let (session, process, output) = fixture();
+    *session.process.lock().await = Some(process.clone());
+    let calls = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let seen = calls.clone();
+    *session.title_resolver.lock().unwrap() = Arc::new(move |message: String| {
+        seen.lock().unwrap().push(message);
+        Box::pin(async {
+            ResolvedSessionTitle {
+                title: "Fix the build".into(),
+                method: SessionTitleMethod::Fallback,
+            }
+        })
+    });
+    let mut lines = BufReader::new(output).lines();
+    for (turn_id, input) in [("t1", "fix the build"), ("t2", "and the tests")] {
+        session
+            .start_turn(turn_id.into(), input.into(), None)
+            .await
+            .unwrap();
+        lines.next_line().await.unwrap().unwrap();
+        session
+            .route_frame(&process, json!({"type":"result", "subtype":"success"}))
+            .await
+            .unwrap();
+        // Let the detached title task run.
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+    }
+    assert_eq!(*calls.lock().unwrap(), vec!["fix the build".to_string()]);
+    let titles: Vec<_> = session
+        .queue
+        .dequeue_batch(200)
+        .await
+        .into_iter()
+        .filter_map(|e| match e.event {
+            AgenticEvent::SessionTitleGenerated {
+                session_id,
+                title,
+                method,
+            } => Some((session_id, title, method)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        titles,
+        vec![("s1".into(), "Fix the build".into(), "fallback".into())]
+    );
+}

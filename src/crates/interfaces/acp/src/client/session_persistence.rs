@@ -456,7 +456,7 @@ impl AcpSessionPersistence {
             .await
     }
 
-    async fn update_metadata(
+    pub(super) async fn update_metadata(
         &self,
         session_storage_path: &Path,
         openbitfun_session_id: &str,

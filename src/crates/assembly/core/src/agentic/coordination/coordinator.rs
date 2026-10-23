@@ -45,8 +45,8 @@ use crate::agentic::session::revert::{
 };
 use crate::agentic::session::session_store_port::CoreSessionStorePort;
 use crate::agentic::session::{
-    SessionManager, SessionReferenceLocator, TurnAdmissionSessionFacts,
-    INTERRUPTED_TURN_MODEL_BINDING_FINGERPRINT_METADATA_KEY,
+    is_ai_session_title_generation_enabled, SessionManager, SessionReferenceLocator,
+    TurnAdmissionSessionFacts, INTERRUPTED_TURN_MODEL_BINDING_FINGERPRINT_METADATA_KEY,
     INTERRUPTED_TURN_PERMISSION_MODE_METADATA_KEY,
     INTERRUPTED_TURN_REASONING_FINGERPRINT_METADATA_KEY,
     INTERRUPTED_TURN_REASONING_PRESET_METADATA_KEY,
@@ -16031,16 +16031,6 @@ impl openbitfun_runtime_ports::SessionTranscriptReader for ConversationCoordinat
             }
         }
         self.read_session_transcript_locked(request).await
-    }
-}
-
-async fn is_ai_session_title_generation_enabled() -> bool {
-    match crate::service::config::get_global_config_service().await {
-        Ok(service) => service
-            .get_config::<bool>(Some("app.ai_experience.enable_session_title_generation"))
-            .await
-            .unwrap_or(true),
-        Err(_) => true,
     }
 }
 

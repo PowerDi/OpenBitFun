@@ -4,6 +4,7 @@ pub mod claude;
 mod events;
 pub(crate) mod preferences;
 mod process;
+pub(crate) mod title;
 
 use std::path::PathBuf;
 use std::sync::Arc;

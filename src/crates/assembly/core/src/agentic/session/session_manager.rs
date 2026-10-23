@@ -306,6 +306,29 @@ pub struct ResolvedSessionTitle {
     pub method: SessionTitleMethod,
 }
 
+/// Where an `Inherit` session-title task model takes its model from.
+enum TitleModelSource<'a> {
+    /// A Runtime session, looked up before the AI call.
+    Session {
+        id: &'a str,
+        session: Option<Session>,
+    },
+    /// No Runtime session (e.g. a native external-agent session).
+    Detached,
+}
+
+/// Whether first-turn titles may call the configured title model
+/// (`app.ai_experience.enable_session_title_generation`, default on).
+pub async fn is_ai_session_title_generation_enabled() -> bool {
+    match get_global_config_service().await {
+        Ok(service) => service
+            .get_config::<bool>(Some("app.ai_experience.enable_session_title_generation"))
+            .await
+            .unwrap_or(true),
+        Err(_) => true,
+    }
+}
+
 // When a full skill/agent listing baseline is rebuilt at turn R, snapshots whose
 // turn_index < R still contain now-redundant listing diff reminders. We do not
 // eagerly rewrite all historical snapshots; instead restore/rollback sanitize those
@@ -10003,8 +10026,7 @@ impl SessionManager {
     }
 
     async fn try_generate_session_title_with_ai(
-        &self,
-        session_id: &str,
+        source: TitleModelSource<'_>,
         user_message: &str,
         max_length: usize,
     ) -> OpenBitFunResult<Option<String>> {
@@ -10074,10 +10096,28 @@ impl SessionManager {
             crate::service::config::types::TaskModelSelection::Fixed { model_id } => {
                 ai_client_factory.get_client_resolved(model_id).await
             }
+            crate::service::config::types::TaskModelSelection::Inherit
+                if matches!(source, TitleModelSource::Detached) =>
+            {
+                // A detached caller has no Runtime session to inherit from;
+                // use the default primary selection a session without an
+                // explicit model would resolve to.
+                let resolved_model_id =
+                    ai_config
+                        .resolve_model_selection("primary")
+                        .ok_or_else(|| {
+                            OpenBitFunError::AIClient(
+                                "Failed to resolve primary model for session title".to_string(),
+                            )
+                        })?;
+                ai_client_factory.get_client_by_id(&resolved_model_id).await
+            }
             crate::service::config::types::TaskModelSelection::Inherit => {
-                let session = self.get_session(session_id).ok_or_else(|| {
-                    OpenBitFunError::NotFound(format!("Session not found: {session_id}"))
-                })?;
+                let TitleModelSource::Session { id, session } = source else {
+                    unreachable!("detached title source is handled above");
+                };
+                let session = session
+                    .ok_or_else(|| OpenBitFunError::NotFound(format!("Session not found: {id}")))?;
                 let explicit_model_id = session
                     .config
                     .model_id
@@ -10161,13 +10201,40 @@ impl SessionManager {
         max_length: Option<usize>,
         allow_ai: bool,
     ) -> ResolvedSessionTitle {
+        let source = TitleModelSource::Session {
+            id: session_id,
+            session: self.get_session(session_id),
+        };
+        Self::resolve_title_for(source, user_message, max_length, allow_ai).await
+    }
+
+    /// Resolve a title for a session the Runtime does not own (for example a
+    /// native external-agent session). An `Inherit` title model resolves to
+    /// the default `primary` selection; any failure yields the fallback title.
+    pub async fn resolve_detached_session_title(
+        user_message: &str,
+        max_length: Option<usize>,
+        allow_ai: bool,
+    ) -> ResolvedSessionTitle {
+        Self::resolve_title_for(
+            TitleModelSource::Detached,
+            user_message,
+            max_length,
+            allow_ai,
+        )
+        .await
+    }
+
+    async fn resolve_title_for(
+        source: TitleModelSource<'_>,
+        user_message: &str,
+        max_length: Option<usize>,
+        allow_ai: bool,
+    ) -> ResolvedSessionTitle {
         let max_length = max_length.unwrap_or(20).max(1);
 
         if allow_ai {
-            match self
-                .try_generate_session_title_with_ai(session_id, user_message, max_length)
-                .await
-            {
+            match Self::try_generate_session_title_with_ai(source, user_message, max_length).await {
                 Ok(Some(title)) => {
                     return ResolvedSessionTitle {
                         title,
