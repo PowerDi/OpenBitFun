@@ -129,6 +129,7 @@ export const NativeCliStatusPanel: React.FC<NativeCliStatusPanelProps> = ({
               {status?.tooOld ? (
                 <p className="openbitfun-acp-agents__registry-description" role="alert">
                   {t('nativeCli.tooOldDetail', {
+                    name,
                     version: status.version ?? '',
                     minVersion: status.minVersion,
                   })}
@@ -141,7 +142,7 @@ export const NativeCliStatusPanel: React.FC<NativeCliStatusPanelProps> = ({
           ) : probe ? (
             <>
               <p className="openbitfun-acp-agents__registry-description">
-                {t(remoteConnectionId ? 'nativeCli.installHintRemote' : 'nativeCli.installHint')}
+                {t(remoteConnectionId ? 'nativeCli.installHintRemote' : 'nativeCli.installHint', { name })}
               </p>
               {status?.installCommand ? (
                 <code className="openbitfun-acp-agents__registry-description openbitfun-acp-agents__registry-command">
