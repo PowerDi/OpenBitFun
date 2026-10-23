@@ -57,6 +57,18 @@ pub(crate) fn classify(
     let lower = raw.to_lowercase();
     let has = |needles: &[&str]| needles.iter().any(|needle| lower.contains(needle));
     let launch_failed = lower.contains("launch failed");
+    if let Some(line) = raw
+        .lines()
+        .find(|line| line.contains(super::super::MISSING_WORKSPACE_PREFIX))
+    {
+        // Checked before launch; keep the path and guidance verbatim instead
+        // of reporting the spawn failure as a missing CLI.
+        return ClaudeFailure {
+            message: line.trim().to_string(),
+            category: ErrorCategory::InvalidRequest,
+            raw: raw.to_string(),
+        };
+    }
     let (category, message) = if lower.contains("older than the minimum supported version") {
         // The gate's text already carries the found/minimum versions.
         return ClaudeFailure {
@@ -232,5 +244,29 @@ mod tests {
         assert!(old.message.contains("claude update"), "{}", old.message);
         let unknown = classify("\nsomething odd\nmore", None, None);
         assert_eq!(unknown.message, "something odd");
+    }
+
+    #[test]
+    fn missing_worktree_is_not_reported_as_missing_cli() {
+        let gone = std::env::temp_dir().join(format!("obf-missing-{}", uuid::Uuid::new_v4()));
+        let message = crate::client::native::missing_local_workspace(&gone.to_string_lossy(), true)
+            .expect("a missing directory is reported");
+        let failure = classify(
+            &format!("Claude native launch failed: {message}"),
+            None,
+            None,
+        );
+        assert_eq!(failure.category, ErrorCategory::InvalidRequest);
+        assert!(
+            failure.message.contains("no longer exists"),
+            "{}",
+            failure.message
+        );
+        assert!(!failure.message.contains("CLI was not found"));
+        assert!(crate::client::native::missing_local_workspace(
+            &std::env::temp_dir().to_string_lossy(),
+            true
+        )
+        .is_none());
     }
 }

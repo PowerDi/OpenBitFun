@@ -270,6 +270,13 @@ pub trait NativeAgentSession: Send + Sync {
     ) -> OpenBitFunResult<bool>;
     fn commands(&self) -> Vec<AcpAvailableCommand>;
     fn matches_scope(&self, path: &str, remote: Option<&str>) -> bool;
+    /// True once the agent's own transcript is keyed by this session's working
+    /// directory (a turn was submitted, or it resumes/forks an existing
+    /// transcript). A bound session must keep its cwd; an unbound one may be
+    /// reopened under a new scope, e.g. after worktree isolation was applied.
+    async fn workspace_bound(&self) -> bool {
+        true
+    }
     /// Drop the latest turn (`turn_id`) from the agent and its persisted history.
     async fn rollback_last_turn(
         self: Arc<Self>,
@@ -290,6 +297,34 @@ pub trait NativeAgentSession: Send + Sync {
         ))
     }
     async fn shutdown(&self);
+}
+
+/// A prepared session may move to a new cwd/host only while nothing is bound
+/// to the old one; otherwise resume would silently lose the transcript.
+pub(crate) fn scope_change_allowed(label: &str, bound: bool) -> OpenBitFunResult<()> {
+    if bound {
+        return Err(openbitfun_core::util::errors::OpenBitFunError::Validation(format!(
+            "{label} sessions keep the working directory of their first turn; worktree isolation or the workspace cannot change now. Start a new session instead."
+        )));
+    }
+    Ok(())
+}
+
+pub const MISSING_WORKSPACE_PREFIX: &str =
+    "This session's working directory (worktree) no longer exists";
+
+/// Message for a local native session whose cwd is gone (e.g. a reclaimed
+/// worktree), or `None` while it exists. Checked before launch so the spawn
+/// error is not misread as a missing CLI; session data is never touched.
+pub fn missing_local_workspace(path: &str, resumes: bool) -> Option<String> {
+    if std::path::Path::new(path).is_dir() {
+        return None;
+    }
+    Some(if resumes {
+        format!("{MISSING_WORKSPACE_PREFIX}: {path}. The agent resumes its transcript by working directory, so this session cannot continue; start a new session.")
+    } else {
+        format!("{MISSING_WORKSPACE_PREFIX}: {path}. Start a new session.")
+    })
 }
 
 static CLAUDE: claude::ClaudeNativeDriver = claude::ClaudeNativeDriver;

@@ -80,6 +80,9 @@ impl NativeAgentDriver for ClaudeNativeDriver {
                 steering: true,
                 queue: false,
             },
+            // OpenBitFun-managed worktrees only (never `claude --worktree`);
+            // the cwd is fixed once the first turn creates a transcript.
+            worktree: true,
             ..Default::default()
         }
     }
@@ -119,6 +122,12 @@ impl NativeAgentDriver for ClaudeNativeDriver {
                 OpenBitFunError::NotFound(format!("Claude session record not found: {session_id}"))
             })?;
         let (persisted, resume, turn_index) = claude_native_state_from_metadata(&metadata)?;
+        let history = ClaudeHistory::from_metadata(metadata.custom_metadata.as_ref());
+        ensure_bound_cwd(
+            metadata.workspace_path.as_deref(),
+            &workspace_path,
+            resume || history.pending.is_some(),
+        )?;
         let provider_id = persisted.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         uuid::Uuid::parse_str(&provider_id).map_err(|_| {
             OpenBitFunError::Validation(
@@ -149,15 +158,36 @@ impl NativeAgentDriver for ClaudeNativeDriver {
             turn_index,
             notifier,
         );
-        session.apply_history(ClaudeHistory::from_metadata(
-            metadata.custom_metadata.as_ref(),
-        ));
+        session.apply_history(history);
         session.apply_preferences(
             persistence
                 .load_native_preferences(CLIENT_ID, &session_storage_path, &session_id)
                 .await,
         );
         Ok(session)
+    }
+}
+
+/// A transcript-bearing session must launch in the directory it recorded:
+/// Claude finds `--resume` transcripts by cwd. Separators, a trailing slash
+/// and (on Windows) case are not significant.
+fn ensure_bound_cwd(recorded: Option<&str>, requested: &str, bound: bool) -> OpenBitFunResult<()> {
+    let normalize = |path: &str| {
+        let path = path.replace('\\', "/");
+        let path = path.trim_end_matches('/').to_string();
+        if cfg!(windows) {
+            path.to_lowercase()
+        } else {
+            path
+        }
+    };
+    match recorded.map(str::trim).filter(|path| !path.is_empty()) {
+        Some(recorded) if bound && normalize(recorded) != normalize(requested) => {
+            Err(OpenBitFunError::Validation(format!(
+                "This Claude session is bound to {recorded}, where its transcript lives; it cannot continue in {requested}. Start a new session instead."
+            )))
+        }
+        _ => Ok(()),
     }
 }
 
@@ -337,6 +367,18 @@ fn claude_native_state_from_metadata(
 mod claude_native_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn bound_session_keeps_its_recorded_cwd() {
+        let repo = "D:/repo";
+        let worktree = "D:/repo-worktrees/wt-1";
+        // Unbound sessions (no transcript yet) may move, e.g. into a worktree.
+        assert!(ensure_bound_cwd(Some(repo), worktree, false).is_ok());
+        assert!(ensure_bound_cwd(None, worktree, true).is_ok());
+        assert!(ensure_bound_cwd(Some(worktree), r"D:\repo-worktrees\wt-1\", true).is_ok());
+        let error = ensure_bound_cwd(Some(repo), worktree, true).unwrap_err();
+        assert!(error.to_string().contains("Start a new session"), "{error}");
+    }
 
     #[test]
     fn legacy_metadata_round_trip_preserves_unknown_fields_and_provider_uuid() {
