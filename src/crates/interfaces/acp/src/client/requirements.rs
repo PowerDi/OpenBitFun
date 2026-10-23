@@ -493,7 +493,7 @@ fn render_remote_env_prefix(env: Option<&HashMap<String, String>>) -> String {
     format!("{} ", assignments.join(" "))
 }
 
-fn find_executable(command: &str) -> Option<PathBuf> {
+pub(crate) fn find_executable(command: &str) -> Option<PathBuf> {
     find_executable_with_path(command, None)
 }
 
