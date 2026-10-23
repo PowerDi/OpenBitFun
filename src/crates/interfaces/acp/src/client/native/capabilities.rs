@@ -118,5 +118,6 @@ mod tests {
         assert!(caps.history.rollback_last_turn && caps.history.fork);
         assert!(caps.history.import_transcripts);
         assert!(caps.input.images && caps.input.steering && !caps.input.queue);
+        assert!(caps.worktree);
     }
 }

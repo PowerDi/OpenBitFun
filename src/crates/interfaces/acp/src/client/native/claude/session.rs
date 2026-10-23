@@ -772,6 +772,15 @@ impl ClaudeNativeSession {
         self.workspace_path == path && self.remote_connection_id.as_deref() == remote
     }
 
+    /// Claude stores transcripts under `~/.claude/projects/<encoded cwd>`, so
+    /// once one exists (or is resumed/forked from) the cwd is fixed.
+    pub(crate) async fn workspace_bound(&self) -> bool {
+        self.resume.load(Ordering::Acquire)
+            || self.history().pending.is_some()
+            || !self.history().turns.is_empty()
+            || self.state.lock().await.projector.is_some()
+    }
+
     pub async fn start_turn(
         self: &Arc<Self>,
         turn_id: String,
@@ -1070,6 +1079,14 @@ impl ClaudeNativeSession {
                     .map_err(|_| service_error("Previous Claude process has not terminated; refusing concurrent resume"))?
                     .map_err(|_| service_error("Claude process supervisor was lost"))?;
                 *completion = None;
+            }
+        }
+        if self.remote_connection_id.is_none() {
+            if let Some(message) = super::super::missing_local_workspace(
+                &self.workspace_path,
+                self.resume.load(Ordering::Acquire),
+            ) {
+                return Err(service_error(message));
             }
         }
         let executable = local_executable();
@@ -2083,6 +2100,9 @@ impl super::super::NativeAgentSession for ClaudeNativeSession {
     }
     fn matches_scope(&self, path: &str, remote: Option<&str>) -> bool {
         ClaudeNativeSession::matches_scope(self, path, remote)
+    }
+    async fn workspace_bound(&self) -> bool {
+        ClaudeNativeSession::workspace_bound(self).await
     }
     async fn rollback_last_turn(
         self: Arc<Self>,

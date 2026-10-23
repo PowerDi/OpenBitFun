@@ -1583,3 +1583,24 @@ async fn steer_taken_after_the_turn_ends_opens_its_own_turn() {
     );
     assert_eq!(history.turns[1].last_uuid.as_deref(), Some("a-3"));
 }
+
+#[tokio::test]
+async fn workspace_binding_locks_after_the_first_transcript() {
+    use crate::client::native::scope_change_allowed;
+    let (session, _process, _output) = fixture();
+    // Fresh session: nothing is keyed by its cwd, so it may be reopened.
+    assert!(!session.workspace_bound().await);
+    assert!(scope_change_allowed("Claude", session.workspace_bound().await).is_ok());
+    // A submitted turn (or a resumed transcript) fixes the cwd.
+    session.resume.store(true, Ordering::Release);
+    assert!(session.workspace_bound().await);
+    let error = scope_change_allowed("Claude", true).unwrap_err();
+    assert!(error.to_string().contains("worktree isolation"), "{error}");
+    // A fork/import branch resumes another transcript by cwd before its first turn.
+    let (forked, _process, _output) = fixture();
+    forked.history().pending = Some(PendingResume {
+        fork_from: Some(uuid::Uuid::new_v4().to_string()),
+        resume_at: None,
+    });
+    assert!(forked.workspace_bound().await);
+}

@@ -539,14 +539,30 @@ pub async fn start_acp_dialog_turn(
         .original_user_input
         .clone()
         .unwrap_or_else(|| request.user_input.clone());
-    let scope = resolve_optional_acp_workspace_scope(
+    let scope = match resolve_optional_acp_workspace_scope(
         &state,
         request.workspace_id.as_deref(),
         request.workspace_path.as_deref(),
         request.remote_connection_id.as_deref(),
         request.remote_ssh_host.as_deref(),
     )
-    .await?;
+    .await
+    {
+        Ok(scope) => scope,
+        Err(error) => {
+            // A reclaimed worktree also drops its workspace record; name the
+            // missing directory instead of an unknown workspace ID.
+            let missing = service
+                .is_native_client(&request.client_id)
+                .then(|| request.workspace_path.as_deref())
+                .flatten()
+                .filter(|_| request.remote_connection_id.is_none())
+                .and_then(|path| {
+                    openbitfun_acp::client::native::missing_local_workspace(path, true)
+                });
+            return Err(missing.unwrap_or(error));
+        }
+    };
     let (workspace_path, remote_connection_id, session_storage_path) = match scope {
         Some(scope) => (
             Some(scope.workspace_path),

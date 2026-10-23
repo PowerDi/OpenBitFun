@@ -71,6 +71,9 @@ struct SessionBindingContext {
     /// Why an actual transition is forbidden. An already-satisfied binding
     /// request remains a safe, read-only no-op even when this is set.
     transition_blocker: Option<WorktreeError>,
+    /// Session storage of an externally projected (ACP) session. Those
+    /// sessions never enter the SessionManager; their binding is metadata only.
+    external_storage_path: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +105,7 @@ async fn load_binding_context(
 
     let workspace_id;
     let project_workspace_id;
+    let mut external_storage_path = None;
     let (workspace_path, project_workspace_path, execution_target, transition_blocker) =
         if let Some(mut session) = session {
             crate::agentic::workspace::normalize_session_workspace(&mut session.config)
@@ -233,7 +237,15 @@ async fn load_binding_context(
                 .map_err(|error_| error(WorktreeErrorCode::IoFailed, error_.to_string()))?;
             workspace_id = config.workspace_id.clone();
             project_workspace_id = config.project_workspace_id.clone();
-            let transition_blocker = if metadata.turn_count > 0 {
+            let externally_projected = is_externally_projected(&metadata);
+            if externally_projected {
+                external_storage_path = Some(session_storage_root.clone());
+            }
+            // An external agent's projection may not have refreshed the turn
+            // count yet; any recorded turn means its transcript is bound here.
+            let has_turns =
+                metadata.turn_count > 0 || (externally_projected && metadata.last_turn.is_some());
+            let transition_blocker = if has_turns {
                 Some(error(
                     WorktreeErrorCode::WorktreeBusy,
                     "Worktree isolation can only be changed before the session's first message",
@@ -282,7 +294,36 @@ async fn load_binding_context(
         project_workspace_path,
         execution_target,
         transition_blocker,
+        external_storage_path,
     })
+}
+
+/// External agents (ACP, native drivers) own their conversation; the
+/// SessionManager must not restore them, so their binding stays in metadata.
+fn is_externally_projected(metadata: &openbitfun_services_core::session::SessionMetadata) -> bool {
+    metadata
+        .custom_metadata
+        .as_ref()
+        .and_then(|custom| custom.get(openbitfun_core_types::SESSION_PROVIDER_METADATA_KEY))
+        .and_then(serde_json::Value::as_str)
+        == Some(openbitfun_core_types::SESSION_PROVIDER_ACP)
+}
+
+/// Apply a new execution binding to externally projected session metadata.
+fn apply_external_binding(
+    metadata: &mut openbitfun_services_core::session::SessionMetadata,
+    project_workspace_path: &str,
+    execution_target: &SessionExecutionTarget,
+    workspace_id: Option<String>,
+    project_workspace_id: Option<String>,
+) {
+    metadata.workspace_path = Some(execution_target.root_path.clone());
+    metadata.project_workspace_path = Some(project_workspace_path.to_string());
+    metadata.execution_target = Some(execution_target.clone());
+    metadata.workspace_id = workspace_id;
+    if project_workspace_id.is_some() {
+        metadata.project_workspace_id = project_workspace_id;
+    }
 }
 
 /// A persisted session names its workspace host; anything but the local host
@@ -313,6 +354,7 @@ async fn rebind(
     execution_target: SessionExecutionTarget,
     workspace_id: Option<String>,
     project_workspace_id: Option<String>,
+    external_storage_path: Option<&std::path::Path>,
 ) -> Result<WorktreeSessionBindingResult, WorktreeError> {
     let coordinator = get_global_coordinator().ok_or_else(|| {
         error(
@@ -326,6 +368,28 @@ async fn rebind(
             "Workspace ID is required for a session binding",
         )
     })?);
+
+    if let Some(storage_path) = external_storage_path {
+        rebind_external(
+            &coordinator.get_session_manager(),
+            storage_path,
+            session_id,
+            project_workspace_path,
+            &execution_target,
+            workspace_id.clone(),
+            project_workspace_id.clone(),
+        )
+        .await?;
+        return Ok(WorktreeSessionBindingResult {
+            project_workspace_id,
+            session_id: session_id.to_string(),
+            workspace_path: execution_target.root_path.clone(),
+            project_workspace_path: project_workspace_path.to_string(),
+            workspace_id,
+            execution_target,
+            retained_worktree_path: None,
+        });
+    }
 
     coordinator
         .get_session_manager()
@@ -361,6 +425,58 @@ async fn rebind(
         execution_target,
         retained_worktree_path: None,
     })
+}
+
+/// Rebind an externally projected session by rewriting its metadata only.
+/// Re-checks emptiness right before the write; the external agent records
+/// its first turn there, and its transcript is keyed by this directory.
+async fn rebind_external(
+    session_manager: &crate::agentic::session::SessionManager,
+    storage_path: &std::path::Path,
+    session_id: &str,
+    project_workspace_path: &str,
+    execution_target: &SessionExecutionTarget,
+    workspace_id: Option<String>,
+    project_workspace_id: Option<String>,
+) -> Result<(), WorktreeError> {
+    let metadata = session_manager
+        .load_session_metadata(storage_path, session_id)
+        .await
+        .map_err(|load_error| {
+            error(
+                WorktreeErrorCode::IoFailed,
+                format!("Failed to load session metadata: {load_error}"),
+            )
+        })?
+        .ok_or_else(|| {
+            error(
+                WorktreeErrorCode::WorktreeNotFound,
+                format!("Session not found: {session_id}"),
+            )
+        })?;
+    if metadata.turn_count > 0 || metadata.last_turn.is_some() {
+        return Err(error(
+            WorktreeErrorCode::WorktreeBusy,
+            "Worktree isolation can only be changed before the session's first message",
+        ));
+    }
+    session_manager
+        .update_session_metadata(storage_path, session_id, |metadata| {
+            apply_external_binding(
+                metadata,
+                project_workspace_path,
+                execution_target,
+                workspace_id,
+                project_workspace_id,
+            )
+        })
+        .await
+        .map_err(|update_error| {
+            error(
+                WorktreeErrorCode::IoFailed,
+                format!("Failed to rebind session workspace: {update_error}"),
+            )
+        })
 }
 
 impl WorktreeService {
@@ -419,6 +535,7 @@ impl WorktreeService {
             created.execution_target,
             created.worktree.workspace_id.clone(),
             context.project_workspace_id.clone(),
+            context.external_storage_path.as_deref(),
         )
         .await
         {
@@ -466,6 +583,7 @@ impl WorktreeService {
             SessionExecutionTarget::local(context.project_workspace_path.clone()),
             context.project_workspace_id.clone(),
             context.project_workspace_id.clone(),
+            context.external_storage_path.as_deref(),
         )
         .await?;
 
@@ -560,6 +678,7 @@ mod tests {
                 WorktreeErrorCode::WorktreeBusy,
                 "Worktree isolation can only be changed before the session's first message",
             )),
+            external_storage_path: None,
         };
 
         assert_eq!(

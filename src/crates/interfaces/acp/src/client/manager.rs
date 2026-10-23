@@ -271,16 +271,28 @@ impl AcpClientService {
             OpenBitFunError::Validation(format!("Unknown native agent: {client_id}"))
         })?;
         let _guard = self.native_preparation.lock().await;
-        if let Some(session) = self.native_sessions.get(session_id) {
-            if session.client_id() != client_id
-                || !session.matches_scope(workspace_path, remote_connection_id)
-            {
+        let cached = self
+            .native_sessions
+            .get(session_id)
+            .map(|entry| entry.clone());
+        if let Some(session) = cached {
+            if session.client_id() != client_id {
                 return Err(OpenBitFunError::Validation(format!(
                     "{} session workspace or host changed; refusing local fallback",
                     driver.session_label(),
                 )));
             }
-            return Ok(session.clone());
+            if session.matches_scope(workspace_path, remote_connection_id) {
+                return Ok(session);
+            }
+            native::scope_change_allowed(driver.session_label(), session.workspace_bound().await)?;
+            // Nothing is keyed by the old cwd yet (e.g. the session was moved
+            // into a worktree before its first turn): reopen in the new scope.
+            log::info!(
+                "Reopening unbound native session in a new workspace scope: session_id={session_id}"
+            );
+            session.shutdown().await;
+            self.native_sessions.remove(session_id);
         }
         let queue = openbitfun_core::agentic::coordination::get_global_coordinator()
             .ok_or_else(|| OpenBitFunError::service("Conversation coordinator is not initialized"))?
