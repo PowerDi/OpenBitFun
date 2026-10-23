@@ -187,3 +187,110 @@ pub(crate) fn migrate_legacy_session_metadata(metadata: &mut SessionMetadata) ->
     metadata.custom_metadata = Some(Value::Object(custom));
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::config::AcpClientPermissionMode;
+
+    fn legacy_session(agent_type: &str, custom: Value) -> SessionMetadata {
+        // Shape written by the retired presets, as read back from disk.
+        let mut metadata = SessionMetadata::new(
+            "s1".into(),
+            "Old".into(),
+            agent_type.into(),
+            "primary".into(),
+        );
+        metadata.custom_metadata = Some(custom);
+        let wire = serde_json::to_value(&metadata).unwrap();
+        serde_json::from_value(wire).unwrap()
+    }
+
+    #[test]
+    fn legacy_claude_session_resumes_natively_with_its_claude_uuid() {
+        let id = "11111111-1111-4111-8111-111111111111";
+        let mut metadata = legacy_session(
+            "acp:claude-code",
+            json!({"provider":"acp","acpClientId":"claude-code","acpRemoteSessionId":id,
+                   "acpResumeStrategy":"load","futureField":1}),
+        );
+        assert!(migrate_legacy_session_metadata(&mut metadata));
+        assert_eq!(metadata.agent_type, "acp:claude-native");
+        let custom = metadata.custom_metadata.clone().unwrap();
+        assert_eq!(custom["acpClientId"], "claude-native");
+        assert_eq!(custom["acpRemoteSessionId"], id);
+        assert_eq!(custom["acpResumeStrategy"], "claude-native-stream-json");
+        assert_eq!(custom["acpLegacyClientId"], "claude-code");
+        assert_eq!(custom["futureField"], 1);
+        assert!(custom.get(CUSTOM_METADATA_LEGACY_NOTICE_KEY).is_none());
+        // Idempotent: a migrated record is left alone.
+        assert!(!migrate_legacy_session_metadata(&mut metadata));
+    }
+
+    #[test]
+    fn legacy_codex_session_starts_fresh_and_keeps_the_old_id() {
+        let mut metadata = legacy_session(
+            "acp:codex",
+            json!({"acpClientId":"codex","acpRemoteSessionId":"0199-legacy",
+                   "acpResumeStrategy":"resume"}),
+        );
+        assert!(migrate_legacy_session_metadata(&mut metadata));
+        assert_eq!(metadata.agent_type, "acp:codex-native");
+        let custom = metadata.custom_metadata.clone().unwrap();
+        assert_eq!(custom["acpClientId"], "codex-native");
+        assert_eq!(custom["acpRemoteSessionId"], Value::Null);
+        assert_eq!(custom["acpLegacyRemoteSessionId"], "0199-legacy");
+        assert_eq!(custom["acpResumeStrategy"], "codex-native-prepared");
+        assert!(custom[CUSTOM_METADATA_LEGACY_NOTICE_KEY].is_string());
+        assert!(!migrate_legacy_session_metadata(&mut metadata));
+    }
+
+    #[test]
+    fn unrelated_sessions_are_not_migrated() {
+        for (agent_type, client) in [("acp:omp", "omp"), ("acp:codex-native", "codex-native")] {
+            let mut metadata = legacy_session(agent_type, json!({ "acpClientId": client }));
+            assert!(!migrate_legacy_session_metadata(&mut metadata));
+        }
+    }
+
+    fn config(command: &str, args: &[&str]) -> AcpClientConfig {
+        AcpClientConfig {
+            name: None,
+            command: command.into(),
+            args: args.iter().map(|a| (*a).to_string()).collect(),
+            env: HashMap::new(),
+            enabled: true,
+            readonly: false,
+            subagent: Default::default(),
+            permission_mode: AcpClientPermissionMode::Ask,
+        }
+    }
+
+    #[test]
+    fn retired_defaults_are_dropped_and_customized_entries_kept() {
+        let legacy: AcpClientConfigFile = serde_json::from_value(json!({"acpClients":{
+            "claude-code": {"command":"npx","args":["--yes","@zed-industries/claude-code-acp@latest"]},
+            "codex": {"name":"Pinned","command":"npx","args":["--yes","@zed-industries/codex-acp@0.16.0"]},
+            "codex-acp": {"command":"codex-acp"},
+            "omp": {"command":"omp","args":["acp"]}
+        }}))
+        .unwrap();
+        let mut file = legacy;
+        migrate_retired_preset_configs(&mut file);
+        assert!(!file.acp_clients.contains_key("claude-code"));
+        assert!(!file.acp_clients.contains_key("codex"));
+        assert_eq!(
+            file.acp_clients["codex-acp-2"].name.as_deref(),
+            Some("Pinned")
+        );
+        assert_eq!(file.acp_clients["codex-acp"].command, "codex-acp");
+        assert!(file.acp_clients.contains_key("omp"));
+        let before = file.acp_clients.len();
+        migrate_retired_preset_configs(&mut file);
+        assert_eq!(file.acp_clients.len(), before);
+        // A default with user env is a customization.
+        let mut env = config("npx", &["--yes", "@agentclientprotocol/codex-acp@latest"]);
+        env.env.insert("CODEX_HOME".into(), "/x".into());
+        assert!(!is_retired_default("codex", &env));
+    }
+}

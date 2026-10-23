@@ -926,7 +926,8 @@ impl CodexNativeSession {
             projector.mark_manual_compaction();
         }
         let mut opening = projector.open_pending_round();
-        if let Some(notice) = lock(&self.legacy_notice).take() {
+        let notice = lock(&self.legacy_notice).take();
+        if let Some(notice) = notice {
             opening.extend(projector.notice_event(format!(
                 "{notice}
 
