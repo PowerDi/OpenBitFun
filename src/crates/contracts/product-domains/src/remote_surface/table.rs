@@ -788,6 +788,7 @@ pub(super) const OPERATIONS: &[OperationDefinition] = &[
     op("update_external_integration_policy_command",                 Unsupported, Proxied,          HANDLED),
     op("update_mcp_remote_auth",                                     Unaudited,   Proxied,          CLI_NOT_IMPLEMENTED),
     op("update_miniapp",                                             Unaudited,   Proxied,          CLI_NOT_IMPLEMENTED),
+    op("update_native_agent_cli",                                    Unsupported, Proxied,          CLI_NOT_IMPLEMENTED),
     op("update_session_mode",                                        Routed,      Proxied,          HANDLED),
     op("update_session_model",                                       Unaudited,   Proxied,          HANDLED),
     op("update_session_model_target", Agnostic, Proxied, HANDLED),

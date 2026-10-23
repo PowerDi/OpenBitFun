@@ -40,6 +40,7 @@ import {
   type AcpRequirementProbeItem,
 } from '../../api/service-api/ACPClientAPI';
 import { systemAPI } from '../../api/service-api/SystemAPI';
+import { NativeCliStatusPanel } from './NativeCliStatusPanel';
 import { sshApi } from '@/features/ssh-remote/sshApi';
 import type { SavedConnection } from '@/features/ssh-remote/types';
 import { useNotification } from '@/shared/notification-system';
@@ -1235,6 +1236,13 @@ const AcpAgentsConfig = forwardRef<AcpAgentsConfigHandle, AcpAgentsConfigProps>(
     });
   }, [notifyError, t]);
 
+  // Native drivers (e.g. claude-native) are not ACP config entries; their
+  // CLI install/update state is shown from the requirement probe instead.
+  const nativeCliClients = useMemo(
+    () => clients.filter(client => client.capabilities && (!clientIds || clientIds.includes(client.id))),
+    [clientIds, clients]
+  );
+
   const remoteAgentIds = useMemo(() => {
     const ids = new Set<string>([
       ...PRESETS.map(preset => preset.id),
@@ -1801,6 +1809,16 @@ const AcpAgentsConfig = forwardRef<AcpAgentsConfigHandle, AcpAgentsConfigProps>(
                   </div>
                 );
               })}
+              {nativeCliClients.map(client => (
+                <NativeCliStatusPanel
+                  key={client.id}
+                  clientId={client.id}
+                  name={client.name}
+                  probe={probesById.get(client.id)}
+                  checking={probingRequirements}
+                  onRefresh={() => void refreshRequirementProbes({ force: true })}
+                />
+              ))}
             </div>
           )}
           </FieldGroup>
@@ -2130,6 +2148,17 @@ const AcpAgentsConfig = forwardRef<AcpAgentsConfigHandle, AcpAgentsConfigProps>(
                             </div>
                           );
                         })}
+                        {nativeCliClients.map(client => (
+                          <NativeCliStatusPanel
+                            key={client.id}
+                            clientId={client.id}
+                            name={client.name}
+                            probe={remoteProbesById.get(client.id)}
+                            checking={probingRemote || !remoteProbeLoaded}
+                            remoteConnectionId={connection.id}
+                            onRefresh={() => void refreshRemoteRequirementProbes(connection.id, { force: true })}
+                          />
+                        ))}
                       </div>
                     </div>
                   );

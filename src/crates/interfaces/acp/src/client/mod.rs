@@ -18,7 +18,7 @@ mod transport;
 pub use config::{
     AcpClientConfig, AcpClientConfigFile, AcpClientInfo, AcpClientPermissionMode,
     AcpClientRequirementProbe, AcpClientStatus, AcpClientSubagentConfig, AcpRequirementProbeItem,
-    RemoteAcpClientRequirementSnapshot,
+    NativeCliInstallMethod, NativeCliStatus, RemoteAcpClientRequirementSnapshot,
 };
 pub use manager::{
     AcpClientPermissionResponse, AcpClientService, AcpSessionConfigValue,

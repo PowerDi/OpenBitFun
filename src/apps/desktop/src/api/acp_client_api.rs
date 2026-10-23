@@ -352,6 +352,22 @@ pub async fn install_acp_client_cli(
         .map_err(|e| e.to_string())
 }
 
+/// Runs a native agent's own CLI update (`claude update`) on the local host.
+#[tauri::command]
+pub async fn update_native_agent_cli(
+    state: State<'_, AppState>,
+    request: AcpClientIdRequest,
+) -> Result<String, String> {
+    let service = state
+        .acp_client_service
+        .as_ref()
+        .ok_or_else(|| "ACP client service not initialized".to_string())?;
+    service
+        .update_native_client_cli(&request.client_id, request.remote_connection_id.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn create_acp_flow_session(
     state: State<'_, AppState>,

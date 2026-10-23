@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "fnv1a64:32b93ea338446a46",
+  "digest": "fnv1a64:78c46244874a4dfb",
   "retiredCommandPrefixes": [
     {
       "prefix": "lsp_",
@@ -8346,6 +8346,18 @@
       "id": "update_miniapp",
       "surface": "tauri_command",
       "remoteWorkspace": "LegacyUnaudited",
+      "peer": {
+        "kind": "proxied"
+      },
+      "cliPeer": {
+        "kind": "unsupported",
+        "reason": "the CLI peer host has no handler for this command"
+      }
+    },
+    {
+      "id": "update_native_agent_cli",
+      "surface": "tauri_command",
+      "remoteWorkspace": "RemoteUnsupported",
       "peer": {
         "kind": "proxied"
       },

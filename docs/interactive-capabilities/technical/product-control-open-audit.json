@@ -3572,7 +3572,8 @@
       },
       "evidence": [
         "command:install_acp_client_cli",
-        "command:predownload_acp_client_adapter"
+        "command:predownload_acp_client_adapter",
+        "command:update_native_agent_cli"
       ]
     },
     {

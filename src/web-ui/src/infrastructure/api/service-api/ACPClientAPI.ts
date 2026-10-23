@@ -70,12 +70,26 @@ export interface AcpRequirementProbeItem {
   error?: string;
 }
 
+export type NativeCliInstallMethod = 'native' | 'npm' | 'homebrew' | 'winget' | 'unknown';
+
+/** Install/version/update facts for a native driver's CLI; absent on older hosts. */
+export interface NativeCliStatus {
+  installMethod: NativeCliInstallMethod;
+  version?: string | null;
+  minVersion: string;
+  tooOld: boolean;
+  updateSupported: boolean;
+  installCommand?: string | null;
+  docsUrl?: string | null;
+}
+
 export interface AcpClientRequirementProbe {
   id: string;
   tool: AcpRequirementProbeItem;
   adapter?: AcpRequirementProbeItem;
   runnable: boolean;
   notes: string[];
+  nativeCli?: NativeCliStatus;
 }
 
 export interface AcpClientIdRequest {
@@ -510,6 +524,16 @@ export class ACPClientAPI {
     ACPClientAPI.invalidateClientListCache();
     ACPClientAPI.invalidateRequirementProbeCache();
     window.dispatchEvent(new Event('openbitfun:acp-requirements-changed'));
+  }
+
+  /** Runs the native agent's own CLI update locally; resolves to the CLI output. */
+  static async updateNativeClientCli(request: AcpClientIdRequest): Promise<string> {
+    const scope = getActiveSurfaceScope();
+    const output = await api.invoke<string>('update_native_agent_cli', { request });
+    scope.assertCurrent('publish ACP client requirements');
+    ACPClientAPI.invalidateRequirementProbeCache();
+    window.dispatchEvent(new Event('openbitfun:acp-requirements-changed'));
+    return output;
   }
 
   static async stopClient(request: AcpClientIdRequest): Promise<void> {

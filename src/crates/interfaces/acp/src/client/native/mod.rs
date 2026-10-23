@@ -95,6 +95,22 @@ pub trait NativeAgentDriver: Send + Sync {
     fn command(&self) -> &'static str;
     fn local_executable(&self) -> PathBuf;
     fn capabilities(&self) -> NativeAgentCapabilities;
+    /// Install/version/update facts derived from a requirement probe of
+    /// `command()` on a host. `windows` is the probed host's OS.
+    fn cli_status(
+        &self,
+        _tool: &super::AcpRequirementProbeItem,
+        _windows: bool,
+        _remote: bool,
+    ) -> Option<super::config::NativeCliStatus> {
+        None
+    }
+    /// Update the CLI in place on the local host; returns the CLI output.
+    async fn update_cli(&self) -> OpenBitFunResult<String> {
+        Err(openbitfun_core::util::errors::OpenBitFunError::Validation(
+            format!("{} does not support updating its CLI", self.session_label()),
+        ))
+    }
     /// Custom-metadata keys for a session forked from `source` through
     /// `turn_id`; `copied_turn_ids` lists the copied turns in storage order.
     /// The host copies OpenBitFun turns; the driver owns how its agent state

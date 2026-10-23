@@ -1777,6 +1777,7 @@ pub async fn run() {
             probe_acp_client_requirements,
             predownload_acp_client_adapter,
             install_acp_client_cli,
+            update_native_agent_cli,
             stop_acp_client,
             load_acp_json_config,
             save_acp_json_config,

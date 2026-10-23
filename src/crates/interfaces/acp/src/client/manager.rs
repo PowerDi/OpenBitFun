@@ -521,11 +521,12 @@ impl AcpClientService {
             let cached = self.remote_capability_store.get(remote_connection_id).await;
             if force_refresh
                 || cached.as_ref().is_some_and(|snapshot| {
+                    // Snapshots from older builds lack native drivers or
+                    // their CLI status; re-probe instead of showing gaps.
                     native::drivers().iter().any(|driver| {
-                        !snapshot
-                            .probes
-                            .iter()
-                            .any(|probe| probe.id == driver.client_id())
+                        !snapshot.probes.iter().any(|probe| {
+                            probe.id == driver.client_id() && probe.native_cli.is_some()
+                        })
                     })
                 })
             {
@@ -583,6 +584,16 @@ impl AcpClientService {
                 }
             }
 
+            let native_cli = self
+                .native_driver(&id)
+                .and_then(|driver| driver.cli_status(&tool, cfg!(windows), false));
+            if let Some(status) = native_cli.as_ref().filter(|status| status.too_old) {
+                notes.push(format!(
+                    "{} is older than the minimum supported version {}",
+                    spec.tool_command, status.min_version
+                ));
+            }
+
             debug!(
                 "ACP requirement probe: id={} tool_installed={} adapter_installed={} runnable={} notes={:?}",
                 id,
@@ -598,6 +609,7 @@ impl AcpClientService {
                 adapter,
                 runnable,
                 notes,
+                native_cli,
             });
         }
 
@@ -687,6 +699,17 @@ impl AcpClientService {
                 }
             }
 
+            // Remote workspace hosts are POSIX; updating there is not offered.
+            let native_cli = self
+                .native_driver(&id)
+                .and_then(|driver| driver.cli_status(&tool, false, true));
+            if let Some(status) = native_cli.as_ref().filter(|status| status.too_old) {
+                notes.push(format!(
+                    "{} on the remote host is older than the minimum supported version {}",
+                    spec.tool_command, status.min_version
+                ));
+            }
+
             debug!(
                 "Remote ACP requirement probe: id={} tool_installed={} adapter_installed={} runnable={} notes={:?}",
                 id,
@@ -702,6 +725,7 @@ impl AcpClientService {
                 adapter,
                 runnable,
                 notes,
+                native_cli,
             });
         }
 
@@ -753,6 +777,33 @@ impl AcpClientService {
         } else {
             install_npm_cli_package(package).await
         }
+    }
+
+    /// Run a native driver's own CLI update on the local host. Remote hosts
+    /// are refused explicitly; running sessions keep their current binary.
+    pub async fn update_native_client_cli(
+        self: &Arc<Self>,
+        client_id: &str,
+        remote_connection_id: Option<&str>,
+    ) -> OpenBitFunResult<String> {
+        let driver = self.native_driver(client_id).ok_or_else(|| {
+            OpenBitFunError::config(format!("'{client_id}' is not a native agent client"))
+        })?;
+        if remote_connection_id.is_some_and(|id| !id.trim().is_empty()) {
+            return Err(OpenBitFunError::Validation(format!(
+                "Updating {} on a remote host is not supported; run the update on that host",
+                driver.name()
+            )));
+        }
+        info!("Updating native agent CLI: client_id={client_id}");
+        let result = driver.update_cli().await;
+        match &result {
+            Ok(_) => info!("Native agent CLI update finished: client_id={client_id}"),
+            Err(error) => {
+                warn!("Native agent CLI update failed: client_id={client_id} error={error}")
+            }
+        }
+        result
     }
 
     pub async fn start_client_for_session(
