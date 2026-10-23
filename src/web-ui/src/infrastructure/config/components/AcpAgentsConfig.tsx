@@ -569,10 +569,6 @@ const AcpAgentsConfig = forwardRef<AcpAgentsConfigHandle, AcpAgentsConfigProps>(
         return t('presets.dsh.description');
       case 'omp':
         return t('presets.omp.description');
-      case 'claude-code':
-        return t('presets.claudeCode.description');
-      case 'codex':
-        return t('presets.codex.description');
       default:
         return '';
     }
