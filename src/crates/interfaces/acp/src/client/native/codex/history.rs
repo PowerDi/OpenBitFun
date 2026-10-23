@@ -35,23 +35,23 @@ pub(super) struct CodexHistory {
 
 impl CodexHistory {
     /// Tolerant read: unknown or malformed history yields an empty record.
-    pub fn from_metadata(custom: Option<&Value>) -> Self {
+    pub(super) fn from_metadata(custom: Option<&Value>) -> Self {
         custom
             .and_then(|custom| custom.get(METADATA_KEY))
             .and_then(|value| serde_json::from_value(value.clone()).ok())
             .unwrap_or_default()
     }
 
-    pub fn to_value(&self) -> Value {
+    pub(super) fn to_value(&self) -> Value {
         serde_json::to_value(self).unwrap_or(Value::Null)
     }
 
-    pub fn anchor_mut(&mut self, turn_id: &str) -> Option<&mut TurnAnchor> {
+    pub(super) fn anchor_mut(&mut self, turn_id: &str) -> Option<&mut TurnAnchor> {
         self.turns.iter_mut().rev().find(|a| a.turn_id == turn_id)
     }
 
     /// Codex turn id of `turn_id` plus the anchors up to and including it.
-    pub fn fork_point(&self, turn_id: &str) -> Option<(Vec<TurnAnchor>, String)> {
+    pub(super) fn fork_point(&self, turn_id: &str) -> Option<(Vec<TurnAnchor>, String)> {
         let position = self.turns.iter().position(|a| a.turn_id == turn_id)?;
         let codex = self.turns[position].codex_turn_id.clone()?;
         Some((self.turns[..=position].to_vec(), codex))
@@ -60,7 +60,7 @@ impl CodexHistory {
     /// Rebind kept anchors to the turn ids a fork reported, matching from the
     /// end: the fork keeps the source prefix in order, whether or not Codex
     /// preserves turn ids across threads.
-    pub fn rebind_after_fork(&mut self, forked_turn_ids: &[String]) {
+    pub(super) fn rebind_after_fork(&mut self, forked_turn_ids: &[String]) {
         let mut ids = forked_turn_ids.iter().rev();
         for anchor in self
             .turns
@@ -110,11 +110,19 @@ mod tests {
             codex_turn_id: codex.map(str::to_string),
         };
         let mut history = CodexHistory {
-            turns: vec![anchor("t1", Some("a")), anchor("t2", None), anchor("t3", Some("b"))],
+            turns: vec![
+                anchor("t1", Some("a")),
+                anchor("t2", None),
+                anchor("t3", Some("b")),
+            ],
             pending: None,
         };
         history.rebind_after_fork(&["x".into(), "y".into()]);
-        let ids: Vec<_> = history.turns.iter().map(|a| a.codex_turn_id.clone()).collect();
+        let ids: Vec<_> = history
+            .turns
+            .iter()
+            .map(|a| a.codex_turn_id.clone())
+            .collect();
         assert_eq!(ids, [Some("x".into()), None, Some("y".into())]);
     }
 }

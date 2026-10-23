@@ -22,8 +22,8 @@ use super::super::preferences::NativeAgentPreferences;
 use super::super::process::{Reader, Writer};
 use super::super::title::{self, TitleResolver};
 use super::super::{
-    NativeAgentDriver, NativeAgentNotification, NativeAgentNotificationSink,
-    NativeRollbackOutcome, NativeTurnInput,
+    NativeAgentDriver, NativeAgentNotification, NativeAgentNotificationSink, NativeRollbackOutcome,
+    NativeTurnInput,
 };
 use super::history::{CodexHistory, PendingFork, TurnAnchor};
 use super::projector::CodexTurnProjector;
@@ -37,7 +37,7 @@ use crate::client::{
 
 pub const CLIENT_ID: &str = "codex-native";
 /// Follow the Codex CLI's own `config.toml` (no override is sent).
-pub const DEFAULT_ID: &str = "default";
+pub(super) const DEFAULT_ID: &str = "default";
 pub(super) const STRATEGY_RESUME: &str = "codex-native-app-server";
 pub(super) const STRATEGY_PREPARED: &str = "codex-native-prepared";
 const PERMISSION_MODE_CONFIG_ID: &str = "permission-mode";
@@ -45,10 +45,26 @@ const THINKING_CONFIG_ID: &str = "thinking";
 /// Codex approval presets (same catalog as the Codex TUI `/approvals`):
 /// id, label, description. `default` sends no override.
 const PERMISSION_MODES: &[(&str, &str, &str)] = &[
-    ("default", "Default", "Use the approval policy and sandbox from Codex config.toml."),
-    ("read-only", "Read only", "Read files only; ask before edits, commands or network."),
-    ("auto", "Auto", "Edit and run commands in the workspace; ask before anything outside it."),
-    ("full-access", "Full access", "No sandbox and no approvals. Use with care."),
+    (
+        "default",
+        "Default",
+        "Use the approval policy and sandbox from Codex config.toml.",
+    ),
+    (
+        "read-only",
+        "Read only",
+        "Read files only; ask before edits, commands or network.",
+    ),
+    (
+        "auto",
+        "Auto",
+        "Edit and run commands in the workspace; ask before anything outside it.",
+    ),
+    (
+        "full-access",
+        "Full access",
+        "No sandbox and no approvals. Use with care.",
+    ),
 ];
 /// Used until `model/list` reports the selected model's efforts.
 const FALLBACK_EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
@@ -145,7 +161,9 @@ impl RpcProcess {
 
     /// Route a response frame to its waiting request.
     fn resolve(&self, frame: &Value) {
-        let Some(id) = frame["id"].as_u64() else { return };
+        let Some(id) = frame["id"].as_u64() else {
+            return;
+        };
         if let Some((_, tx)) = self.pending.remove(&id) {
             let _ = tx.send(match frame.get("error") {
                 Some(error) if !error.is_null() => Err(error.clone()),
@@ -163,7 +181,13 @@ impl RpcProcess {
     }
 
     async fn stderr_tail(&self) -> String {
-        self.stderr.lock().await.iter().cloned().collect::<Vec<_>>().join("\n")
+        self.stderr
+            .lock()
+            .await
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -266,7 +290,7 @@ impl CodexNativeSession {
         lock(&self.thread_id).clone()
     }
 
-    pub(in crate::client) fn apply_history(&self, history: CodexHistory) {
+    pub(super) fn apply_history(&self, history: CodexHistory) {
         *lock(&self.history) = history;
     }
 
@@ -316,7 +340,12 @@ impl CodexNativeSession {
         };
         let value = lock(&self.history).to_value();
         persistence
-            .set_custom_metadata(storage, &self.session_id, super::history::METADATA_KEY, value)
+            .set_custom_metadata(
+                storage,
+                &self.session_id,
+                super::history::METADATA_KEY,
+                value,
+            )
             .await
     }
 
@@ -383,13 +412,15 @@ impl CodexNativeSession {
             name: "Default".to_string(),
             description: Some("The model's default reasoning effort.".to_string()),
         }];
-        efforts.extend(self.supported_efforts(rows).into_iter().map(|(value, description)| {
-            AcpSessionConfigSelectOption {
-                name: effort_label(&value),
-                value,
-                description,
-            }
-        }));
+        efforts.extend(
+            self.supported_efforts(rows)
+                .into_iter()
+                .map(|(value, description)| AcpSessionConfigSelectOption {
+                    name: effort_label(&value),
+                    value,
+                    description,
+                }),
+        );
         vec![
             select(
                 PERMISSION_MODE_CONFIG_ID,
@@ -460,12 +491,16 @@ impl CodexNativeSession {
                     // config.toml policy applies again.
                     self.release_thread_when_idle().await;
                 }
-                self.remember(|p| p.permission_mode = Some(value.clone())).await;
+                self.remember(|p| p.permission_mode = Some(value.clone()))
+                    .await;
             }
             THINKING_CONFIG_ID => {
                 let rows = self.model_rows();
                 if value != DEFAULT_ID
-                    && !self.supported_efforts(&rows).iter().any(|(id, _)| *id == value)
+                    && !self
+                        .supported_efforts(&rows)
+                        .iter()
+                        .any(|(id, _)| *id == value)
                 {
                     return Err(OpenBitFunError::Validation(format!(
                         "Unsupported Codex reasoning effort: {value}"
@@ -495,10 +530,16 @@ impl CodexNativeSession {
         *lock(&self.selected_model) = model_id.to_string();
         // An effort the new model does not offer falls back to its default.
         let effort = lock(&self.effort).clone();
-        if effort != DEFAULT_ID && !self.supported_efforts(&rows).iter().any(|(id, _)| *id == effort) {
+        if effort != DEFAULT_ID
+            && !self
+                .supported_efforts(&rows)
+                .iter()
+                .any(|(id, _)| *id == effort)
+        {
             *lock(&self.effort) = DEFAULT_ID.to_string();
         }
-        self.remember(|p| p.model = Some(model_id.to_string())).await;
+        self.remember(|p| p.model = Some(model_id.to_string()))
+            .await;
         Ok(self.options())
     }
 
@@ -539,9 +580,10 @@ impl CodexNativeSession {
             }
         }
         if self.remote_connection_id.is_none() {
-            if let Some(message) =
-                super::super::missing_local_workspace(&self.workspace_path, self.thread_id().is_some())
-            {
+            if let Some(message) = super::super::missing_local_workspace(
+                &self.workspace_path,
+                self.thread_id().is_some(),
+            ) {
                 return Err(service_error(message));
             }
         }
@@ -631,7 +673,11 @@ impl CodexNativeSession {
         }
         // A remembered model the CLI no longer offers falls back to default.
         let selected = lock(&self.selected_model).clone();
-        if selected != DEFAULT_ID && !rows.iter().any(|row| model_slug(row) == Some(selected.as_str())) {
+        if selected != DEFAULT_ID
+            && !rows
+                .iter()
+                .any(|row| model_slug(row) == Some(selected.as_str()))
+        {
             log::warn!("Remembered Codex model {selected} is unavailable; using default");
             *lock(&self.selected_model) = DEFAULT_ID.to_string();
         }
@@ -691,7 +737,13 @@ impl CodexNativeSession {
         *lock(&self.thread_process) = Some(process.id.clone());
         if let Some((persistence, storage)) = &self.persistence {
             persistence
-                .update_remote_session_state(storage, &self.session_id, &thread, STRATEGY_RESUME, None)
+                .update_remote_session_state(
+                    storage,
+                    &self.session_id,
+                    &thread,
+                    STRATEGY_RESUME,
+                    None,
+                )
                 .await?;
             if pending.is_some() {
                 self.persist_history().await?;
@@ -723,18 +775,24 @@ impl CodexNativeSession {
                     None => return,
                 };
                 tokio::time::sleep_until(deadline).await;
-                let Some(session) = session.upgrade() else { return };
+                let Some(session) = session.upgrade() else {
+                    return;
+                };
                 if !process.alive.load(Ordering::Acquire) {
                     return;
                 }
-                if *lock(&session.last_activity) + IDLE_RELEASE_AFTER > tokio::time::Instant::now() {
+                if *lock(&session.last_activity) + IDLE_RELEASE_AFTER > tokio::time::Instant::now()
+                {
                     continue;
                 }
                 let _guard = session.lifecycle.lock().await;
-                let busy = session.state.lock().await.projector.is_some()
-                    || !session.approvals.is_empty();
+                let busy =
+                    session.state.lock().await.projector.is_some() || !session.approvals.is_empty();
                 if !busy {
-                    log::info!("Releasing idle Codex native process: session_id={}", session.session_id);
+                    log::info!(
+                        "Releasing idle Codex native process: session_id={}",
+                        session.session_id
+                    );
                     process.kill().await;
                     return;
                 }
@@ -768,7 +826,8 @@ impl CodexNativeSession {
         let title_message = (self.state.lock().await.index == 0)
             .then(|| title::title_source(&input.text, original.as_deref()))
             .flatten();
-        self.begin_turn(turn_id.clone(), input.text.clone(), original).await?;
+        self.begin_turn(turn_id.clone(), input.text.clone(), original)
+            .await?;
         let result = self.submit_turn(&turn_id, &input).await;
         match &result {
             Err(error) => self.fail_turn(&error.to_string()).await,
@@ -781,17 +840,26 @@ impl CodexNativeSession {
         result
     }
 
-    async fn submit_turn(self: &Arc<Self>, turn_id: &str, input: &NativeTurnInput) -> OpenBitFunResult<()> {
+    async fn submit_turn(
+        self: &Arc<Self>,
+        turn_id: &str,
+        input: &NativeTurnInput,
+    ) -> OpenBitFunResult<()> {
         let process = self.ensure_process().await?;
         self.state.lock().await.process_id = Some(process.id.clone());
         let thread = self.ensure_thread(&process).await?;
         let params = self.turn_params(&thread, input);
-        let response = process.request("turn/start", params, REQUEST_TIMEOUT).await?;
+        let response = process
+            .request("turn/start", params, REQUEST_TIMEOUT)
+            .await?;
         let codex_turn = response["turn"]["id"].as_str().map(str::to_string);
         {
             let mut state = self.state.lock().await;
             if state.codex_turn_id.is_none()
-                && state.projector.as_ref().is_some_and(|p| p.turn_id() == turn_id)
+                && state
+                    .projector
+                    .as_ref()
+                    .is_some_and(|p| p.turn_id() == turn_id)
             {
                 state.codex_turn_id = codex_turn.clone();
             }
@@ -822,7 +890,12 @@ impl CodexNativeSession {
         params
     }
 
-    async fn begin_turn(&self, turn_id: String, input: String, original: Option<String>) -> OpenBitFunResult<()> {
+    async fn begin_turn(
+        &self,
+        turn_id: String,
+        input: String,
+        original: Option<String>,
+    ) -> OpenBitFunResult<()> {
         let mut state = self.state.lock().await;
         let manual_compaction = input.split_whitespace().next() == Some("/compact");
         self.enqueue(vec![AgenticEvent::DialogTurnStarted {
@@ -840,7 +913,8 @@ impl CodexNativeSession {
             turn_index: state.index - 1,
             codex_turn_id: None,
         });
-        let mut projector = CodexTurnProjector::new(&self.session_id, &turn_id, state.model.as_deref());
+        let mut projector =
+            CodexTurnProjector::new(&self.session_id, &turn_id, state.model.as_deref());
         if manual_compaction {
             projector.mark_manual_compaction();
         }
@@ -858,7 +932,10 @@ impl CodexNativeSession {
         tokio::spawn(async move {
             let expected = match &session.persistence {
                 Some((persistence, storage)) => {
-                    match persistence.load_metadata(storage, &session.session_id).await {
+                    match persistence
+                        .load_metadata(storage, &session.session_id)
+                        .await
+                    {
                         Ok(Some(metadata)) => match title::expected_title(&metadata) {
                             Some(expected) => Some(expected),
                             None => return,
@@ -873,7 +950,9 @@ impl CodexNativeSession {
                 None => None,
             };
             let resolved = resolver(message).await;
-            if let (Some((persistence, storage)), Some(expected)) = (&session.persistence, expected.as_deref()) {
+            if let (Some((persistence, storage)), Some(expected)) =
+                (&session.persistence, expected.as_deref())
+            {
                 match persistence
                     .set_generated_title(storage, &session.session_id, expected, &resolved.title)
                     .await
@@ -897,7 +976,854 @@ impl CodexNativeSession {
         });
     }
 
-    // SESSION_STEER
+    /// `turn/steer` adds input to the running Codex turn; the precondition
+    /// `expectedTurnId` rejects it if that turn already ended.
+    pub async fn steer(
+        self: &Arc<Self>,
+        turn_id: &str,
+        input: NativeTurnInput,
+        display: Option<String>,
+    ) -> OpenBitFunResult<String> {
+        if input.text.trim().is_empty() && input.images.is_empty() {
+            return Err(OpenBitFunError::Validation(
+                "Steering content cannot be empty".into(),
+            ));
+        }
+        self.touch();
+        let process = self
+            .process
+            .lock()
+            .await
+            .clone()
+            .filter(|p| p.alive.load(Ordering::Acquire))
+            .ok_or_else(|| service_error("Codex process is not running"))?;
+        let (codex_turn, round_index) = {
+            let state = self.state.lock().await;
+            let projector = state
+                .projector
+                .as_ref()
+                .filter(|p| p.turn_id() == turn_id)
+                .ok_or_else(|| service_error("Codex turn is no longer running"))?;
+            let codex_turn = state
+                .codex_turn_id
+                .clone()
+                .ok_or_else(|| service_error("Codex turn has not started yet; retry shortly"))?;
+            (codex_turn, projector.current_round_index())
+        };
+        let thread = self
+            .thread_id()
+            .ok_or_else(|| service_error("Codex thread is not loaded"))?;
+        let steering_id = uuid::Uuid::new_v4().to_string();
+        process
+            .request(
+                "turn/steer",
+                json!({"threadId": thread, "input": user_input(&input), "expectedTurnId": codex_turn,
+                    "clientUserMessageId": steering_id}),
+                REQUEST_TIMEOUT,
+            )
+            .await?;
+        self.enqueue(vec![AgenticEvent::UserSteeringInjected {
+            session_id: self.session_id.clone(),
+            turn_id: turn_id.to_string(),
+            round_index,
+            steering_id: steering_id.clone(),
+            display_content: display.unwrap_or_else(|| input.text.clone()),
+            content: input.text,
+        }])
+        .await?;
+        Ok(steering_id)
+    }
+
+    /// `turn/interrupt`, then wait for `turn/completed { interrupted }`; a
+    /// process that does not settle in time is stopped.
+    pub async fn cancel(&self) -> OpenBitFunResult<()> {
+        let _guard = self.lifecycle.lock().await;
+        let codex_turn = {
+            let mut state = self.state.lock().await;
+            if let Some(projector) = state.projector.as_mut() {
+                projector.mark_cancel_requested();
+            }
+            state.codex_turn_id.clone()
+        };
+        let process = self.process.lock().await.clone();
+        if let (Some(process), Some(turn), Some(thread)) = (
+            process.as_ref().filter(|p| p.alive.load(Ordering::Acquire)),
+            codex_turn,
+            self.thread_id(),
+        ) {
+            let interrupted = tokio::time::timeout(INTERRUPT_GRACE, async {
+                process
+                    .request(
+                        "turn/interrupt",
+                        json!({"threadId": thread, "turnId": turn}),
+                        INTERRUPT_GRACE,
+                    )
+                    .await?;
+                loop {
+                    let notified = self.settled.notified();
+                    tokio::pin!(notified);
+                    notified.as_mut().enable();
+                    if self.state.lock().await.projector.is_none() {
+                        return Ok::<_, OpenBitFunError>(());
+                    }
+                    notified.await;
+                }
+            })
+            .await;
+            if !matches!(interrupted, Ok(Ok(()))) {
+                process.kill().await;
+            }
+        }
+        let mut state = self.state.lock().await;
+        if let Some(mut projector) = state.projector.take() {
+            self.enqueue(projector.cancel()).await?;
+            self.clear_approvals(projector.turn_id()).await;
+            self.settled.notify_waiters();
+        }
+        Ok(())
+    }
+
+    /// Drop the latest turn: the session continues on a fork of the thread
+    /// through the previous turn (or a fresh thread). The source thread and
+    /// workspace files are left untouched.
+    pub async fn rollback_last_turn(
+        self: &Arc<Self>,
+        turn_id: &str,
+    ) -> OpenBitFunResult<NativeRollbackOutcome> {
+        let _guard = self.lifecycle.lock().await;
+        if self.state.lock().await.projector.is_some() || !self.approvals.is_empty() {
+            return Err(OpenBitFunError::Validation(
+                "Wait until the Codex turn finishes before rolling back".into(),
+            ));
+        }
+        let (target, previous) = {
+            let history = lock(&self.history);
+            let target = history
+                .turns
+                .last()
+                .filter(|anchor| anchor.turn_id == turn_id)
+                .cloned()
+                .ok_or_else(|| {
+                    OpenBitFunError::Validation(
+                        "Only the latest Codex turn can be rolled back".into(),
+                    )
+                })?;
+            let previous = history
+                .turns
+                .iter()
+                .rev()
+                .skip(1)
+                .find_map(|anchor| anchor.codex_turn_id.clone());
+            (target, previous)
+        };
+        if let Some((persistence, storage)) = &self.persistence {
+            persistence
+                .ensure_latest_turn(storage, &self.session_id, &target.turn_id)
+                .await?;
+        }
+        let source = self.thread_id().or_else(|| {
+            lock(&self.history)
+                .pending
+                .as_ref()
+                .map(|p| p.thread_id.clone())
+        });
+        let fresh = previous.is_none() || source.is_none();
+        {
+            let mut history = lock(&self.history);
+            history
+                .turns
+                .retain(|anchor| anchor.turn_index < target.turn_index);
+            history.pending = match (target.codex_turn_id.is_some(), fresh) {
+                // The dropped turn never reached Codex: nothing to branch.
+                (false, _) => history.pending.take(),
+                (true, true) => None,
+                (true, false) => Some(PendingFork {
+                    thread_id: source.clone().unwrap_or_default(),
+                    last_turn_id: previous.clone(),
+                }),
+            };
+        }
+        if target.codex_turn_id.is_some() {
+            *lock(&self.thread_process) = None;
+            if fresh {
+                *lock(&self.thread_id) = None;
+            }
+        }
+        self.state.lock().await.index = target.turn_index;
+        if let Some((persistence, storage)) = &self.persistence {
+            if target.codex_turn_id.is_some() && fresh {
+                persistence
+                    .set_custom_metadata(
+                        storage,
+                        &self.session_id,
+                        crate::client::session_persistence::CUSTOM_METADATA_REMOTE_SESSION_ID_KEY,
+                        Value::Null,
+                    )
+                    .await?;
+                persistence
+                    .set_custom_metadata(
+                        storage,
+                        &self.session_id,
+                        crate::client::session_persistence::CUSTOM_METADATA_RESUME_STRATEGY_KEY,
+                        json!(STRATEGY_PREPARED),
+                    )
+                    .await?;
+            }
+            self.persist_history().await?;
+            persistence
+                .truncate_turns_from(storage, &self.session_id, target.turn_index)
+                .await?;
+        }
+        Ok(NativeRollbackOutcome {
+            files_changed: Vec::new(),
+            files_rewound: false,
+            note: Some(
+                "Codex does not restore workspace files; only the conversation was rolled back."
+                    .into(),
+            ),
+        })
+    }
+
+    async fn fail_turn(&self, error: &str) {
+        let mut state = self.state.lock().await;
+        if let Some(mut projector) = state.projector.take() {
+            if let Err(error) = self.enqueue(projector.fail(error)).await {
+                log::error!("Codex failure event delivery failed: {error}");
+            }
+            self.clear_approvals(projector.turn_id()).await;
+            self.settled.notify_waiters();
+        }
+    }
+
+    /// Settle approvals nobody will answer (turn ended, process gone).
+    async fn clear_approvals(&self, turn_id: &str) {
+        let ids: Vec<String> = self
+            .approvals
+            .iter()
+            .filter(|entry| entry.turn_id == turn_id)
+            .map(|entry| entry.key().clone())
+            .collect();
+        for id in ids {
+            if let Some((_, pending)) = self.approvals.remove(&id) {
+                let _ = pending
+                    .process
+                    .respond(&pending.request_id, cancelled_reply(&pending.method))
+                    .await;
+            }
+        }
+    }
+
+    pub(crate) async fn shutdown(&self) {
+        if let Some(process) = self.process.lock().await.take() {
+            process.kill().await;
+        }
+        self.approvals.clear();
+    }
+
+    async fn read_loop(
+        self: Arc<Self>,
+        process: Arc<RpcProcess>,
+        reader: Reader,
+        mut stderr_task: tokio::task::JoinHandle<()>,
+    ) {
+        let mut lines = BufReader::new(reader).lines();
+        let mut exit = process.exit.clone();
+        let error = loop {
+            let line = tokio::select! {
+                biased;
+                line = lines.next_line() => line,
+                changed = exit.changed() => {
+                    break if changed.is_ok() {
+                        exit.borrow().clone().unwrap_or_else(|| "Codex process exited".into())
+                    } else { "Codex process supervisor ended".into() };
+                }
+            };
+            match line {
+                Ok(Some(line)) if line.trim().is_empty() => continue,
+                Ok(Some(line)) => match serde_json::from_str::<Value>(&line) {
+                    Ok(frame) => {
+                        self.touch();
+                        if let Err(error) = self.route_frame(&process, frame).await {
+                            break error.to_string();
+                        }
+                    }
+                    // Not JSON-RPC: keep it as a diagnostic, not a fault.
+                    Err(_) => log::debug!(
+                        "Codex app-server non-JSON output: {}",
+                        line.chars().take(200).collect::<String>()
+                    ),
+                },
+                Ok(None) => break "Codex output stream closed".to_string(),
+                Err(error) => break format!("Codex output read failed: {error}"),
+            }
+        };
+        process.kill().await;
+        if tokio::time::timeout(Duration::from_millis(250), &mut stderr_task)
+            .await
+            .is_err()
+        {
+            stderr_task.abort();
+        }
+        let tail = process.stderr_tail().await;
+        // Approvals die with the process that asked.
+        let stale: Vec<String> = self
+            .approvals
+            .iter()
+            .filter(|entry| entry.process.id == process.id)
+            .map(|entry| entry.key().clone())
+            .collect();
+        for id in stale {
+            self.approvals.remove(&id);
+        }
+        // Only the process that owns the active turn may fail it; an idle
+        // exit stays silent and the next turn relaunches and resumes.
+        let slot = self.process.lock().await;
+        let owns_turn = self.state.lock().await.process_id.as_deref() == Some(process.id.as_str());
+        if slot.as_ref().is_some_and(|p| p.id == process.id) && owns_turn {
+            self.fail_turn(&format!("{error}\n{tail}")).await;
+        }
+    }
+
+    pub(super) async fn route_frame(
+        &self,
+        process: &Arc<RpcProcess>,
+        frame: Value,
+    ) -> OpenBitFunResult<()> {
+        let method = frame["method"].as_str().map(str::to_string);
+        match (method, frame.get("id").filter(|id| !id.is_null())) {
+            (None, Some(_)) => {
+                process.resolve(&frame);
+                Ok(())
+            }
+            (Some(method), Some(id)) => {
+                self.handle_server_request(process, id.clone(), &method, &frame["params"])
+                    .await
+            }
+            (Some(method), None) => {
+                self.handle_notification(process, &method, &frame["params"])
+                    .await
+            }
+            (None, None) => Ok(()),
+        }
+    }
+
+    async fn handle_notification(
+        &self,
+        process: &Arc<RpcProcess>,
+        method: &str,
+        params: &Value,
+    ) -> OpenBitFunResult<()> {
+        // Subagent threads share the app-server; only this thread is projected.
+        if let (Some(thread), Some(current)) = (params["threadId"].as_str(), self.thread_id()) {
+            if thread != current {
+                return Ok(());
+            }
+        }
+        if method == "serverRequest/resolved" {
+            let request = &params["requestId"];
+            self.approvals
+                .retain(|_, pending| pending.request_id != *request);
+            return Ok(());
+        }
+        let mut state = self.state.lock().await;
+        if state
+            .process_id
+            .as_deref()
+            .is_some_and(|id| id != process.id)
+            || state.projector.is_none()
+        {
+            return Ok(());
+        }
+        let notification_turn = params["turnId"]
+            .as_str()
+            .or_else(|| params["turn"]["id"].as_str())
+            .map(str::to_string);
+        match (&state.codex_turn_id, &notification_turn) {
+            (Some(current), Some(turn)) if current != turn => return Ok(()),
+            (None, Some(turn)) => state.codex_turn_id = Some(turn.clone()),
+            _ => {}
+        }
+        if method == "turn/plan/updated" {
+            let entries = plan_entries(params);
+            let turn_id = state
+                .projector
+                .as_ref()
+                .map(|p| p.turn_id().to_string())
+                .unwrap_or_default();
+            self.notify(NativeAgentNotification::PlanUpdated { turn_id, entries });
+            return Ok(());
+        }
+        if method == "thread/tokenUsage/updated" {
+            self.publish_context_usage(&params["tokenUsage"]);
+        }
+        let projector = state.projector.as_mut().expect("active projector");
+        let events = projector.consume(method, params);
+        let finished = projector.is_finished();
+        self.enqueue(events).await?;
+        if finished {
+            let projector = state.projector.take().expect("finished projector");
+            state.codex_turn_id = None;
+            drop(state);
+            self.clear_approvals(projector.turn_id()).await;
+            self.settled.notify_waiters();
+        }
+        Ok(())
+    }
+
+    fn publish_context_usage(&self, usage: &Value) {
+        let used = usage["last"]["totalTokens"].as_u64().unwrap_or(0);
+        let Some(size) = usage["modelContextWindow"]
+            .as_u64()
+            .filter(|size| *size > 0)
+        else {
+            return;
+        };
+        let usage = AcpSessionContextUsage {
+            used,
+            size,
+            cost: None,
+        };
+        *lock(&self.context_usage) = Some(usage.clone());
+        self.notify(NativeAgentNotification::ContextUsageUpdated(usage));
+    }
+
+    async fn handle_server_request(
+        &self,
+        process: &Arc<RpcProcess>,
+        id: Value,
+        method: &str,
+        params: &Value,
+    ) -> OpenBitFunResult<()> {
+        match method {
+            "item/commandExecution/requestApproval"
+            | "item/fileChange/requestApproval"
+            | "item/permissions/requestApproval" => {
+                self.handle_approval(process, id, method, params).await
+            }
+            // OpenBitFun has no Codex question UI yet: answer with no
+            // answers so the turn continues instead of blocking.
+            "item/tool/requestUserInput" => process.respond(&id, json!({"answers": {}})).await,
+            "mcpServer/elicitation/request" => {
+                process
+                    .respond(
+                        &id,
+                        json!({"action": "decline", "content": null, "_meta": null}),
+                    )
+                    .await
+            }
+            other => {
+                log::debug!("Codex server request not supported: {other}");
+                process
+                    .respond_error(&id, -32601, &format!("OpenBitFun does not support {other}"))
+                    .await
+            }
+        }
+    }
+
+    async fn handle_approval(
+        &self,
+        process: &Arc<RpcProcess>,
+        request_id: Value,
+        method: &str,
+        params: &Value,
+    ) -> OpenBitFunResult<()> {
+        let item_id = params["itemId"].as_str().unwrap_or_default().to_string();
+        let (tool_name, card_params, kind) = approval_card(method, params);
+        let turn_id = {
+            let mut state = self.state.lock().await;
+            let Some(projector) = state.projector.as_mut() else {
+                drop(state);
+                // No turn to show it in: refuse rather than block Codex.
+                return process.respond(&request_id, cancelled_reply(method)).await;
+            };
+            let events = projector.permission_tool(&item_id, tool_name, card_params.clone());
+            let turn_id = projector.turn_id().to_string();
+            self.enqueue(events).await?;
+            turn_id
+        };
+        let permission_id = format!("codex_native_permission_{}", uuid::Uuid::new_v4());
+        let payload = permission_payload(
+            &permission_id,
+            &self.session_id,
+            method,
+            &item_id,
+            tool_name,
+            kind,
+            &card_params,
+            params,
+        );
+        self.approvals.insert(
+            permission_id.clone(),
+            PendingApproval {
+                process: process.clone(),
+                request_id: request_id.clone(),
+                method: method.to_string(),
+                params: params.clone(),
+                turn_id,
+            },
+        );
+        if let Err(error) = emit_global_event(BackendEvent::Custom {
+            event_name: "backend-event-acppermissionrequest".into(),
+            payload,
+        })
+        .await
+        {
+            if let Some((_, pending)) = self.approvals.remove(&permission_id) {
+                let _ = pending
+                    .process
+                    .respond(&pending.request_id, cancelled_reply(method))
+                    .await;
+            }
+            return Err(service_error(format!(
+                "Codex approval delivery failed: {error}"
+            )));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn submit_permission(
+        &self,
+        request: &SubmitAcpPermissionResponseRequest,
+    ) -> Option<OpenBitFunResult<()>> {
+        let (_, pending) = self.approvals.remove(&request.permission_id)?;
+        self.touch();
+        let reply = match approval_reply(&pending.method, &pending.params, request) {
+            Ok(reply) => reply,
+            Err(error) => {
+                self.approvals
+                    .insert(request.permission_id.clone(), pending);
+                return Some(Err(error));
+            }
+        };
+        Some(pending.process.respond(&pending.request_id, reply).await)
+    }
 }
+
+#[async_trait::async_trait]
+impl super::super::NativeAgentSession for CodexNativeSession {
+    fn client_id(&self) -> &'static str {
+        CLIENT_ID
+    }
+    fn options(&self) -> AcpSessionOptions {
+        CodexNativeSession::options(self)
+    }
+    async fn warm_up(self: Arc<Self>) -> OpenBitFunResult<()> {
+        CodexNativeSession::warm_up(&self).await
+    }
+    async fn start_turn(
+        self: Arc<Self>,
+        turn_id: String,
+        input: NativeTurnInput,
+        original: Option<String>,
+    ) -> OpenBitFunResult<()> {
+        CodexNativeSession::start_turn(&self, turn_id, input, original).await
+    }
+    async fn steer(
+        self: Arc<Self>,
+        turn_id: &str,
+        input: NativeTurnInput,
+        display: Option<String>,
+    ) -> OpenBitFunResult<String> {
+        CodexNativeSession::steer(&self, turn_id, input, display).await
+    }
+    async fn cancel(&self) -> OpenBitFunResult<()> {
+        CodexNativeSession::cancel(self).await
+    }
+    async fn set_model(&self, id: &str) -> OpenBitFunResult<AcpSessionOptions> {
+        CodexNativeSession::set_model(self, id).await
+    }
+    async fn set_config_option(
+        &self,
+        id: &str,
+        value: AcpSessionConfigValue,
+    ) -> OpenBitFunResult<AcpSessionOptions> {
+        CodexNativeSession::set_config_option(self, id, value).await
+    }
+    async fn respond_permission(
+        &self,
+        request: &SubmitAcpPermissionResponseRequest,
+    ) -> OpenBitFunResult<bool> {
+        match self.submit_permission(request).await {
+            Some(result) => result.map(|()| true),
+            None => Ok(false),
+        }
+    }
+    fn commands(&self) -> Vec<crate::client::AcpAvailableCommand> {
+        Vec::new()
+    }
+    fn matches_scope(&self, path: &str, remote: Option<&str>) -> bool {
+        CodexNativeSession::matches_scope(self, path, remote)
+    }
+    async fn workspace_bound(&self) -> bool {
+        CodexNativeSession::workspace_bound(self).await
+    }
+    async fn rollback_last_turn(
+        self: Arc<Self>,
+        turn_id: &str,
+    ) -> OpenBitFunResult<NativeRollbackOutcome> {
+        CodexNativeSession::rollback_last_turn(&self, turn_id).await
+    }
+    async fn shutdown(&self) {
+        CodexNativeSession::shutdown(self).await
+    }
+}
+
+pub(super) fn initialize_params() -> Value {
+    json!({
+        "clientInfo": {"name": "openbitfun", "title": "OpenBitFun", "version": env!("CARGO_PKG_VERSION")},
+        "capabilities": {"experimentalApi": false, "requestAttestation": false},
+    })
+}
+
+/// Id `turn/start { model }` accepts: the model slug, else the row id.
+fn model_slug(row: &Value) -> Option<&str> {
+    row["model"]
+        .as_str()
+        .or_else(|| row["id"].as_str())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+}
+
+fn model_option(row: &Value) -> Option<AcpSessionModelOption> {
+    let id = model_slug(row)?;
+    let name = row["displayName"]
+        .as_str()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(id);
+    Some(AcpSessionModelOption {
+        id: id.to_string(),
+        name: name.to_string(),
+        provider_name: None,
+        description: row["description"].as_str().map(str::to_string),
+    })
+}
+
+fn effort_label(effort: &str) -> String {
+    match effort {
+        "xhigh" => "Extra high".to_string(),
+        other => {
+            let mut chars = other.chars();
+            chars
+                .next()
+                .map(|first| first.to_uppercase().chain(chars).collect())
+                .unwrap_or_default()
+        }
+    }
+}
+
+/// `(approvalPolicy, thread sandbox mode, turn sandboxPolicy)` of a preset;
+/// `None` for `default` (Codex config.toml applies).
+fn permission_preset(mode: &str) -> Option<(&'static str, &'static str, Value)> {
+    match mode {
+        "read-only" => Some((
+            "on-request",
+            "read-only",
+            json!({"type": "readOnly", "networkAccess": false}),
+        )),
+        "auto" => Some((
+            "on-request",
+            "workspace-write",
+            json!({"type": "workspaceWrite", "writableRoots": [], "networkAccess": false,
+                "excludeTmpdirEnvVar": false, "excludeSlashTmp": false}),
+        )),
+        "full-access" => Some((
+            "never",
+            "danger-full-access",
+            json!({"type": "dangerFullAccess"}),
+        )),
+        _ => None,
+    }
+}
+
+/// `UserInput[]`: the text, then images as data URLs (they travel over stdin,
+/// so remote workspaces need no local file).
+pub(super) fn user_input(input: &NativeTurnInput) -> Value {
+    let mut items = Vec::with_capacity(input.images.len() + 1);
+    if !input.text.trim().is_empty() || input.images.is_empty() {
+        items.push(json!({"type": "text", "text": input.text, "text_elements": []}));
+    }
+    items.extend(input.images.iter().map(|image| {
+        json!({"type": "image", "url": format!("data:{};base64,{}", image.media_type, image.data)})
+    }));
+    Value::Array(items)
+}
+
+fn plan_entries(params: &Value) -> Vec<AcpPlanEntry> {
+    params["plan"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|step| {
+            Some(AcpPlanEntry {
+                content: step["step"].as_str()?.to_string(),
+                priority: "medium".to_string(),
+                status: match step["status"].as_str() {
+                    Some("inProgress") => "in_progress",
+                    Some("completed") => "completed",
+                    _ => "pending",
+                }
+                .to_string(),
+            })
+        })
+        .collect()
+}
+
+/// Card name, params and ACP tool kind of an approval request.
+fn approval_card(method: &str, params: &Value) -> (&'static str, Value, &'static str) {
+    match method {
+        "item/commandExecution/requestApproval" => (
+            "ExecCommand",
+            json!({"command": params["command"], "cwd": params["cwd"], "reason": params["reason"]}),
+            "execute",
+        ),
+        "item/fileChange/requestApproval" => (
+            "Edit",
+            json!({"file_path": params["grantRoot"], "reason": params["reason"]}),
+            "edit",
+        ),
+        _ => (
+            "RequestPermissions",
+            json!({"permissions": params["permissions"], "reason": params["reason"], "cwd": params["cwd"]}),
+            "other",
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn permission_payload(
+    permission_id: &str,
+    session_id: &str,
+    method: &str,
+    item_id: &str,
+    tool_name: &str,
+    kind: &str,
+    card_params: &Value,
+    params: &Value,
+) -> Value {
+    let option =
+        |id: &str, name: &str, kind: &str| json!({"optionId": id, "name": name, "kind": kind});
+    let mut options = vec![
+        option("allow_once", "Allow once", "allow_once"),
+        option(
+            ALLOW_SESSION_OPTION,
+            "Allow for this session",
+            "allow_session",
+        ),
+    ];
+    if method == "item/commandExecution/requestApproval"
+        && !params["proposedExecpolicyAmendment"].is_null()
+    {
+        options.push(option("allow_always", "Always allow", "allow_always"));
+    }
+    options.push(option("reject_once", "Reject", "reject_once"));
+    let title = match method {
+        "item/commandExecution/requestApproval" => params["command"]
+            .as_str()
+            .unwrap_or("Run command")
+            .to_string(),
+        "item/fileChange/requestApproval" => params["reason"]
+            .as_str()
+            .unwrap_or("Apply file changes")
+            .to_string(),
+        _ => params["reason"]
+            .as_str()
+            .unwrap_or("Grant additional permissions")
+            .to_string(),
+    };
+    json!({"permissionId": permission_id, "sessionId": session_id, "toolCall": {
+        "toolCallId": item_id, "title": title, "kind": kind, "toolName": tool_name,
+        "status": "pending", "rawInput": card_params, "content": []},
+        "options": options})
+}
+
+/// Codex reply for a user decision (see `CommandExecutionApprovalDecision`,
+/// `FileChangeApprovalDecision`, `PermissionsRequestApprovalResponse`).
+pub(super) fn approval_reply(
+    method: &str,
+    params: &Value,
+    request: &SubmitAcpPermissionResponseRequest,
+) -> OpenBitFunResult<Value> {
+    #[derive(PartialEq)]
+    enum Choice {
+        Once,
+        Session,
+        Always,
+        Deny,
+    }
+    let choice = match request.option_id.as_deref() {
+        Some("allow_once") => Choice::Once,
+        Some(ALLOW_SESSION_OPTION) => Choice::Session,
+        Some("allow_always") => Choice::Always,
+        Some("reject_once") => Choice::Deny,
+        None if request.approve => Choice::Once,
+        None => Choice::Deny,
+        Some(other) => {
+            return Err(service_error(format!(
+                "Unknown Codex approval option: {other}"
+            )))
+        }
+    };
+    Ok(match method {
+        "item/permissions/requestApproval" => {
+            let granted = match choice {
+                Choice::Deny => json!({}),
+                _ => {
+                    let mut granted = serde_json::Map::new();
+                    for key in ["network", "fileSystem"] {
+                        let value = &params["permissions"][key];
+                        if !value.is_null() {
+                            granted.insert(key.to_string(), value.clone());
+                        }
+                    }
+                    Value::Object(granted)
+                }
+            };
+            let scope = if matches!(choice, Choice::Session | Choice::Always) {
+                "session"
+            } else {
+                "turn"
+            };
+            json!({"permissions": granted, "scope": scope})
+        }
+        _ => {
+            let decision = match choice {
+                Choice::Once => json!("accept"),
+                Choice::Session => json!("acceptForSession"),
+                Choice::Always => match &params["proposedExecpolicyAmendment"] {
+                    amendment
+                        if !amendment.is_null()
+                            && method == "item/commandExecution/requestApproval" =>
+                    {
+                        json!({"acceptWithExecpolicyAmendment": {"execpolicy_amendment": amendment}})
+                    }
+                    _ => {
+                        return Err(service_error(
+                            "Codex did not offer a persistent rule for this request",
+                        ))
+                    }
+                },
+                Choice::Deny => json!("decline"),
+            };
+            json!({"decision": decision})
+        }
+    })
+}
+
+/// Reply for a request nobody will answer (turn ended, delivery failed).
+fn cancelled_reply(method: &str) -> Value {
+    match method {
+        "item/permissions/requestApproval" => json!({"permissions": {}, "scope": "turn"}),
+        _ => json!({"decision": "cancel"}),
+    }
+}
+
+fn service_error(message: impl Into<String>) -> OpenBitFunError {
+    OpenBitFunError::service(message.into())
+}
+
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod tests;
 
 // SESSION_APPEND
