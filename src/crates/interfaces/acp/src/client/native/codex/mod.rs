@@ -122,6 +122,16 @@ impl NativeAgentDriver for CodexNativeDriver {
             notifier,
         );
         session.apply_history(history);
+        session.apply_legacy_notice(
+            metadata
+                .custom_metadata
+                .as_ref()
+                .and_then(|c| {
+                    c.get(crate::client::legacy_presets::CUSTOM_METADATA_LEGACY_NOTICE_KEY)
+                })
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        );
         session.apply_preferences(
             persistence
                 .load_native_preferences(CLIENT_ID, &session_storage_path, &session_id)
