@@ -2,6 +2,7 @@
 const EXTERNAL_AGENT_ICON_SOURCES: Record<string, string> = {
   'claude-native': '/assets/ecosystem-compatibility/claude-code.svg',
   'codex-native': '/assets/ecosystem-compatibility/codex.svg',
+  'pi-native': '/assets/ecosystem-compatibility/pi.svg',
   'claude-code': '/assets/ecosystem-compatibility/claude-code.svg',
   codex: '/assets/ecosystem-compatibility/codex.svg',
   dsh: '/assets/ecosystem-compatibility/deepseek-harness.svg',
