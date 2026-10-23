@@ -19,8 +19,6 @@ pub(crate) enum AcpConfigClient {
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub(crate) enum ExternalAcpClient {
     Opencode,
-    ClaudeCode,
-    Codex,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -34,30 +32,18 @@ impl ExternalAcpClient {
     fn id(self) -> &'static str {
         match self {
             Self::Opencode => "opencode",
-            Self::ClaudeCode => "claude-code",
-            Self::Codex => "codex",
         }
     }
 
     fn display_name(self) -> &'static str {
         match self {
             Self::Opencode => "opencode",
-            Self::ClaudeCode => "Claude Code",
-            Self::Codex => "Codex",
         }
     }
 
     fn config(self) -> AcpClientConfig {
         let (command, args) = match self {
             Self::Opencode => ("opencode", vec!["acp"]),
-            Self::ClaudeCode => (
-                "npx",
-                vec!["--yes", "@agentclientprotocol/claude-agent-acp@latest"],
-            ),
-            Self::Codex => (
-                "npx",
-                vec!["--yes", "@agentclientprotocol/codex-acp@latest"],
-            ),
         };
         AcpClientConfig {
             name: Some(self.display_name().to_string()),
@@ -205,7 +191,7 @@ pub(crate) fn acp_help_text(command: &str) -> String {
 Agent Client Protocol (ACP)\n\
 ─────────────────────────────────\n\
 OpenBitFun exposes its agent runtime as an ACP server over stdio.\n\
-OpenBitFun CLI can also launch external ACP agents such as opencode, Claude Code, and Codex.\n\
+OpenBitFun CLI can also launch external ACP agents such as opencode.\n\
 \n\
 Use this from an ACP-compatible editor or host:\n\
   {command} acp\n\
@@ -240,11 +226,7 @@ pub(crate) async fn list_external_clients() -> Result<()> {
 
     println!("External ACP agents");
     println!();
-    for client in [
-        ExternalAcpClient::Opencode,
-        ExternalAcpClient::ClaudeCode,
-        ExternalAcpClient::Codex,
-    ] {
+    for client in [ExternalAcpClient::Opencode] {
         if let Some(info) = configured.get(client.id()) {
             print_client_info(info);
         } else {
@@ -258,7 +240,7 @@ pub(crate) async fn list_external_clients() -> Result<()> {
     }
 
     for info in configured.values() {
-        if !matches!(info.id.as_str(), "opencode" | "claude-code" | "codex") {
+        if info.id != "opencode" {
             print_client_info(info);
         }
     }
