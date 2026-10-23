@@ -12,7 +12,6 @@ use crate::client::requirements::{command_error_summary, run_command_with_timeou
 /// `steer`, `get_session_stats.contextUsage`, `--session-id`). Earlier
 /// releases are not verified.
 pub(crate) const MIN_VERSION: &str = "1.3.0";
-pub(crate) const NPM_PACKAGE: &str = "@earendil-works/pi-coding-agent";
 pub(crate) const NPM_INSTALL_COMMAND: &str = "npm i -g @earendil-works/pi-coding-agent";
 pub(crate) const DOCS_URL: &str = "https://github.com/earendil-works/pi";
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(300);
