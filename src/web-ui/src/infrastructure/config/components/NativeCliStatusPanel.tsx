@@ -48,6 +48,9 @@ export const NativeCliStatusPanel: React.FC<NativeCliStatusPanelProps> = ({
   const [updating, setUpdating] = useState(false);
   const status = probe?.nativeCli;
   const installed = probe?.tool.installed === true;
+  // "Codex (Native)" -> "Codex": the copy names the CLI, not the driver.
+  const cliName = name.replace(/\s*\(Native\)\s*$/i, '');
+  const cliCommand = probe?.tool.name || clientId.replace(/-native$/, '');
 
   const copyInstallCommand = useCallback(async () => {
     if (!status?.installCommand) return;
@@ -129,19 +132,22 @@ export const NativeCliStatusPanel: React.FC<NativeCliStatusPanelProps> = ({
               {status?.tooOld ? (
                 <p className="openbitfun-acp-agents__registry-description" role="alert">
                   {t('nativeCli.tooOldDetail', {
+                    name: cliName,
                     version: status.version ?? '',
                     minVersion: status.minVersion,
                   })}
                 </p>
               ) : null}
               <p className="openbitfun-acp-agents__registry-description">
-                {remoteConnectionId ? t('nativeCli.remoteUpdateUnsupported') : t('nativeCli.updateNote')}
+                {remoteConnectionId
+                  ? t('nativeCli.remoteUpdateUnsupported', { command: cliCommand })
+                  : t('nativeCli.updateNote')}
               </p>
             </>
           ) : probe ? (
             <>
               <p className="openbitfun-acp-agents__registry-description">
-                {t(remoteConnectionId ? 'nativeCli.installHintRemote' : 'nativeCli.installHint')}
+                {t(remoteConnectionId ? 'nativeCli.installHintRemote' : 'nativeCli.installHint', { name: cliName })}
               </p>
               {status?.installCommand ? (
                 <code className="openbitfun-acp-agents__registry-description openbitfun-acp-agents__registry-command">

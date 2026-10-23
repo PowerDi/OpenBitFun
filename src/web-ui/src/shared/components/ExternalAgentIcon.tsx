@@ -1,6 +1,7 @@
 /** Brand logos for external agent clients, keyed by ACP client id. */
 const EXTERNAL_AGENT_ICON_SOURCES: Record<string, string> = {
   'claude-native': '/assets/ecosystem-compatibility/claude-code.svg',
+  'codex-native': '/assets/ecosystem-compatibility/codex.svg',
   'claude-code': '/assets/ecosystem-compatibility/claude-code.svg',
   codex: '/assets/ecosystem-compatibility/codex.svg',
   dsh: '/assets/ecosystem-compatibility/deepseek-harness.svg',
