@@ -44,7 +44,7 @@ pub const CLIENT_ID: &str = "claude-native";
 pub const DEFAULT_MODEL_ID: &str = "default";
 /// `triggerSource` of a turn the CLI started after a background task
 /// finished (not typed by the user; the UI disables editing it).
-pub(crate) const WAKE_TRIGGER_SOURCE: &str = "native_background_task";
+pub(crate) use super::super::NATIVE_WAKE_TRIGGER_SOURCE as WAKE_TRIGGER_SOURCE;
 const PERMISSION_MODE_CONFIG_ID: &str = "permission-mode";
 const THINKING_CONFIG_ID: &str = "thinking";
 /// Claude Code permission modes (same catalog as codexhost). `auto` is only

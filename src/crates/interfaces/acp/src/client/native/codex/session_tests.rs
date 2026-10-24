@@ -438,3 +438,193 @@ fn approval_options_follow_available_decisions() {
     let legacy = json!({"command":"ls"});
     assert_eq!(ids(legacy), ["allow_once", "allow_session", "reject_once"]);
 }
+
+/// Parent turn `t1` (Codex `ct1`) on thread `th1` that spawns `children`.
+async fn parent_turn_spawning(
+    session: &Arc<CodexNativeSession>,
+    process: &Arc<RpcProcess>,
+    children: &[&str],
+) {
+    *session.process.lock().await = Some(process.clone());
+    *lock(&session.thread_process) = Some(process.id.clone());
+    session
+        .begin_turn("t1".into(), "fan out".into(), None)
+        .await
+        .unwrap();
+    session.state.lock().await.process_id = Some(process.id.clone());
+    let mut frames = vec![
+        json!({"method":"turn/started","params":{"threadId":"th1","turn":{"id":"ct1","status":"inProgress"}}}),
+    ];
+    for (index, child) in children.iter().enumerate() {
+        // Child output can arrive before the parent's spawn completes.
+        frames.push(json!({"method":"turn/started","params":{"threadId":child,"turn":{"id":format!("{child}-t"),"status":"inProgress"}}}));
+        frames.push(json!({"method":"item/completed","params":{"threadId":"th1","turnId":"ct1","item":{
+            "type":"collabAgentToolCall","id":format!("sp{index}"),"tool":"spawnAgent","status":"completed",
+            "senderThreadId":"th1","receiverThreadIds":[child],"prompt":format!("task {child}\nmore"),
+            "agentsStates":{}}}}));
+    }
+    for frame in frames {
+        session.route_frame(process, frame).await.unwrap();
+    }
+}
+
+async fn child_says(
+    session: &CodexNativeSession,
+    process: &Arc<RpcProcess>,
+    child: &str,
+    text: &str,
+    status: &str,
+) {
+    for frame in [
+        json!({"method":"item/agentMessage/delta","params":{"threadId":child,"turnId":format!("{child}-t"),"itemId":"m","delta":text}}),
+        json!({"method":"turn/completed","params":{"threadId":child,"turn":{"id":format!("{child}-t"),"status":status}}}),
+    ] {
+        session.route_frame(process, frame).await.unwrap();
+    }
+}
+
+async fn end_parent_turn(session: &CodexNativeSession, process: &Arc<RpcProcess>) {
+    session
+        .route_frame(process, json!({"method":"turn/completed","params":{"threadId":"th1","turn":{"id":"ct1","status":"completed"}}}))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn spawned_agent_threads_project_as_linked_child_sessions() {
+    let (session, process, _lines) = fixture(Some("th1"));
+    parent_turn_spawning(&session, &process, &["c1"]).await;
+    // Finishing inside the parent turn: Codex delivers it there, no wake.
+    child_says(&session, &process, "c1", "DONE", "completed").await;
+    end_parent_turn(&session, &process).await;
+    let events = session.queue.dequeue_batch(300).await;
+    let child = "s1-subagent-c1";
+    assert!(events
+        .iter()
+        .any(|e| matches!(&e.event, AgenticEvent::SubagentSessionLinked {
+        session_id, parent_session_id, parent_dialog_turn_id, parent_tool_call_id, .. }
+        if session_id == child && parent_session_id == "s1" && parent_dialog_turn_id == "t1"
+            && parent_tool_call_id == "sp0")));
+    assert!(events
+        .iter()
+        .any(|e| matches!(&e.event, AgenticEvent::DialogTurnStarted {
+        session_id, user_input, .. } if session_id == child && user_input == "task c1\nmore")));
+    let child_text: String = events
+        .iter()
+        .filter_map(|e| match &e.event {
+            AgenticEvent::TextChunk {
+                session_id, text, ..
+            } if session_id == child => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(child_text, "DONE");
+    assert!(events.iter().any(|e| matches!(&e.event,
+        AgenticEvent::DialogTurnCompleted { session_id, .. } if session_id == child)));
+    assert!(!events.iter().any(|e| matches!(&e.event,
+        AgenticEvent::TextChunk { session_id, .. } if session_id == "s1")));
+    // The spawn card is the subagent card the child links to.
+    assert!(events
+        .iter()
+        .any(|e| matches!(&e.event, AgenticEvent::ToolEvent {
+        tool_event: openbitfun_events::ToolEventData::Started { identity, params, .. }, .. }
+        if identity.tool_name == "Task" && params["description"] == "task c1")));
+    let state = session.state.lock().await;
+    assert!(state.threads.wake_reasons.is_empty());
+    assert!(!state.threads.any_running());
+}
+
+#[tokio::test]
+async fn children_finishing_while_idle_wake_the_parent_once() {
+    let (session, process, mut lines) = fixture(Some("th1"));
+    parent_turn_spawning(&session, &process, &["c1", "c2"]).await;
+    end_parent_turn(&session, &process).await;
+    assert!(session.state.lock().await.threads.any_running());
+    child_says(&session, &process, "c1", "A", "completed").await;
+    child_says(&session, &process, "c2", "B", "failed").await;
+    session.queue.dequeue_batch(300).await;
+    // One debounced wake: an input-less turn/start on the parent thread.
+    let request = tokio::time::timeout(Duration::from_secs(5), next_frame(&mut lines))
+        .await
+        .expect("wake turn/start");
+    assert_eq!(request["method"], "turn/start");
+    assert_eq!(request["params"]["threadId"], "th1");
+    assert_eq!(request["params"]["input"], json!([]));
+    session
+        .route_frame(
+            &process,
+            json!({"id": request["id"], "result": {"turn":{"id":"ct2"}}}),
+        )
+        .await
+        .unwrap();
+    let turns: Vec<_> = session
+        .queue
+        .dequeue_batch(300)
+        .await
+        .into_iter()
+        .filter_map(|e| match e.event {
+            AgenticEvent::DialogTurnStarted {
+                session_id,
+                user_input,
+                user_message_metadata,
+                ..
+            } if session_id == "s1" => Some((user_input, user_message_metadata)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(
+        turns[0].0,
+        "Background agents finished: task c1; task c2 (failed)"
+    );
+    let metadata = turns[0].1.as_ref().unwrap();
+    assert_eq!(
+        metadata["triggerSource"],
+        crate::client::native::NATIVE_WAKE_TRIGGER_SOURCE
+    );
+    assert_eq!(
+        metadata["nativeWake"]["threads"].as_array().unwrap().len(),
+        2
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), next_frame(&mut lines))
+            .await
+            .is_err(),
+        "no second wake"
+    );
+}
+
+#[tokio::test]
+async fn cancel_suppresses_wake_until_the_user_starts_a_turn() {
+    let (session, process, mut lines) = fixture(Some("th1"));
+    parent_turn_spawning(&session, &process, &["c1"]).await;
+    // Cancel interrupts the parent turn and the running child.
+    let cancel = {
+        let session = session.clone();
+        tokio::spawn(async move { session.cancel().await })
+    };
+    let mut interrupted = Vec::new();
+    for _ in 0..2 {
+        let request = next_frame(&mut lines).await;
+        assert_eq!(request["method"], "turn/interrupt");
+        interrupted.push(request["params"]["threadId"].as_str().unwrap().to_string());
+        session
+            .route_frame(&process, json!({"id": request["id"], "result": {}}))
+            .await
+            .unwrap();
+        if request["params"]["threadId"] == "th1" {
+            end_parent_turn(&session, &process).await;
+        }
+    }
+    cancel.await.unwrap().unwrap();
+    interrupted.sort();
+    assert_eq!(interrupted, ["c1", "th1"]);
+    // Even if the child still completes, nothing wakes the parent.
+    child_says(&session, &process, "c1", "late", "completed").await;
+    assert!(
+        tokio::time::timeout(Duration::from_secs(3), next_frame(&mut lines))
+            .await
+            .is_err()
+    );
+    assert!(session.state.lock().await.threads.wake_reasons.is_empty());
+}
