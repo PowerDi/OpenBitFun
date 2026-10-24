@@ -22,7 +22,13 @@ struct ToolCall {
     tool_name: String,
     round_id: String,
     started_at: std::time::Instant,
+    /// Card params, re-sent with the latest progress text while running.
+    params: Value,
+    progress: Option<String>,
 }
+
+/// Longest progress text shown in a running tool card.
+const PROGRESS_LIMIT: usize = 2000;
 
 #[derive(Debug, Clone)]
 struct OpenRound {
@@ -166,6 +172,7 @@ impl PiTurnProjector {
                 frame.get("args"),
                 &mut out,
             ),
+            Some("tool_execution_update") => self.update_tool(frame, &mut out),
             Some("tool_execution_end") => self.finish_tool(frame, &mut out),
             Some("compaction_start") => self.start_compaction(frame, &mut out),
             Some("compaction_end") => self.end_compaction(frame, &mut out),
@@ -318,8 +325,57 @@ impl PiTurnProjector {
                 tool_name: tool_name.clone(),
                 round_id: round_id.clone(),
                 started_at: std::time::Instant::now(),
+                params: params.clone(),
+                progress: None,
             },
         );
+        out.push(self.tool_event(
+            &round_id,
+            ToolEventData::Started {
+                identity: ToolEventIdentity::direct(tool_id, tool_name),
+                params,
+                timeout_seconds: None,
+            },
+        ));
+    }
+
+    /// `tool_execution_update`: show the latest partial text (e.g. a
+    /// subagent's output so far) in the running card. Pi sends the latest
+    /// partial result each time; any shape without text is ignored.
+    fn update_tool(&mut self, frame: &Value, out: &mut Vec<AgenticEvent>) {
+        let Some(tool_id) = frame["toolCallId"].as_str() else {
+            return;
+        };
+        let text = content_text(frame["partialResult"].get("content"));
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        // Keep the tail: the newest output matters while it runs.
+        let count = text.chars().count();
+        let text = if count > PROGRESS_LIMIT {
+            let start = text
+                .char_indices()
+                .nth(count - PROGRESS_LIMIT)
+                .map_or(0, |(index, _)| index);
+            format!("...{}", &text[start..])
+        } else {
+            text.to_string()
+        };
+        let Some(call) = self.tools.get_mut(tool_id) else {
+            return;
+        };
+        if call.progress.as_deref() == Some(text.as_str()) {
+            return;
+        }
+        call.progress = Some(text.clone());
+        let mut params = call.params.clone();
+        if let Value::Object(object) = &mut params {
+            object.insert("progress".into(), Value::String(text));
+        } else {
+            return;
+        }
+        let (round_id, tool_name) = (call.round_id.clone(), call.tool_name.clone());
         out.push(self.tool_event(
             &round_id,
             ToolEventData::Started {
