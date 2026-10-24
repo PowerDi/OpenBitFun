@@ -29,7 +29,6 @@ use super::super::{
 use super::approval::{self, ApprovalRequest};
 use super::history::{PendingFork, PiHistory, TurnAnchor};
 use super::projector::PiTurnProjector;
-use super::subagents::{is_subagent_frame, ChildRecord, PiSubagentRuns};
 use crate::client::remote_shell::{remote_user_shell_command, shell_escape};
 use crate::client::session_persistence::AcpSessionPersistence;
 use crate::client::{
@@ -165,8 +164,6 @@ struct TurnState {
     index: usize,
     process_id: Option<String>,
     steers: VecDeque<PendingSteer>,
-    /// `subagent` extension runs of the active turn, as child sessions.
-    subagents: PiSubagentRuns,
 }
 
 pub struct PiNativeSession {
@@ -900,23 +897,6 @@ impl PiNativeSession {
                 self.enqueue(vec![event]).await?;
             }
         }
-        if is_subagent_frame(&frame) {
-            let turn_id = state
-                .projector
-                .as_ref()
-                .expect("active turn")
-                .turn_id()
-                .to_string();
-            let model = self.model_name();
-            let update =
-                state
-                    .subagents
-                    .consume(&self.session_id, &turn_id, model.as_deref(), &frame);
-            for record in &update.records {
-                self.persist_subagent_record(record).await;
-            }
-            self.enqueue(update.events).await?;
-        }
         let projector = state.projector.as_mut().expect("active turn");
         let events = projector.consume(&frame);
         let usage = events.iter().find_map(|event| match event {
@@ -938,9 +918,7 @@ impl PiNativeSession {
         {
             let turn_id = state.projector.take().map(|p| p.turn_id().to_string());
             state.steers.clear();
-            let orphans = state.subagents.settle_all(frame["aborted"] == true);
             drop(state);
-            self.enqueue(orphans).await?;
             if let Some(turn_id) = turn_id {
                 self.clear_approvals(&turn_id).await;
             }
@@ -1032,56 +1010,11 @@ impl PiNativeSession {
         Ok(())
     }
 
-    /// Persist the hidden child record before any child event, so the
-    /// frontend can save and restore the child transcript.
-    async fn persist_subagent_record(&self, record: &ChildRecord) {
-        let Some((persistence, storage)) = &self.persistence else {
-            return;
-        };
-        let result = async {
-            let parent = persistence
-                .load_metadata(storage, &self.session_id)
-                .await?
-                .ok_or_else(|| service_error("Pi parent session metadata is missing"))?;
-            let relationship = openbitfun_core::service::session::SessionRelationship {
-                kind: Some(openbitfun_core::service::session::SessionRelationshipKind::Subagent),
-                parent_session_id: Some(self.session_id.clone()),
-                parent_request_id: None,
-                parent_dialog_turn_id: Some(record.parent_turn_id.clone()),
-                parent_turn_index: None,
-                parent_tool_call_id: Some(record.parent_tool_call_id.clone()),
-                subagent_type: record.agent.clone(),
-                continuation_policy: Some(
-                    openbitfun_core::agentic::core::SessionContinuationPolicy::FreshOnly,
-                ),
-            };
-            let label = record.agent.as_deref().unwrap_or("Subagent");
-            let task: String = record.task.chars().take(60).collect();
-            persistence
-                .create_subagent_session_record(
-                    storage,
-                    &record.session_id,
-                    &parent,
-                    relationship,
-                    format!("{label}: {task}"),
-                    record.model.clone(),
-                )
-                .await
-        }
-        .await;
-        if let Err(error) = result {
-            log::warn!("Pi subagent record persistence failed: {error}");
-        }
-    }
-
     async fn fail_turn(&self, error: &str) {
         let mut state = self.state.lock().await;
         if let Some(mut projector) = state.projector.take() {
             if let Err(error) = self.enqueue(projector.fail(error)).await {
                 log::error!("Pi failure event delivery failed: {error}");
-            }
-            if let Err(error) = self.enqueue(state.subagents.settle_all(false)).await {
-                log::error!("Pi subagent failure event delivery failed: {error}");
             }
             state.steers.clear();
             drop(state);
@@ -1484,11 +1417,9 @@ impl PiNativeSession {
         let mut state = self.state.lock().await;
         if let Some(mut projector) = state.projector.take() {
             state.steers.clear();
-            let children = state.subagents.settle_all(true);
             drop(state);
             self.clear_approvals(projector.turn_id()).await;
             self.enqueue(projector.cancel()).await?;
-            self.enqueue(children).await?;
             self.settled.notify_waiters();
         }
         Ok(())
