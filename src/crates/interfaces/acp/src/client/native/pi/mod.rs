@@ -1,10 +1,15 @@
 //! Pi coding agent (`pi --mode rpc`) identity, resume policy and session.
 //!
 //! Pi persists sessions per project cwd; the driver pins one Pi session id
-//! per OpenBitFun session and always launches with `--session-id <id>`, which
-//! opens the transcript or creates it on first launch.
+//! per OpenBitFun session and launches with `--session-id <id>`, which opens
+//! the transcript or creates it on first launch. A pending branch (fork or a
+//! rollback that could not apply in place) launches with `--fork` instead and
+//! rebinds the session to the id Pi reports. Tool approvals come from the
+//! OpenBitFun approval extension loaded with `-e`.
+mod approval;
 mod cli;
 mod errors;
+mod history;
 mod projector;
 mod session;
 pub use session::{PiNativeSession, CLIENT_ID};
@@ -13,13 +18,14 @@ use super::{
     NativeAgentCapabilities, NativeAgentDriver, NativeAgentOpenContext, NativeAgentSession,
 };
 use crate::client::session_persistence::{
-    CUSTOM_METADATA_CLIENT_ID_KEY, CUSTOM_METADATA_REMOTE_SESSION_ID_KEY,
-    CUSTOM_METADATA_RESUME_STRATEGY_KEY,
+    CUSTOM_METADATA_CLIENT_ID_KEY, CUSTOM_METADATA_LAST_RESUME_ERROR_KEY,
+    CUSTOM_METADATA_REMOTE_SESSION_ID_KEY, CUSTOM_METADATA_RESUME_STRATEGY_KEY,
 };
 use async_trait::async_trait;
+use history::{PendingFork, PiHistory};
 use openbitfun_core::service::session::SessionMetadata;
 use openbitfun_core::util::errors::{OpenBitFunError, OpenBitFunResult};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::sync::Arc;
 
 /// The Pi session already holds a transcript under this id.
@@ -60,6 +66,14 @@ impl NativeAgentDriver for PiNativeDriver {
     fn capabilities(&self) -> NativeAgentCapabilities {
         capabilities()
     }
+    fn fork_metadata(
+        &self,
+        source: &Value,
+        turn_id: &str,
+        copied_turn_ids: &[String],
+    ) -> OpenBitFunResult<serde_json::Map<String, Value>> {
+        pi_fork_metadata(source, turn_id, copied_turn_ids)
+    }
     async fn open(
         &self,
         context: NativeAgentOpenContext,
@@ -80,6 +94,7 @@ impl NativeAgentDriver for PiNativeDriver {
                 OpenBitFunError::NotFound(format!("Pi session record not found: {session_id}"))
             })?;
         let (persisted, resume, turn_index) = pi_state_from_metadata(&metadata)?;
+        let history = PiHistory::from_metadata(metadata.custom_metadata.as_ref());
         ensure_bound_cwd(metadata.workspace_path.as_deref(), &workspace_path, resume)?;
         let pi_session_id = persisted.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         persistence
@@ -106,6 +121,7 @@ impl NativeAgentDriver for PiNativeDriver {
             turn_index,
             notifier,
         );
+        session.apply_history(history);
         session.apply_preferences(
             persistence
                 .load_native_preferences(CLIENT_ID, &session_storage_path, &session_id)
@@ -115,12 +131,18 @@ impl NativeAgentDriver for PiNativeDriver {
     }
 }
 
-/// Only what `pi --mode rpc` actually supports. Pi runs tools without
-/// approval prompts, so there is no permission mode; rollback/fork stay off
-/// until branch anchoring is implemented.
+/// Only what `pi --mode rpc` actually supports. Approvals come from the
+/// OpenBitFun extension; rollback and fork branch Pi's session tree
+/// (conversation only, Pi keeps no file checkpoints).
 pub(crate) fn capabilities() -> NativeAgentCapabilities {
     NativeAgentCapabilities {
         select_model: true,
+        permission_mode: true,
+        history: super::capabilities::NativeHistoryCapabilities {
+            rollback_last_turn: true,
+            fork: true,
+            import_transcripts: false,
+        },
         thinking: true,
         commands: true,
         compact: true,
@@ -137,7 +159,7 @@ pub(crate) fn capabilities() -> NativeAgentCapabilities {
 }
 
 /// Pi accepts letters, numbers, `.`, `_` and `-` in `--session-id`.
-fn valid_pi_session_id(id: &str) -> bool {
+pub(super) fn valid_pi_session_id(id: &str) -> bool {
     !id.is_empty()
         && id
             .chars()
@@ -171,6 +193,77 @@ fn pi_state_from_metadata(
         .and_then(Value::as_str)
         == Some(RESUME_STRATEGY);
     Ok((id.clone(), id.is_some() && resumed, metadata.turn_count))
+}
+
+/// The fork launches with `--fork` from the source's Pi session (or the
+/// session the source itself still forks from) and is cut before the first
+/// prompt after `turn_id`.
+fn pi_fork_metadata(
+    source: &Value,
+    turn_id: &str,
+    copied_turn_ids: &[String],
+) -> OpenBitFunResult<serde_json::Map<String, Value>> {
+    if source
+        .get(CUSTOM_METADATA_CLIENT_ID_KEY)
+        .and_then(Value::as_str)
+        != Some(CLIENT_ID)
+    {
+        return Err(OpenBitFunError::Validation(
+            "Session is not a Pi native session".into(),
+        ));
+    }
+    let history = PiHistory::from_metadata(Some(source));
+    let (anchors, cut_before) = history
+        .fork_point(turn_id)
+        .map_err(OpenBitFunError::Validation)?;
+    let session_id = match &history.pending {
+        // The source has not launched its own branch yet; its anchors still
+        // name entries of that branch's source.
+        Some(pending) => pending.session_id.clone(),
+        None => source
+            .get(CUSTOM_METADATA_REMOTE_SESSION_ID_KEY)
+            .and_then(Value::as_str)
+            .filter(|id| {
+                valid_pi_session_id(id)
+                    && source
+                        .get(CUSTOM_METADATA_RESUME_STRATEGY_KEY)
+                        .and_then(Value::as_str)
+                        == Some(RESUME_STRATEGY)
+            })
+            .map(str::to_string)
+            .ok_or_else(|| {
+                OpenBitFunError::Validation(
+                    "The Pi session of this conversation is unavailable for forking".into(),
+                )
+            })?,
+    };
+    let turns = anchors
+        .into_iter()
+        .filter_map(|mut anchor| {
+            anchor.turn_index = copied_turn_ids
+                .iter()
+                .position(|id| *id == anchor.turn_id)?;
+            Some(anchor)
+        })
+        .collect();
+    let forked = PiHistory {
+        turns,
+        pending: Some(PendingFork {
+            session_id,
+            cut_before,
+        }),
+        cursor: None,
+        synced: false,
+    };
+    let mut keys = serde_json::Map::new();
+    keys.insert(CUSTOM_METADATA_REMOTE_SESSION_ID_KEY.into(), Value::Null);
+    keys.insert(
+        CUSTOM_METADATA_RESUME_STRATEGY_KEY.into(),
+        json!(PREPARED_STRATEGY),
+    );
+    keys.insert(CUSTOM_METADATA_LAST_RESUME_ERROR_KEY.into(), Value::Null);
+    keys.insert(history::METADATA_KEY.into(), forked.to_value());
+    Ok(keys)
 }
 
 /// Pi groups sessions by cwd, so a session with a transcript must launch in
@@ -252,10 +345,70 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_advertise_no_permission_or_history_support() {
+    fn fork_cuts_the_source_after_the_turn_and_chains_unlaunched_forks() {
+        let source = json!({
+            "acpClientId": "pi-native",
+            "acpRemoteSessionId": "pi-src",
+            "acpResumeStrategy": "pi-native-rpc",
+            "piNativeHistory": {"turns": [
+                {"turnId":"t1","turnIndex":0,"prompted":true,"entryId":"e1"},
+                {"turnId":"t2","turnIndex":1,"prompted":true,"entryId":"e5"},
+                {"turnId":"t3","turnIndex":2,"prompted":true,"entryId":"e9"}],
+                "cursor":"e12","synced":true}
+        });
+        let keys = pi_fork_metadata(&source, "t2", &["t1".into(), "t2".into()]).unwrap();
+        assert_eq!(keys["acpRemoteSessionId"], Value::Null);
+        assert_eq!(keys["acpResumeStrategy"], "pi-native-prepared");
+        let history = PiHistory::from_metadata(Some(&Value::Object(keys.clone())));
+        assert_eq!(
+            history.pending,
+            Some(PendingFork {
+                session_id: "pi-src".into(),
+                cut_before: Some("e9".into())
+            })
+        );
+        assert_eq!(history.turns.len(), 2);
+        assert!(!history.synced && history.cursor.is_none());
+        // Forking the unlaunched fork branches the origin session again.
+        let mut fork = Value::Object(keys);
+        fork["acpClientId"] = json!("pi-native");
+        let again = pi_fork_metadata(&fork, "t1", &["t1".into()]).unwrap();
+        let history = PiHistory::from_metadata(Some(&Value::Object(again)));
+        assert_eq!(
+            history.pending,
+            Some(PendingFork {
+                session_id: "pi-src".into(),
+                cut_before: Some("e5".into())
+            })
+        );
+        // The latest turn keeps the whole session.
+        let latest = pi_fork_metadata(&source, "t3", &[]).unwrap();
+        let history = PiHistory::from_metadata(Some(&Value::Object(latest)));
+        assert_eq!(history.pending.unwrap().cut_before, None);
+    }
+
+    #[test]
+    fn legacy_sessions_load_but_cannot_fork_old_turns() {
+        let legacy = json!({"acpClientId":"pi-native", "acpRemoteSessionId":"pi-old",
+            "acpResumeStrategy":"pi-native-rpc"});
+        assert_eq!(
+            pi_state_from_metadata(&metadata(legacy.clone())).unwrap(),
+            (Some("pi-old".into()), true, 0)
+        );
+        assert_eq!(PiHistory::from_metadata(Some(&legacy)), PiHistory::default());
+        let error = pi_fork_metadata(&legacy, "t-old", &[]).unwrap_err();
+        assert!(error.to_string().contains("before Pi fork support"));
+        let unstarted = json!({"acpClientId":"pi-native",
+            "piNativeHistory": {"turns": [{"turnId":"t1","prompted":true,"entryId":"e1"}]}});
+        assert!(pi_fork_metadata(&unstarted, "t1", &[]).is_err());
+    }
+
+    #[test]
+    fn capabilities_advertise_approvals_and_history() {
         let caps = capabilities();
-        assert!(!caps.permission_mode && !caps.plan && !caps.background_tasks);
-        assert!(!caps.history.rollback_last_turn && !caps.history.fork);
+        assert!(caps.permission_mode && !caps.plan && !caps.background_tasks);
+        assert!(caps.history.rollback_last_turn && caps.history.fork);
+        assert!(!caps.history.import_transcripts);
         assert!(caps.select_model && caps.thinking && caps.compact && caps.context_usage);
         assert!(caps.input.images && caps.input.steering && !caps.input.queue);
     }
