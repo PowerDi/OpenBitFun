@@ -203,6 +203,12 @@ pub struct PiNativeSession {
     bridge_loaded: AtomicBool,
     /// Serializes `get_entries` syncs so anchors are attributed in order.
     entry_sync: Mutex<()>,
+    /// Every frame routed through this session (live protocol tests only).
+    #[cfg(test)]
+    frame_tap: std::sync::Mutex<Vec<Value>>,
+    /// Extension path launched instead of the bridge (live tests only).
+    #[cfg(test)]
+    extension_override: std::sync::Mutex<Option<PathBuf>>,
 }
 
 fn lock<T>(slot: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -253,6 +259,10 @@ impl PiNativeSession {
             history: std::sync::Mutex::new(PiHistory::default()),
             bridge_loaded: AtomicBool::new(false),
             entry_sync: Mutex::new(()),
+            #[cfg(test)]
+            frame_tap: std::sync::Mutex::new(Vec::new()),
+            #[cfg(test)]
+            extension_override: std::sync::Mutex::new(None),
         })
     }
 
@@ -467,6 +477,8 @@ impl PiNativeSession {
             (args, command)
         } else {
             let extension = approval::install_local_extension().await?;
+            #[cfg(test)]
+            let extension = lock(&self.extension_override).clone().unwrap_or(extension);
             let args = cli_args(&target, Some(&extension.to_string_lossy()));
             (args, String::new())
         };
@@ -504,6 +516,11 @@ impl PiNativeSession {
         if let Err(error) = self.initialize(&process).await {
             process.kill().await;
             let tail = process.stderr_tail().await;
+            // Keep one "Service error:" prefix when re-wrapping with stderr.
+            let error = match error {
+                OpenBitFunError::Service(message) => message,
+                other => other.to_string(),
+            };
             return Err(service_error(format!("{error}\n{tail}")));
         }
         Ok(process)
@@ -804,6 +821,8 @@ impl PiNativeSession {
         process: &Arc<PiProcess>,
         frame: Value,
     ) -> OpenBitFunResult<()> {
+        #[cfg(test)]
+        lock(&self.frame_tap).push(frame.clone());
         match frame["type"].as_str() {
             Some("response") => {
                 if let Some(id) = frame["id"].as_str() {
@@ -1755,3 +1774,7 @@ fn service_error(message: impl Into<String>) -> OpenBitFunError {
 #[cfg(test)]
 #[path = "session_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "live_tests.rs"]
+mod live_tests;
