@@ -220,3 +220,54 @@ fn only_user_messages_after_the_prompt_count_as_injected() {
         .is_injected_user_message(&json!({"type":"message_start","message":{"role":"assistant"}})));
     assert!(projector.is_injected_user_message(&user));
 }
+
+#[test]
+fn tool_updates_show_latest_partial_text_in_the_running_card() {
+    let mut projector = PiTurnProjector::new("s1", "t1", None, None);
+    let started = |events: &[AgenticEvent]| -> Vec<Value> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                AgenticEvent::ToolEvent {
+                    tool_event: ToolEventData::Started { params, .. },
+                    ..
+                } => Some(params.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let partial = |text: Value| {
+        json!({"type":"tool_execution_update", "toolCallId":"c1", "toolName":"subagent",
+            "args":{"agent":"scout"}, "partialResult":{"content":text, "details":{"unknown":true}}})
+    };
+    let events = run(
+        &mut projector,
+        &[
+            json!({"type":"tool_execution_start", "toolCallId":"c1", "toolName":"subagent",
+                "args":{"agent":"scout", "task":"look"}}),
+            partial(json!([{"type":"text", "text":"(running...)"}])),
+            // Same snapshot again, then shapes without text: nothing new.
+            partial(json!([{"type":"text", "text":"(running...)"}])),
+            partial(json!(null)),
+            partial(json!([{"type":"image"}])),
+            partial(json!([{"type":"text", "text":"found 2 files"}])),
+            // Unknown tool call ids are ignored.
+            json!({"type":"tool_execution_update", "toolCallId":"other",
+                "partialResult":{"content":[{"type":"text", "text":"x"}]}}),
+        ],
+    );
+    let params = started(&events);
+    assert_eq!(params.len(), 3, "start plus two distinct progress updates");
+    assert!(params[0].get("progress").is_none());
+    assert_eq!(params[1]["progress"], "(running...)");
+    assert_eq!(params[2]["progress"], "found 2 files");
+    assert_eq!(params[2]["task"], "look", "original params are kept");
+    let long = "y".repeat(PROGRESS_LIMIT + 50);
+    let events = run(&mut projector, &[partial(json!(long))]);
+    let progress = started(&events)[0]["progress"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(progress.chars().count(), PROGRESS_LIMIT + 3);
+    assert!(progress.starts_with("..."));
+}
