@@ -2517,8 +2517,11 @@ fn cli_args(id: &str, resume: bool, pending: Option<&PendingResume>) -> Vec<Stri
         // Only makes bypass *selectable* at runtime; the session still starts
         // in the chosen mode (codexhost passes the same flag).
         "--allow-dangerously-skip-permissions",
+        // Same sources as running `claude` in the workspace: project/local
+        // settings carry `.claude/agents`, hooks, skills and permissions.
+        // Fresh, resume and fork launches all go through here.
         "--setting-sources",
-        "user",
+        "user,project,local",
         // Echo prompts with their transcript uuid (rollback/fork anchors).
         "--replay-user-messages",
     ]
