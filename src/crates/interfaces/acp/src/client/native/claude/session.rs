@@ -42,6 +42,9 @@ use crate::client::{
 pub const CLIENT_ID: &str = "claude-native";
 /// Follow the Claude CLI's own configured model (no `--model` flag).
 pub const DEFAULT_MODEL_ID: &str = "default";
+/// `triggerSource` of a turn the CLI started after a background task
+/// finished (not typed by the user; the UI disables editing it).
+pub(crate) const WAKE_TRIGGER_SOURCE: &str = "native_background_task";
 const PERMISSION_MODE_CONFIG_ID: &str = "permission-mode";
 const THINKING_CONFIG_ID: &str = "thinking";
 /// Claude Code permission modes (same catalog as codexhost). `auto` is only
@@ -185,6 +188,66 @@ struct TurnState {
     tasks: ClaudeTasks,
     /// Steering messages written to stdin and not yet taken in by Claude.
     steers: Vec<PendingSteer>,
+    /// Finished background tasks whose `<task-notification>` the CLI queued
+    /// for the main agent. When the CLI runs one between turns, the next
+    /// autonomous turn is labelled with it (oldest first).
+    wake_reasons: VecDeque<WakeReason>,
+}
+
+/// Why Claude Code woke the main agent between turns: a backgrounded task
+/// (subagent or shell) finished. The CLI itself injects the notification and
+/// starts the turn; the driver only labels it.
+#[derive(Debug, Clone, PartialEq)]
+struct WakeReason {
+    task_id: String,
+    tool_use_id: Option<String>,
+    task_type: Option<String>,
+    subagent_type: Option<String>,
+    description: String,
+    status: String,
+    summary: Option<String>,
+}
+
+impl WakeReason {
+    fn is_agent(&self) -> bool {
+        self.task_type.as_deref() == Some("local_agent") || self.subagent_type.is_some()
+    }
+
+    /// Visible (English) prompt line of the woken turn.
+    fn display_input(&self) -> String {
+        let subject = if self.is_agent() {
+            "Background agent"
+        } else {
+            "Background task"
+        };
+        let verb = if self.status == "completed" {
+            "finished"
+        } else {
+            "failed"
+        };
+        let mut text = format!("{subject} {verb}");
+        if !self.description.trim().is_empty() {
+            text.push_str(": ");
+            text.push_str(self.description.trim());
+        }
+        text
+    }
+
+    fn metadata(&self) -> Value {
+        json!({
+            "triggerSource": WAKE_TRIGGER_SOURCE,
+            "nativeWake": {
+                "source": "background_task",
+                "taskId": self.task_id,
+                "toolUseId": self.tool_use_id,
+                "taskType": self.task_type,
+                "subagentType": self.subagent_type,
+                "description": self.description,
+                "status": self.status,
+                "summary": self.summary,
+            },
+        })
+    }
 }
 
 /// A mid-turn user message queued in the CLI with `priority:"next"`. Claude
@@ -303,6 +366,33 @@ impl ClaudeNativeSession {
             drop(background);
             self.notify(NativeAgentNotification::BackgroundTasksUpdated(tasks));
         }
+    }
+
+    /// A finished backgrounded task the CLI will report to the main agent.
+    /// Stopped tasks (user stop, interrupt) do not wake it.
+    fn wake_reason(&self, frame: &Value) -> Option<WakeReason> {
+        let task_id = frame["task_id"].as_str()?;
+        let status = frame["status"].as_str().unwrap_or("completed");
+        if !matches!(status, "completed" | "failed") {
+            return None;
+        }
+        let background = self.background();
+        let task = background.backgrounded(task_id)?;
+        Some(WakeReason {
+            task_id: task_id.to_string(),
+            tool_use_id: frame["tool_use_id"]
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| task.tool_use_id.clone()),
+            task_type: task.task_type.clone(),
+            subagent_type: task.subagent_type.clone(),
+            description: task.description.clone(),
+            status: status.to_string(),
+            summary: frame["summary"]
+                .as_str()
+                .filter(|summary| !summary.trim().is_empty())
+                .map(str::to_string),
+        })
     }
 
     fn touch(&self) {
@@ -1060,6 +1150,46 @@ impl ClaudeNativeSession {
         original: Option<String>,
         autonomous: bool,
     ) -> OpenBitFunResult<()> {
+        self.begin_turn_with(state, turn_id, input, original, autonomous, None)
+            .await
+    }
+
+    /// Open the turn Claude Code started on its own (background output or a
+    /// queued task notification), labelled with the oldest wake reason.
+    async fn begin_autonomous_turn(&self, state: &mut TurnState) -> OpenBitFunResult<()> {
+        let reason = state.wake_reasons.pop_front();
+        if let Some(reason) = &reason {
+            log::info!(
+                "Claude woke the main agent after a background task: session_id={}, task_id={}, status={}",
+                self.session_id,
+                reason.task_id,
+                reason.status
+            );
+        }
+        let (input, metadata) = match reason {
+            Some(reason) => (reason.display_input(), Some(reason.metadata())),
+            None => (String::new(), None),
+        };
+        self.begin_turn_with(
+            state,
+            uuid::Uuid::new_v4().to_string(),
+            input,
+            None,
+            true,
+            metadata,
+        )
+        .await
+    }
+
+    async fn begin_turn_with(
+        &self,
+        state: &mut TurnState,
+        turn_id: String,
+        input: String,
+        original: Option<String>,
+        autonomous: bool,
+        metadata: Option<Value>,
+    ) -> OpenBitFunResult<()> {
         let manual_compaction = input.split_whitespace().next() == Some("/compact");
         self.enqueue(vec![AgenticEvent::DialogTurnStarted {
             session_id: self.session_id.clone(),
@@ -1067,7 +1197,7 @@ impl ClaudeNativeSession {
             turn_index: state.index,
             user_input: input,
             original_user_input: original,
-            user_message_metadata: None,
+            user_message_metadata: metadata,
         }])
         .await?;
         state.index += 1;
@@ -1406,6 +1536,9 @@ impl ClaudeNativeSession {
                     return Ok(());
                 }
                 Some("task_notification") => {
+                    if let Some(reason) = self.wake_reason(&frame) {
+                        state.wake_reasons.push_back(reason);
+                    }
                     if let Some(tool_id) = frame["tool_use_id"].as_str() {
                         let tool_id = tool_id.to_string();
                         let failed = frame["status"].as_str().is_some_and(|s| s != "completed");
@@ -1422,15 +1555,27 @@ impl ClaudeNativeSession {
         }
         let folded = state.projector.is_some() && Self::is_steer_echo(&state, &frame);
         self.settle_steers(&mut state, &frame).await?;
+        if let Some(task_id) = injected_notification_task(&frame) {
+            if state.projector.is_some() {
+                // Taken into the running turn: it wakes nothing later.
+                state
+                    .wake_reasons
+                    .retain(|reason| reason.task_id != task_id);
+            } else {
+                // The CLI starts the wake turn with the notification itself.
+                if let Some(position) = state
+                    .wake_reasons
+                    .iter()
+                    .position(|reason| reason.task_id == task_id)
+                {
+                    let reason = state.wake_reasons.remove(position).expect("position");
+                    state.wake_reasons.push_front(reason);
+                }
+                self.begin_autonomous_turn(&mut state).await?;
+            }
+        }
         if state.projector.is_none() && opens_autonomous_turn(&frame) {
-            self.begin_turn(
-                &mut state,
-                uuid::Uuid::new_v4().to_string(),
-                String::new(),
-                None,
-                true,
-            )
-            .await?;
+            self.begin_autonomous_turn(&mut state).await?;
         }
         if state.projector.is_some() {
             state.process_id = Some(process.id.clone());
@@ -1925,6 +2070,9 @@ impl ClaudeNativeSession {
         let _guard = self.lifecycle.lock().await;
         {
             let mut state = self.state.lock().await;
+            // The interrupt stops background agents and drops queued
+            // notifications in the CLI; nothing is left to wake for.
+            state.wake_reasons.clear();
             if let Some(projector) = state.projector.as_mut() {
                 projector.mark_cancel_requested();
             }
@@ -2229,6 +2377,30 @@ fn unix_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)
         .unwrap_or_default()
+}
+
+/// Task id of a `<task-notification>` the CLI injected into the main
+/// conversation as a user message.
+fn injected_notification_task(frame: &Value) -> Option<String> {
+    if frame["type"] != "user" || !frame.get("parent_tool_use_id").is_none_or(Value::is_null) {
+        return None;
+    }
+    let content = &frame["message"]["content"];
+    let text = match content {
+        Value::String(text) => text.as_str(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .find_map(|block| block["text"].as_str())
+            .unwrap_or_default(),
+        _ => return None,
+    };
+    let text = text.trim_start();
+    if !text.starts_with("<task-notification>") {
+        return None;
+    }
+    let start = text.find("<task-id>")? + "<task-id>".len();
+    let end = start + text[start..].find("</task-id>")?;
+    Some(text[start..end].trim().to_string()).filter(|id| !id.is_empty())
 }
 
 fn opens_autonomous_turn(frame: &Value) -> bool {

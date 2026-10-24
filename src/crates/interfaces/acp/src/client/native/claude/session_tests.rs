@@ -1657,3 +1657,180 @@ async fn only_the_first_user_turn_generates_a_title_in_the_background() {
         vec![("s1".into(), "Fix the build".into(), "fallback".into())]
     );
 }
+
+fn background_agent(id: &str, tool: &str) -> Value {
+    json!({"type":"system", "subtype":"task_started", "task_id":id, "tool_use_id":tool,
+        "description":"Sleep task", "task_type":"local_agent", "subagent_type":"general-purpose",
+        "is_backgrounded":true, "uuid":"u", "session_id":"s"})
+}
+
+fn task_done(id: &str, tool: &str, status: &str) -> Value {
+    json!({"type":"system", "subtype":"task_notification", "task_id":id, "tool_use_id":tool,
+        "status":status, "summary":"DONE", "uuid":"u", "session_id":"s"})
+}
+
+fn started_turns(
+    events: &[openbitfun_core::agentic::events::EventEnvelope],
+) -> Vec<(String, Option<Value>)> {
+    events
+        .iter()
+        .filter_map(|e| match &e.event {
+            // Parent session only; linked subagent children open their own.
+            AgenticEvent::DialogTurnStarted {
+                session_id,
+                user_input,
+                user_message_metadata,
+                ..
+            } if session_id == "s1" => Some((user_input.clone(), user_message_metadata.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn background_agent_completion_labels_the_cli_wake_turn() {
+    let (session, process, _output) = fixture();
+    *session.process.lock().await = Some(process.clone());
+    session
+        .begin_turn(
+            &mut *session.state.lock().await,
+            "t1".into(),
+            "go".into(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    for frame in [
+        background_agent("a1", "tool1"),
+        json!({"type":"result", "subtype":"success", "is_error":false}),
+        // Turn ended; the agent keeps running and then finishes while idle.
+        task_done("a1", "tool1", "completed"),
+        // Claude Code wakes the main agent on its own.
+        json!({"type":"system", "subtype":"init", "model":"m", "session_id":"s"}),
+        json!({"type":"assistant", "message":{"id":"m2", "content":[{"type":"text", "text":"RESUMED"}]}}),
+        json!({"type":"result", "subtype":"success", "is_error":false}),
+    ] {
+        session.route_frame(&process, frame).await.unwrap();
+    }
+    assert!(session.state.lock().await.projector.is_none());
+    let events = session.queue.dequeue_batch(300).await;
+    let turns = started_turns(&events);
+    assert_eq!(turns.len(), 2, "user turn and one wake turn");
+    let (input, metadata) = &turns[1];
+    assert_eq!(input, "Background agent finished: Sleep task");
+    let metadata = metadata.as_ref().expect("wake metadata");
+    assert_eq!(metadata["triggerSource"], WAKE_TRIGGER_SOURCE);
+    assert_eq!(metadata["nativeWake"]["taskId"], "a1");
+    assert_eq!(metadata["nativeWake"]["toolUseId"], "tool1");
+    assert_eq!(metadata["nativeWake"]["summary"], "DONE");
+    assert!(events
+        .iter()
+        .any(|e| matches!(&e.event, AgenticEvent::TextChunk { text, .. } if text == "RESUMED")));
+    assert!(session.state.lock().await.wake_reasons.is_empty());
+}
+
+#[tokio::test]
+async fn notification_taken_into_running_turn_does_not_label_a_later_turn() {
+    let (session, process, _output) = fixture();
+    *session.process.lock().await = Some(process.clone());
+    session
+        .begin_turn(
+            &mut *session.state.lock().await,
+            "t1".into(),
+            "go".into(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    for frame in [
+        background_agent("a1", "tool1"),
+        task_done("a1", "tool1", "completed"),
+        // The CLI folds the notification into the running turn.
+        json!({"type":"user", "isReplay":true, "uuid":"n1", "parent_tool_use_id":null,
+            "message":{"role":"user", "content":"<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n</task-notification>"}}),
+        json!({"type":"result", "subtype":"success", "is_error":false}),
+        // Unrelated background output later opens a generic autonomous turn.
+        json!({"type":"assistant", "message":{"id":"m3", "content":[{"type":"text", "text":"late"}]}}),
+    ] {
+        session.route_frame(&process, frame).await.unwrap();
+    }
+    let turns = started_turns(&session.queue.dequeue_batch(300).await);
+    assert_eq!(turns.len(), 2);
+    assert_eq!(turns[1], (String::new(), None));
+}
+
+#[tokio::test]
+async fn idle_injected_notification_opens_the_matching_wake_turn() {
+    let (session, process, _output) = fixture();
+    *session.process.lock().await = Some(process.clone());
+    for frame in [
+        background_agent("a1", "tool1"),
+        background_agent("a2", "tool2"),
+        task_done("a1", "tool1", "completed"),
+        task_done("a2", "tool2", "failed"),
+        // The CLI runs the second notification first.
+        json!({"type":"user", "isReplay":true, "uuid":"n2", "parent_tool_use_id":null,
+            "message":{"role":"user", "content":[{"type":"text", "text":"<task-notification>\n<task-id>a2</task-id>\n</task-notification>"}]}}),
+    ] {
+        session.route_frame(&process, frame).await.unwrap();
+    }
+    let turns = started_turns(&session.queue.dequeue_batch(300).await);
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].0, "Background agent failed: Sleep task");
+    assert_eq!(turns[0].1.as_ref().unwrap()["nativeWake"]["taskId"], "a2");
+    let pending: Vec<_> = session
+        .state
+        .lock()
+        .await
+        .wake_reasons
+        .iter()
+        .map(|r| r.task_id.clone())
+        .collect();
+    assert_eq!(pending, vec!["a1".to_string()]);
+}
+
+#[tokio::test]
+async fn stopped_tasks_and_cancel_leave_nothing_to_wake_for() {
+    let (session, process, _output) = fixture();
+    *session.process.lock().await = Some(process.clone());
+    for frame in [
+        background_agent("a1", "tool1"),
+        background_agent("a2", "tool2"),
+        task_done("a1", "tool1", "stopped"),
+        task_done("a2", "tool2", "completed"),
+    ] {
+        session.route_frame(&process, frame).await.unwrap();
+    }
+    let pending: Vec<_> = session
+        .state
+        .lock()
+        .await
+        .wake_reasons
+        .iter()
+        .map(|r| r.task_id.clone())
+        .collect();
+    assert_eq!(
+        pending,
+        vec!["a2".to_string()],
+        "a stopped task wakes nothing"
+    );
+    // The process is not attached as live for the interrupt; cancel still
+    // clears what the CLI drops on interrupt.
+    process.alive.store(false, Ordering::Release);
+    session.cancel().await.unwrap();
+    assert!(session.state.lock().await.wake_reasons.is_empty());
+}
+
+#[test]
+fn injected_notification_task_reads_only_main_conversation_notifications() {
+    let main = json!({"type":"user", "parent_tool_use_id":null,
+        "message":{"content":"<task-notification>\n<task-id> b7 </task-id>\n</task-notification>"}});
+    assert_eq!(injected_notification_task(&main).as_deref(), Some("b7"));
+    let child = json!({"type":"user", "parent_tool_use_id":"tool1",
+        "message":{"content":"<task-notification><task-id>b7</task-id></task-notification>"}});
+    assert_eq!(injected_notification_task(&child), None);
+    let typed = json!({"type":"user", "message":{"content":"please check <task-id>b7</task-id>"}});
+    assert_eq!(injected_notification_task(&typed), None);
+}
