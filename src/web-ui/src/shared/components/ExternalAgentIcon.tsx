@@ -2,7 +2,7 @@
 const EXTERNAL_AGENT_ICON_SOURCES: Record<string, string> = {
   'claude-native': '/assets/ecosystem-compatibility/claude-code.svg',
   'codex-native': '/assets/ecosystem-compatibility/codex-mark.svg',
-  'pi-native': '/assets/ecosystem-compatibility/pi.svg',
+  'pi-native': '/assets/ecosystem-compatibility/pi-mark.svg',
   'claude-code': '/assets/ecosystem-compatibility/claude-code.svg',
   codex: '/assets/ecosystem-compatibility/codex-mark.svg',
   dsh: '/assets/ecosystem-compatibility/deepseek-harness.svg',
@@ -10,7 +10,10 @@ const EXTERNAL_AGENT_ICON_SOURCES: Record<string, string> = {
 };
 
 /** Single-color marks drawn in the surrounding text color through a mask. */
-const MONOCHROME_SOURCES = new Set(['/assets/ecosystem-compatibility/codex-mark.svg']);
+const MONOCHROME_SOURCES = new Set([
+  '/assets/ecosystem-compatibility/codex-mark.svg',
+  '/assets/ecosystem-compatibility/pi-mark.svg',
+]);
 
 export function externalAgentIconSource(clientId: string | null | undefined): string | null {
   return clientId ? EXTERNAL_AGENT_ICON_SOURCES[clientId] ?? null : null;
