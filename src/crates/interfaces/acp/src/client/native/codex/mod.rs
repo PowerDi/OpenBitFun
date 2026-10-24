@@ -69,6 +69,8 @@ impl NativeAgentDriver for CodexNativeDriver {
             },
             // OpenBitFun-managed worktrees; the thread keeps its first cwd.
             worktree: true,
+            // The driver wakes an idle parent when a spawned agent finishes.
+            autonomous_turns: true,
             ..Default::default()
         }
     }

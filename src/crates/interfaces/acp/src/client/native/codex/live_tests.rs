@@ -823,3 +823,92 @@ async fn live_file_change_approval() {
     );
     session.shutdown().await;
 }
+
+/// One parent turn spawns an agent that outlives it; the driver must wake
+/// the idle parent once the agent finishes. 3 model turns (parent, child,
+/// wake).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "spawns the real codex app-server; set OBF_LIVE_CODEX=1"]
+async fn live_subagent_wakes_idle_parent() {
+    if !enabled() {
+        return;
+    }
+    let dir = workspace();
+    let session = session(&dir, None);
+    cheap(&session).await;
+    session
+        .set_config_option(
+            PERMISSION_MODE_CONFIG_ID,
+            AcpSessionConfigValue::Select {
+                value: "full-access".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let run = turn(
+        &session,
+        "p1",
+        "Spawn exactly one sub-agent with the spawn_agent tool whose task is: 'Run the shell command `sleep 15` and then reply with the single word DONE.' \
+         Do NOT call wait_agent. Right after spawning, reply with just the word LAUNCHED and end your turn. \
+         Later, when you are notified that the sub-agent finished, reply with just the word RESUMED.",
+        OnApproval::Leave,
+    )
+    .await;
+    println!("p1 text={:?} end={}", run.text(), run.ended_with());
+    assert_eq!(run.ended_with(), "completed");
+    assert!(
+        run.events
+            .iter()
+            .any(|e| matches!(e, AgenticEvent::SubagentSessionLinked { .. })),
+        "spawned agent is linked as a child session"
+    );
+    // Wait for the driver's wake turn and its completion.
+    let deadline = tokio::time::Instant::now() + TURN_TIMEOUT;
+    let mut wake: Option<String> = None;
+    let mut text = String::new();
+    let mut child_text = String::new();
+    let ended = 'wait: loop {
+        assert!(tokio::time::Instant::now() < deadline, "no wake turn");
+        for envelope in session.queue.dequeue_batch(1000).await {
+            println!("  event: {}", describe(&envelope.event));
+            match &envelope.event {
+                AgenticEvent::DialogTurnStarted {
+                    session_id,
+                    turn_id,
+                    user_input,
+                    user_message_metadata,
+                    ..
+                } if session_id == "live" => {
+                    let metadata = user_message_metadata.clone().unwrap_or_default();
+                    assert_eq!(
+                        metadata["triggerSource"],
+                        crate::client::native::NATIVE_WAKE_TRIGGER_SOURCE
+                    );
+                    println!("wake input={user_input:?}");
+                    wake = Some(turn_id.clone());
+                }
+                AgenticEvent::TextChunk {
+                    session_id,
+                    text: chunk,
+                    ..
+                } if session_id == "live" => text.push_str(chunk),
+                AgenticEvent::TextChunk { text: chunk, .. } => child_text.push_str(chunk),
+                event if wake.as_deref().is_some_and(|turn| is_end(event, turn)) => {
+                    break 'wait describe(event);
+                }
+                _ => {}
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    println!("wake end={ended} text={text:?} child_text={child_text:?}");
+    assert!(
+        ended.starts_with("DialogTurnCompleted"),
+        "wake turn completed: {ended}"
+    );
+    assert!(child_text.contains("DONE"), "child output projected");
+    assert!(
+        text.to_uppercase().contains("RESUMED"),
+        "parent resumed on the notification"
+    );
+}
