@@ -61,7 +61,8 @@ const PERMISSION_MODES: &[(&str, &str, &str)] = &[
         "跳过 Claude Code 权限检查。",
     ),
 ];
-/// Thinking options: `auto` keeps adaptive thinking at the model default.
+/// Thinking options: `auto` leaves thinking to Claude Code settings and the
+/// model default.
 const THINKING_LEVELS: &[(&str, &str)] = &[
     ("off", "Off"),
     ("auto", "Auto"),
@@ -2475,12 +2476,9 @@ fn set_flag(args: &mut [String], flag: &str, value: String) {
 fn thinking_cli_args(level: &str) -> Vec<String> {
     match level {
         "off" => vec!["--thinking".into(), "disabled".into()],
-        "auto" => vec![
-            "--thinking".into(),
-            "adaptive".into(),
-            "--thinking-display".into(),
-            "summarized".into(),
-        ],
+        // Not chosen: the CLI's own settings (alwaysThinkingEnabled,
+        // effortLevel) and model defaults apply, as when running `claude`.
+        "auto" => vec!["--thinking-display".into(), "summarized".into()],
         effort => vec![
             "--thinking".into(),
             "adaptive".into(),
@@ -2496,7 +2494,8 @@ fn thinking_cli_args(level: &str) -> Vec<String> {
 fn thinking_flag_settings(level: &str) -> Value {
     match level {
         "off" => json!({"alwaysThinkingEnabled": false}),
-        "auto" => json!({"alwaysThinkingEnabled": true, "effortLevel": null}),
+        // Clear the flag layer so the user's settings apply again.
+        "auto" => json!({"alwaysThinkingEnabled": null, "effortLevel": null}),
         effort => json!({"alwaysThinkingEnabled": true, "effortLevel": effort}),
     }
 }
