@@ -23,6 +23,8 @@
 *.py                text eol=lf
 *.mjs               text eol=lf
 *.cjs               text eol=lf
+# Embedded with include_str! and written to remote hosts through a heredoc.
+src/crates/interfaces/acp/src/client/native/pi/approval_extension.ts text eol=lf
 
 # Generated frontend/mobile contracts compare exact file contents. Keep both
 # their source fragments and generated outputs stable on every checkout so a
