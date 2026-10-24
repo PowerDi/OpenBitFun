@@ -271,6 +271,22 @@ impl PiTurnProjector {
         })
     }
 
+    /// Show the card a permission request is about. Pi starts the tool
+    /// before its `tool_call` hook asks, so this is usually a no-op; it covers
+    /// a request that arrives first.
+    pub(crate) fn permission_tool(
+        &mut self,
+        tool_id: &str,
+        name: &str,
+        args: &Value,
+    ) -> Vec<AgenticEvent> {
+        let mut out = Vec::new();
+        if !self.finished {
+            self.start_tool(Some(tool_id), Some(name), Some(args), &mut out);
+        }
+        out
+    }
+
     fn start_tool(
         &mut self,
         tool_id: Option<&str>,
@@ -687,6 +703,13 @@ pub(crate) fn native_tool_name(name: &str) -> String {
         other => other,
     }
     .to_string()
+}
+
+/// Card name and normalized card params of a Pi tool call.
+pub(crate) fn card_input(name: &str, args: &Value) -> (String, Value) {
+    let tool_name = native_tool_name(name);
+    let params = normalize_tool_params(&tool_name, card_params(&tool_name, args.clone()));
+    (tool_name, params)
 }
 
 /// Pi argument shapes -> the shapes the shared cards read. A single-entry

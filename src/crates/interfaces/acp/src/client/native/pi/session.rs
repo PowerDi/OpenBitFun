@@ -3,7 +3,8 @@
 //!
 //! The process is session-scoped. A turn starts with `prompt`, streams
 //! events, and ends at `agent_settled`; `steer` folds a message into the
-//! running turn; `abort` cancels it. Pi runs tools without approval prompts.
+//! running turn; `abort` cancels it. Tool approvals arrive as dialogs of the
+//! OpenBitFun approval extension (see `approval.rs`).
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -12,6 +13,7 @@ use std::time::Duration;
 
 use dashmap::DashMap;
 use openbitfun_core::agentic::events::EventQueue;
+use openbitfun_core::infrastructure::events::{emit_global_event, BackendEvent};
 use openbitfun_core::util::errors::{OpenBitFunError, OpenBitFunResult};
 use openbitfun_events::AgenticEvent;
 use serde_json::{json, Value};
@@ -21,14 +23,18 @@ use tokio::sync::{oneshot, Mutex, Notify};
 use super::super::preferences::NativeAgentPreferences;
 use super::super::process::{Reader, Writer};
 use super::super::title::{self, TitleResolver};
-use super::super::{NativeAgentNotification, NativeAgentNotificationSink, NativeTurnInput};
+use super::super::{
+    NativeAgentNotification, NativeAgentNotificationSink, NativeRollbackOutcome, NativeTurnInput,
+};
+use super::approval::{self, ApprovalRequest};
+use super::history::{PendingFork, PiHistory, TurnAnchor};
 use super::projector::PiTurnProjector;
 use crate::client::remote_shell::{remote_user_shell_command, shell_escape};
 use crate::client::session_persistence::AcpSessionPersistence;
 use crate::client::{
     AcpAvailableCommand, AcpSessionConfigKind, AcpSessionConfigOption,
     AcpSessionConfigSelectOption, AcpSessionConfigValue, AcpSessionContextUsage,
-    AcpSessionModelOption, AcpSessionOptions,
+    AcpSessionModelOption, AcpSessionOptions, SubmitAcpPermissionResponseRequest,
 };
 
 pub const CLIENT_ID: &str = "pi-native";
@@ -137,6 +143,13 @@ impl PiProcess {
     }
 }
 
+/// One approval dialog waiting for the user.
+struct PendingApproval {
+    process: Arc<PiProcess>,
+    request: ApprovalRequest,
+    turn_id: String,
+}
+
 /// A steering message sent with `steer` and not yet echoed by Pi.
 #[derive(Debug, Clone)]
 struct PendingSteer {
@@ -155,10 +168,9 @@ struct TurnState {
 
 pub struct PiNativeSession {
     session_id: String,
-    pi_session_id: String,
     workspace_path: String,
     remote_connection_id: Option<String>,
-    /// Pi holds a transcript for `pi_session_id` (a prompt reached it).
+    /// Pi holds a transcript for `active_pi_session` (a prompt reached it).
     resume: AtomicBool,
     process: Mutex<Option<Arc<PiProcess>>>,
     /// Serializes launch, submission and cancellation; output never takes it.
@@ -180,6 +192,17 @@ pub struct PiNativeSession {
     context_usage: std::sync::Mutex<Option<AcpSessionContextUsage>>,
     notifier: Option<NativeAgentNotificationSink>,
     title_resolver: std::sync::Mutex<TitleResolver>,
+    /// Pi session id the running process has open (changes on fork/rollback).
+    active_pi_session: std::sync::Mutex<String>,
+    permission_mode: std::sync::Mutex<String>,
+    approvals: DashMap<String, PendingApproval>,
+    /// Calls the user allowed for this session (see `ApprovalRequest::session_key`).
+    session_grants: std::sync::Mutex<std::collections::HashSet<String>>,
+    history: std::sync::Mutex<PiHistory>,
+    /// The running process loaded the approval extension (seen in `get_commands`).
+    bridge_loaded: AtomicBool,
+    /// Serializes `get_entries` syncs so anchors are attributed in order.
+    entry_sync: Mutex<()>,
 }
 
 fn lock<T>(slot: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -201,7 +224,7 @@ impl PiNativeSession {
     ) -> Arc<Self> {
         Arc::new(Self {
             session_id,
-            pi_session_id,
+            active_pi_session: std::sync::Mutex::new(pi_session_id),
             workspace_path,
             remote_connection_id,
             resume: AtomicBool::new(resume),
@@ -224,12 +247,38 @@ impl PiNativeSession {
             context_usage: std::sync::Mutex::new(None),
             notifier,
             title_resolver: std::sync::Mutex::new(title::default_resolver()),
+            permission_mode: std::sync::Mutex::new(approval::MODE_ASK.to_string()),
+            approvals: DashMap::new(),
+            session_grants: std::sync::Mutex::new(Default::default()),
+            history: std::sync::Mutex::new(PiHistory::default()),
+            bridge_loaded: AtomicBool::new(false),
+            entry_sync: Mutex::new(()),
         })
     }
 
     pub(crate) fn apply_preferences(&self, preferences: NativeAgentPreferences) {
         *lock(&self.selected_model) = preferences.model;
         *lock(&self.selected_thinking) = preferences.thinking;
+        if let Some(mode) = preferences
+            .permission_mode
+            .filter(|mode| approval::PERMISSION_MODES.iter().any(|(id, _, _)| id == mode))
+        {
+            *lock(&self.permission_mode) = mode;
+        }
+    }
+
+    pub(super) fn apply_history(&self, history: PiHistory) {
+        *lock(&self.history) = history;
+    }
+
+    async fn persist_history(&self) -> OpenBitFunResult<()> {
+        let Some((persistence, storage)) = &self.persistence else {
+            return Ok(());
+        };
+        let value = lock(&self.history).to_value();
+        persistence
+            .set_custom_metadata(storage, &self.session_id, super::history::METADATA_KEY, value)
+            .await
     }
 
     fn notify(&self, update: NativeAgentNotification) {
@@ -296,7 +345,23 @@ impl PiNativeSession {
             .and_then(Self::model_key)
             .or_else(|| lock(&self.selected_model).clone());
         let levels = lock(&self.thinking_levels).clone();
-        let mut config_options = Vec::new();
+        let mut config_options = vec![AcpSessionConfigOption {
+            id: approval::PERMISSION_MODE_CONFIG_ID.to_string(),
+            name: "Permission mode".to_string(),
+            description: None,
+            category: Some("mode".to_string()),
+            kind: AcpSessionConfigKind::Select {
+                current_value: lock(&self.permission_mode).clone(),
+                options: approval::PERMISSION_MODES
+                    .iter()
+                    .map(|(id, name, description)| AcpSessionConfigSelectOption {
+                        value: (*id).to_string(),
+                        name: (*name).to_string(),
+                        description: Some((*description).to_string()),
+                    })
+                    .collect(),
+            },
+        }];
         if levels.len() > 1 {
             config_options.push(AcpSessionConfigOption {
                 id: THINKING_CONFIG_ID.to_string(),
@@ -345,7 +410,13 @@ impl PiNativeSession {
 
     /// Pi groups transcripts by cwd: once one exists the cwd is fixed.
     pub(crate) async fn workspace_bound(&self) -> bool {
-        self.resume.load(Ordering::Acquire) || self.state.lock().await.projector.is_some()
+        self.resume.load(Ordering::Acquire)
+            || lock(&self.history).pending.is_some()
+            || self.state.lock().await.projector.is_some()
+    }
+
+    fn active_pi_session(&self) -> String {
+        lock(&self.active_pi_session).clone()
     }
 
     pub async fn warm_up(self: &Arc<Self>) -> OpenBitFunResult<()> {
@@ -383,9 +454,17 @@ impl PiNativeSession {
                 return Err(service_error(message));
             }
         }
-        let args = cli_args(&self.pi_session_id);
+        let target = self.launch_target();
+        let (args, remote_command) = if self.remote_connection_id.is_some() {
+            let args = cli_args(&target, None);
+            let command = remote_command(&self.workspace_path, &args);
+            (args, command)
+        } else {
+            let extension = approval::install_local_extension().await?;
+            let args = cli_args(&target, Some(&extension.to_string_lossy()));
+            (args, String::new())
+        };
         let executable = local_executable();
-        let remote_command = remote_command(&self.workspace_path, &args);
         let io = super::super::process::spawn(super::super::process::ProcessConfig {
             client_id: CLIENT_ID,
             name: "Pi",
@@ -424,12 +503,122 @@ impl PiNativeSession {
         Ok(process)
     }
 
+    /// Session to open: the pinned id, or a `--fork` copy of the source of a
+    /// pending branch (the same session when a rollback is pending on it).
+    fn launch_target(&self) -> LaunchTarget {
+        let active = self.active_pi_session();
+        match lock(&self.history).pending.as_ref() {
+            Some(pending)
+                if !(pending.session_id == active && self.resume.load(Ordering::Acquire)) =>
+            {
+                LaunchTarget::Fork(pending.session_id.clone())
+            }
+            _ => LaunchTarget::Open(active),
+        }
+    }
+
+    /// Finish a pending branch on the opened session: cut it before the
+    /// pending entry with `fork` (Pi copies the path before that user
+    /// message into a new session), then bind this session to the result.
+    async fn apply_pending(&self, process: &Arc<PiProcess>) -> OpenBitFunResult<()> {
+        let Some(pending) = lock(&self.history).pending.clone() else {
+            return Ok(());
+        };
+        if let Some(entry) = &pending.cut_before {
+            let data = process
+                .request(json!({"type":"fork", "entryId": entry}), Some(COMMAND_TIMEOUT))
+                .await?;
+            if data["cancelled"] == true {
+                return Err(service_error(
+                    "A Pi extension cancelled the fork of this session",
+                ));
+            }
+        }
+        let state = process
+            .request(json!({"type":"get_state"}), Some(COMMAND_TIMEOUT))
+            .await?;
+        let id = state["sessionId"]
+            .as_str()
+            .filter(|id| super::valid_pi_session_id(id))
+            .ok_or_else(|| service_error("Pi did not report the forked session id"))?
+            .to_string();
+        self.bind_pi_session(&id).await?;
+        {
+            let mut history = lock(&self.history);
+            history.pending = None;
+            // The cursor may name an entry the branch left out.
+            history.synced = false;
+        }
+        self.persist_history().await
+    }
+
+    /// The Pi transcript of this session is now `id`; later launches open it.
+    async fn bind_pi_session(&self, id: &str) -> OpenBitFunResult<()> {
+        *lock(&self.active_pi_session) = id.to_string();
+        self.resume.store(true, Ordering::Release);
+        if let Some((persistence, storage)) = &self.persistence {
+            persistence
+                .update_remote_session_state(
+                    storage,
+                    &self.session_id,
+                    id,
+                    super::RESUME_STRATEGY,
+                    None,
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Record Pi entries appended since the cursor; the latest prompted turn
+    /// that has no entry yet takes the first new user message.
+    async fn sync_entries(&self, process: &Arc<PiProcess>) -> OpenBitFunResult<()> {
+        let _guard = self.entry_sync.lock().await;
+        let since = {
+            let history = lock(&self.history);
+            history.cursor.clone().filter(|_| history.synced)
+        };
+        let mut command = json!({"type":"get_entries"});
+        if let Some(cursor) = &since {
+            command["since"] = json!(cursor);
+        }
+        let data = match process.request(command, Some(COMMAND_TIMEOUT)).await {
+            Ok(data) => data,
+            // The cursor left the session (branch switch): start over.
+            Err(_) if since.is_some() => {
+                lock(&self.history).synced = false;
+                process
+                    .request(json!({"type":"get_entries"}), Some(COMMAND_TIMEOUT))
+                    .await?
+            }
+            Err(error) => return Err(error),
+        };
+        let entries = data["entries"].as_array().cloned().unwrap_or_default();
+        if lock(&self.history).absorb_entries(&entries, true) {
+            self.persist_history().await?;
+        }
+        Ok(())
+    }
+
+    fn spawn_entry_sync(self: &Arc<Self>, process: Arc<PiProcess>) {
+        let session = self.clone();
+        tokio::spawn(async move {
+            if let Err(error) = session.sync_entries(&process).await {
+                log::debug!("Pi entry sync failed: {error}");
+            }
+        });
+    }
+
     /// Load the model catalog, thinking levels and commands, and apply the
     /// remembered model/thinking when Pi still offers them.
     pub(super) async fn initialize(&self, process: &Arc<PiProcess>) -> OpenBitFunResult<()> {
+        self.apply_pending(process).await?;
         let state = process
             .request(json!({"type":"get_state"}), Some(Duration::from_secs(30)))
             .await?;
+        if let Some(id) = state["sessionId"].as_str() {
+            *lock(&self.active_pi_session) = id.to_string();
+        }
         *lock(&self.current_model) = state.get("model").cloned().filter(Value::is_object);
         *lock(&self.thinking) = state["thinkingLevel"].as_str().map(str::to_string);
         let models = process
@@ -474,16 +663,28 @@ impl PiNativeSession {
             .await
         {
             Ok(data) => {
-                let commands = data["commands"]
-                    .as_array()
-                    .map(|rows| rows.iter().filter_map(command_option).collect())
-                    .unwrap_or_default();
+                let rows = data["commands"].as_array().cloned().unwrap_or_default();
+                self.bridge_loaded.store(
+                    rows.iter().any(|row| row["name"] == approval::BRIDGE_COMMAND),
+                    Ordering::Release,
+                );
+                let commands = rows
+                    .iter()
+                    .filter(|row| row["name"] != approval::BRIDGE_COMMAND)
+                    .filter_map(command_option)
+                    .collect();
                 *lock(&self.commands) = commands;
                 self.notify(NativeAgentNotification::AvailableCommandsUpdated(
                     self.commands(),
                 ));
             }
-            Err(error) => log::debug!("Pi get_commands failed: {error}"),
+            Err(error) => {
+                self.bridge_loaded.store(false, Ordering::Release);
+                log::warn!("Pi get_commands failed; approvals cannot be verified: {error}");
+            }
+        }
+        if let Err(error) = self.sync_entries(process).await {
+            log::warn!("Pi entry sync failed at launch: {error}");
         }
         Ok(())
     }
@@ -576,6 +777,8 @@ impl PiNativeSession {
         let tail = process.stderr_tail().await;
         // Hold the process fence while failing its turn: an old reader must
         // never fail a turn submitted after a restart.
+        self.approvals
+            .retain(|_, pending| pending.process.id != process.id);
         let slot = self.process.lock().await;
         let mut state = self.state.lock().await;
         state.steers.clear();
@@ -603,8 +806,11 @@ impl PiNativeSession {
                 return Ok(());
             }
             Some("extension_ui_request") => {
-                // Pi extensions can open dialogs; OpenBitFun has no surface for
-                // them yet. Cancel instead of leaving the extension blocked.
+                if let Some(request) = ApprovalRequest::parse(&frame) {
+                    return self.handle_approval(process, request).await;
+                }
+                // Other extension dialogs have no OpenBitFun surface yet.
+                // Cancel instead of leaving the extension blocked.
                 if matches!(
                     frame["method"].as_str(),
                     Some("select" | "confirm" | "input" | "editor")
@@ -681,11 +887,15 @@ impl PiNativeSession {
             .as_ref()
             .is_some_and(PiTurnProjector::is_finished)
         {
-            state.projector = None;
+            let turn_id = state.projector.take().map(|p| p.turn_id().to_string());
             state.steers.clear();
             drop(state);
+            if let Some(turn_id) = turn_id {
+                self.clear_approvals(&turn_id).await;
+            }
             self.settled.notify_waiters();
             self.spawn_stats_refresh(process.clone());
+            self.spawn_entry_sync(process.clone());
         }
         Ok(())
     }
@@ -752,6 +962,12 @@ impl PiNativeSession {
         }])
         .await?;
         state.index += 1;
+        lock(&self.history).turns.push(TurnAnchor {
+            turn_id: turn_id.clone(),
+            turn_index: state.index - 1,
+            prompted: false,
+            entry_id: None,
+        });
         let mut projector = PiTurnProjector::new(
             &self.session_id,
             &turn_id,
@@ -772,8 +988,119 @@ impl PiNativeSession {
                 log::error!("Pi failure event delivery failed: {error}");
             }
             state.steers.clear();
+            drop(state);
+            self.clear_approvals(projector.turn_id()).await;
             self.settled.notify_waiters();
         }
+    }
+
+    /// Answer approvals nobody will decide (turn ended, cancelled, failed):
+    /// the extension blocks those calls.
+    async fn clear_approvals(&self, turn_id: &str) {
+        let ids: Vec<String> = self
+            .approvals
+            .iter()
+            .filter(|entry| entry.turn_id == turn_id)
+            .map(|entry| entry.key().clone())
+            .collect();
+        for id in ids {
+            if let Some((_, pending)) = self.approvals.remove(&id) {
+                let _ = pending
+                    .process
+                    .write(&approval::cancel_response(&pending.request.ui_id))
+                    .await;
+            }
+        }
+    }
+
+    /// Route one approval dialog: answer from the permission mode or a
+    /// session grant, otherwise show a permission card and wait.
+    async fn handle_approval(
+        &self,
+        process: &Arc<PiProcess>,
+        request: ApprovalRequest,
+    ) -> OpenBitFunResult<()> {
+        let mode = lock(&self.permission_mode).clone();
+        let granted = lock(&self.session_grants).contains(&request.session_key());
+        if let Some(answer) = approval::automatic_decision(&mode, granted) {
+            return process
+                .write(&approval::select_response(&request.ui_id, answer))
+                .await;
+        }
+        let turn_id = {
+            let mut state = self.state.lock().await;
+            let current = state.process_id.as_deref() == Some(process.id.as_str());
+            match state.projector.as_mut().filter(|_| current) {
+                Some(projector) => {
+                    let events = projector.permission_tool(
+                        &request.tool_call_id,
+                        &request.tool_name,
+                        &request.input,
+                    );
+                    let turn_id = projector.turn_id().to_string();
+                    self.enqueue(events).await?;
+                    Some(turn_id)
+                }
+                None => None,
+            }
+        };
+        let Some(turn_id) = turn_id else {
+            // No turn to show it in: refuse rather than block Pi.
+            return process
+                .write(&approval::cancel_response(&request.ui_id))
+                .await;
+        };
+        let permission_id = format!("pi_native_permission_{}", uuid::Uuid::new_v4());
+        let payload = request.permission_payload(&permission_id, &self.session_id);
+        self.approvals.insert(
+            permission_id.clone(),
+            PendingApproval {
+                process: process.clone(),
+                request,
+                turn_id,
+            },
+        );
+        if let Err(error) = emit_global_event(BackendEvent::Custom {
+            event_name: "backend-event-acppermissionrequest".into(),
+            payload,
+        })
+        .await
+        {
+            if let Some((_, pending)) = self.approvals.remove(&permission_id) {
+                let _ = pending
+                    .process
+                    .write(&approval::cancel_response(&pending.request.ui_id))
+                    .await;
+            }
+            return Err(service_error(format!(
+                "Pi approval delivery failed: {error}"
+            )));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn submit_permission(
+        &self,
+        request: &SubmitAcpPermissionResponseRequest,
+    ) -> Option<OpenBitFunResult<()>> {
+        let (_, pending) = self.approvals.remove(&request.permission_id)?;
+        let answer = match approval::decision(request) {
+            Ok(answer) => answer,
+            Err(error) => {
+                self.approvals
+                    .insert(request.permission_id.clone(), pending);
+                return Some(Err(error));
+            }
+        };
+        if answer == approval::ALLOW_SESSION {
+            lock(&self.session_grants).insert(pending.request.session_key());
+        }
+        Some(
+            pending
+                .process
+                .write(&approval::select_response(&pending.request.ui_id, answer))
+                .await,
+        )
     }
 
     pub async fn start_turn(
@@ -797,6 +1124,19 @@ impl PiNativeSession {
                 return Err(error);
             }
         };
+        let bridge = if *lock(&self.permission_mode) == approval::MODE_FULL_ACCESS {
+            Ok(())
+        } else {
+            self.ensure_bridge()
+        };
+        if let Err(error) = bridge {
+            let mut state = self.state.lock().await;
+            self.begin_turn(&mut state, turn_id, input.text, original)
+                .await?;
+            drop(state);
+            self.fail_turn(&error.to_string()).await;
+            return Err(error);
+        }
         let compact = compact_instructions(&input.text);
         let title_message = {
             let mut state = self.state.lock().await;
@@ -829,6 +1169,15 @@ impl PiNativeSession {
             });
             return Ok(());
         }
+        // Everything Pi holds now predates this prompt, so the first user
+        // message after the cursor is this turn's.
+        if let Err(error) = self.sync_entries(&process).await {
+            log::warn!("Pi entry sync before prompt failed: {error}");
+            lock(&self.history).synced = false;
+        }
+        if let Some(anchor) = lock(&self.history).anchor_mut(&turn_id) {
+            anchor.prompted = true;
+        }
         let mut command = json!({"type":"prompt", "message":input.text});
         if !input.images.is_empty() {
             command["images"] = images_value(&input);
@@ -836,6 +1185,15 @@ impl PiNativeSession {
         match process.request(command, Some(PROMPT_TIMEOUT)).await {
             Ok(data) => {
                 self.mark_resumable().await;
+                if data["disposition"] == "handled" {
+                    // An extension command consumed it; no user message entry.
+                    if let Some(anchor) = lock(&self.history).anchor_mut(&turn_id) {
+                        anchor.prompted = false;
+                    }
+                }
+                if let Err(error) = self.persist_history().await {
+                    log::warn!("Failed to persist Pi native history anchors: {error}");
+                }
                 if data["disposition"] == "handled" {
                     // An extension command consumed the prompt; no run follows.
                     self.finish_command_turn(&turn_id, Ok(Value::Null)).await;
@@ -879,12 +1237,13 @@ impl PiNativeSession {
         if self.resume.swap(true, Ordering::AcqRel) {
             return;
         }
+        let active = self.active_pi_session();
         if let Some((persistence, storage)) = &self.persistence {
             if let Err(error) = persistence
                 .update_remote_session_state(
                     storage,
                     &self.session_id,
-                    &self.pi_session_id,
+                    &active,
                     super::RESUME_STRATEGY,
                     None,
                 )
@@ -1025,10 +1384,93 @@ impl PiNativeSession {
         if let Some(mut projector) = state.projector.take() {
             state.steers.clear();
             drop(state);
+            self.clear_approvals(projector.turn_id()).await;
             self.enqueue(projector.cancel()).await?;
             self.settled.notify_waiters();
         }
         Ok(())
+    }
+
+    /// Drop the latest turn: the session continues on a Pi fork that ends
+    /// before the turn's user message (or a fresh session when it was the
+    /// first). The original Pi session and workspace files are untouched.
+    pub async fn rollback_last_turn(
+        self: &Arc<Self>,
+        turn_id: &str,
+    ) -> OpenBitFunResult<NativeRollbackOutcome> {
+        let _guard = self.lifecycle.lock().await;
+        if self.state.lock().await.projector.is_some() || !self.approvals.is_empty() {
+            return Err(OpenBitFunError::Validation(
+                "Wait until the Pi turn finishes before rolling back".into(),
+            ));
+        }
+        let process = Self::live_process(&*self.process.lock().await);
+        if let Some(process) = &process {
+            // Attribute the latest prompt if its entry was not synced yet.
+            if let Err(error) = self.sync_entries(process).await {
+                log::warn!("Pi entry sync before rollback failed: {error}");
+            }
+        }
+        let target = rollback_target(&lock(&self.history), turn_id)?;
+        if let Some((persistence, storage)) = &self.persistence {
+            persistence
+                .ensure_latest_turn(storage, &self.session_id, turn_id)
+                .await?;
+        }
+        if let Some(entry) = target.entry_id.clone() {
+            let unlaunched = {
+                let mut history = lock(&self.history);
+                match history.pending.as_mut() {
+                    // A fork that never launched: cut its source earlier.
+                    Some(pending) => {
+                        pending.cut_before = Some(entry.clone());
+                        true
+                    }
+                    None => {
+                        history.pending = Some(PendingFork {
+                            session_id: self.active_pi_session(),
+                            cut_before: Some(entry),
+                        });
+                        false
+                    }
+                }
+            };
+            self.persist_history().await?;
+            match process.filter(|_| !unlaunched) {
+                Some(process) => {
+                    // Branch the running process now; on failure the
+                    // pending fork is applied by the next launch.
+                    if let Err(error) = self.apply_pending(&process).await {
+                        log::warn!("Pi rollback deferred to next launch: {error}");
+                        process.kill().await;
+                    }
+                }
+                None if unlaunched => {}
+                None => {
+                    // The next launch opens the session and forks it.
+                    self.resume.store(true, Ordering::Release);
+                }
+            }
+        }
+        {
+            let mut history = lock(&self.history);
+            history.turns.retain(|a| a.turn_index < target.turn_index);
+        }
+        self.state.lock().await.index = target.turn_index;
+        if let Some((persistence, storage)) = &self.persistence {
+            self.persist_history().await?;
+            persistence
+                .truncate_turns_from(storage, &self.session_id, target.turn_index)
+                .await?;
+        }
+        Ok(NativeRollbackOutcome {
+            files_changed: Vec::new(),
+            files_rewound: false,
+            note: Some(
+                "Pi does not restore workspace files; only the conversation was rolled back."
+                    .into(),
+            ),
+        })
     }
 
     pub async fn set_model(&self, model_id: &str) -> OpenBitFunResult<AcpSessionOptions> {
@@ -1057,6 +1499,26 @@ impl PiNativeSession {
                 "Pi native options take a select value".into(),
             ));
         };
+        if config_id == approval::PERMISSION_MODE_CONFIG_ID {
+            if !approval::PERMISSION_MODES
+                .iter()
+                .any(|(id, _, _)| *id == value)
+            {
+                return Err(OpenBitFunError::Validation(format!(
+                    "Unsupported Pi permission mode: {value}"
+                )));
+            }
+            if value != approval::MODE_FULL_ACCESS
+                && Self::live_process(&*self.process.lock().await).is_some()
+            {
+                // Fail loudly rather than let a running Pi skip approvals.
+                self.ensure_bridge()?;
+            }
+            *lock(&self.permission_mode) = value.clone();
+            self.remember(|p| p.permission_mode = Some(value.clone()))
+                .await;
+            return Ok(self.options());
+        }
         if config_id != THINKING_CONFIG_ID {
             return Err(OpenBitFunError::Validation(format!(
                 "Unknown Pi native option: {config_id}"
@@ -1079,6 +1541,17 @@ impl PiNativeSession {
         *lock(&self.selected_thinking) = Some(value.clone());
         self.remember(|p| p.thinking = Some(value.clone())).await;
         Ok(self.options())
+    }
+
+    /// Approvals need the bridge in the running process; without it Pi would
+    /// run every tool unasked.
+    fn ensure_bridge(&self) -> OpenBitFunResult<()> {
+        if self.bridge_loaded.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        Err(service_error(
+            "The OpenBitFun approval extension did not load in Pi, so tool approvals cannot be enforced. Switch the permission mode to Full access to run without approvals, or check the Pi installation.",
+        ))
     }
 
     pub(crate) async fn shutdown(&self) {
@@ -1130,12 +1603,20 @@ impl super::super::NativeAgentSession for PiNativeSession {
     ) -> OpenBitFunResult<AcpSessionOptions> {
         PiNativeSession::set_config_option(self, id, value).await
     }
-    /// Pi has no permission prompts; leave the request to other sessions.
     async fn respond_permission(
         &self,
-        _request: &crate::client::SubmitAcpPermissionResponseRequest,
+        request: &SubmitAcpPermissionResponseRequest,
     ) -> OpenBitFunResult<bool> {
-        Ok(false)
+        match self.submit_permission(request).await {
+            Some(result) => result.map(|()| true),
+            None => Ok(false),
+        }
+    }
+    async fn rollback_last_turn(
+        self: Arc<Self>,
+        turn_id: &str,
+    ) -> OpenBitFunResult<NativeRollbackOutcome> {
+        PiNativeSession::rollback_last_turn(&self, turn_id).await
     }
     fn commands(&self) -> Vec<AcpAvailableCommand> {
         PiNativeSession::commands(self)
@@ -1185,23 +1666,65 @@ fn command_option(row: &Value) -> Option<AcpAvailableCommand> {
     })
 }
 
-/// `--session-id` opens the project session with this id or creates it.
-pub(super) fn cli_args(pi_session_id: &str) -> Vec<String> {
-    vec![
-        "--mode".into(),
-        "rpc".into(),
-        "--session-id".into(),
-        pi_session_id.to_string(),
-    ]
+/// Pi session a launch opens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum LaunchTarget {
+    /// `--session-id`: open the project session with this id or create it.
+    Open(String),
+    /// `--fork`: copy this session into a new one (Pi picks the new id).
+    Fork(String),
 }
 
+/// Placeholder for the remote extension path; the launch script expands it.
+const REMOTE_EXTENSION_ARG: &str = "\"$obf_pi_ext\"";
+
+/// `extension` is the approval bridge path; `None` for remote launches,
+/// whose command adds the path the install script wrote.
+pub(super) fn cli_args(target: &LaunchTarget, extension: Option<&str>) -> Vec<String> {
+    let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
+    match target {
+        LaunchTarget::Open(id) => args.extend(["--session-id".into(), id.clone()]),
+        LaunchTarget::Fork(source) => args.extend(["--fork".into(), source.clone()]),
+    }
+    if let Some(path) = extension {
+        args.extend(["-e".into(), path.to_string()]);
+    }
+    args
+}
+
+/// Remote launch: write the approval extension on the host, then exec Pi
+/// with it. If the write fails the chain stops and Pi does not start.
 fn remote_command(path: &str, args: &[String]) -> String {
     let args = args
         .iter()
         .map(|arg| shell_escape(arg))
         .collect::<Vec<_>>()
         .join(" ");
-    remote_user_shell_command(&format!("cd {} && exec pi {args}", shell_escape(path)))
+    remote_user_shell_command(&format!(
+        "{}\ncd {} && exec pi {args} -e {REMOTE_EXTENSION_ARG}",
+        approval::remote_install_script(),
+        shell_escape(path)
+    ))
+}
+
+/// The latest anchor, when it is `turn_id` and can be rolled back.
+fn rollback_target(history: &PiHistory, turn_id: &str) -> OpenBitFunResult<TurnAnchor> {
+    let target = history
+        .turns
+        .last()
+        .filter(|anchor| anchor.turn_id == turn_id)
+        .cloned()
+        .ok_or_else(|| {
+            OpenBitFunError::Validation(
+                "Only the latest Pi turn recorded with rollback support can be rolled back".into(),
+            )
+        })?;
+    if target.prompted && target.entry_id.is_none() {
+        return Err(OpenBitFunError::Validation(
+            "Pi did not report a checkpoint for this turn, so it cannot be rolled back".into(),
+        ));
+    }
+    Ok(target)
 }
 
 /// `pi` from PATH. On Windows npm installs a `pi.cmd` shim, which a bare
