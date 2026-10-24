@@ -9,6 +9,7 @@ These product marks are cached locally so the compatibility scene does not depen
 | `codex-mark.svg` | Derived from `codex.svg`: the same mark path without the blue disc, filled with `currentColor` so external-agent session icons follow the interface theme |
 | `zcode.png` | Zcode official site: https://zcode.z.ai/favicon-192x192.png, retrieved 2026-10-13 |
 | `pi.svg` | Pi official site: https://pi.dev/favicon.svg |
+| `pi-mark.svg` | Derived from `pi.svg`: the same glyph paths without the dark tile, filled with `currentColor` so external-agent session icons follow the interface theme |
 | `deepseek-harness.svg` | DeepSeek Harness official repository: https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/master/website/public/favicon.svg |
 | `opencode.svg` | OpenCode official repository: https://raw.githubusercontent.com/anomalyco/opencode/dev/packages/identity/mark.svg |
 | `cursor.svg` | Cursor official brand assets: https://cursor.com/brand — `General Logos/Cube/SVG/CUBE_2D_LIGHT.svg`, retrieved 2026-09-15 |
