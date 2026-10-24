@@ -12,6 +12,7 @@ mod errors;
 mod history;
 mod projector;
 mod session;
+mod subagents;
 pub use session::{PiNativeSession, CLIENT_ID};
 
 use super::{

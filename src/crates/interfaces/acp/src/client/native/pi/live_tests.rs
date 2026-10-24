@@ -800,3 +800,70 @@ async fn live_bridge_missing() {
     );
     s.shutdown().await;
 }
+
+/// The user's `subagent` extension (if installed) runs as a linked child
+/// session: progress snapshots stream into the child, which settles with the
+/// tool call. One parent turn plus one cheap subagent run.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "spawns the real pi CLI; set OBF_LIVE_PI=1"]
+async fn live_subagent_child_session() {
+    if !enabled() {
+        return;
+    }
+    let dir = workspace();
+    let s = session(&dir, &uuid::Uuid::new_v4().to_string(), false, 0);
+    cheap(&s).await;
+    set_mode(&s, approval::MODE_FULL_ACCESS).await.unwrap();
+    let run = turn(
+        &s,
+        "sa1",
+        "Call the subagent tool exactly once with agent \"scout\" and task \
+         \"Reply with the single word pong. Do not use any tools.\". \
+         Then reply with exactly what it returned.",
+        OnApproval::Leave,
+    )
+    .await;
+    let updates = lock(&s.frame_tap)
+        .iter()
+        .filter(|f| f["type"] == "tool_execution_update" && f["toolName"] == "subagent")
+        .count();
+    let linked: Vec<String> = run
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            AgenticEvent::SubagentSessionLinked { session_id, .. } => Some(session_id.clone()),
+            _ => None,
+        })
+        .collect();
+    println!(
+        "subagent updates={updates} linked={linked:?} parent text={:?}",
+        run.text()
+    );
+    assert_eq!(
+        run.ended_with(),
+        "completed",
+        "parent turn did not complete"
+    );
+    if updates == 0 && linked.is_empty() {
+        println!("subagent extension not installed or not used; nothing to check");
+        s.shutdown().await;
+        return;
+    }
+    assert_eq!(linked.len(), 1, "one child session per subagent run");
+    let child = &linked[0];
+    let child_text: String = run
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            AgenticEvent::TextChunk {
+                session_id, text, ..
+            } if session_id == child => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    println!("child text={child_text:?}");
+    assert!(child_text.to_lowercase().contains("pong"));
+    assert!(run.events.iter().any(|e| matches!(e,
+        AgenticEvent::DialogTurnCompleted { session_id, .. } if session_id == child)));
+    s.shutdown().await;
+}
