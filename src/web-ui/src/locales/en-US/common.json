@@ -1332,6 +1332,9 @@
       "installMetadata": "The downloaded package is saved. Connect to the internet and retry installation."
     },
     "availableVersion": "Version {{version}} is available",
+    "upstreamAvailableTitle": "Upstream update available",
+    "upstreamAvailableMessage": "Upstream released v{{version}} (this build: v{{current}}). Merge upstream and publish a new fork build to get it.",
+    "upstreamViewRelease": "View upstream release",
     "downloadUpdate": "Download update",
     "releaseTitle": "{{name}} v{{version}}",
     "openReleaseNotes": "{{title}} — release notes",

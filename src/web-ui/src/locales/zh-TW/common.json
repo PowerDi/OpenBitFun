@@ -1332,6 +1332,9 @@
       "installMetadata": "更新套件已保留，請連線後重試安裝。"
     },
     "availableVersion": "發現新版本 {{version}}",
+    "upstreamAvailableTitle": "上游有新版本",
+    "upstreamAvailableMessage": "上游已發布 v{{version}}（目前組建：v{{current}}）。合併上游程式碼並發布新的 fork 組建後即可使用。",
+    "upstreamViewRelease": "檢視上游發布",
     "downloadUpdate": "下載更新",
     "releaseTitle": "{{name}} v{{version}}",
     "openReleaseNotes": "{{title}}，檢視更新說明",

@@ -1332,6 +1332,9 @@
       "installMetadata": "更新包已保留，请联网后重试安装。"
     },
     "availableVersion": "发现新版本 {{version}}",
+    "upstreamAvailableTitle": "上游有新版本",
+    "upstreamAvailableMessage": "上游已发布 v{{version}}（当前构建：v{{current}}）。合并上游代码并发布新的 fork 构建后即可使用。",
+    "upstreamViewRelease": "查看上游发布",
     "downloadUpdate": "下载更新",
     "releaseTitle": "{{name}} v{{version}}",
     "openReleaseNotes": "{{title}}，查看更新说明",
