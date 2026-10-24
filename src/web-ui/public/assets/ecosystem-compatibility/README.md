@@ -5,6 +5,9 @@ These product marks are cached locally so external import and subscription-provi
 | File | Upstream source |
 | --- | --- |
 | `claude-code.svg` | Claude official site: https://claude.ai/favicon.svg |
+| `codex.svg` | OpenAI Developers: https://developers.openai.com/favicon.svg |
+| `codex-mark.svg` | Derived from `codex.svg`: the same mark path without the blue disc, filled with `currentColor` so external-agent session icons follow the interface theme |
+| `zcode.png` | Zcode official site: https://zcode.z.ai/favicon-192x192.png, retrieved 2026-10-13 |
 | `pi.svg` | Pi official site: https://pi.dev/favicon.svg |
 | `deepseek-harness.svg` | DeepSeek Harness official repository: https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/master/website/public/favicon.svg |
 | `cursor.svg` | Cursor official brand assets: https://cursor.com/brand — `General Logos/Cube/SVG/CUBE_2D_LIGHT.svg`, retrieved 2026-09-15 |
