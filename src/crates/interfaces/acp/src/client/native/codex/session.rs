@@ -209,6 +209,8 @@ struct TurnState {
     process_id: Option<String>,
     /// Model reported by the thread (used for round labels).
     model: Option<String>,
+    /// Spawned agent threads and pending parent wake-ups.
+    threads: subagents::ChildThreads,
 }
 
 pub struct CodexNativeSession {
@@ -218,6 +220,8 @@ pub struct CodexNativeSession {
     /// Codex thread id once a thread exists (persisted as `acpRemoteSessionId`).
     thread_id: std::sync::Mutex<Option<String>>,
     process: Mutex<Option<Arc<RpcProcess>>>,
+    /// Owner handle for detached work (subagent wake-ups).
+    weak_self: std::sync::Weak<Self>,
     /// Process id whose app-server has the thread loaded.
     thread_process: std::sync::Mutex<Option<String>>,
     /// Serialize launch, submission and cancellation; output never takes this lock.
@@ -263,7 +267,8 @@ impl CodexNativeSession {
         turn_index: usize,
         notifier: Option<NativeAgentNotificationSink>,
     ) -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new_cyclic(|weak_self| Self {
+            weak_self: weak_self.clone(),
             session_id,
             workspace_path,
             remote_connection_id,
@@ -589,7 +594,11 @@ impl CodexNativeSession {
 
     /// Drop the loaded thread between turns; the next turn resumes it.
     async fn release_thread_when_idle(&self) {
-        if self.state.lock().await.projector.is_some() || !self.approvals.is_empty() {
+        let busy = {
+            let state = self.state.lock().await;
+            state.projector.is_some() || state.threads.any_running()
+        };
+        if busy || !self.approvals.is_empty() {
             return;
         }
         if let Some(process) = self.process.lock().await.take() {
@@ -891,8 +900,10 @@ impl CodexNativeSession {
                     continue;
                 }
                 let _guard = session.lifecycle.lock().await;
-                let busy =
-                    session.state.lock().await.projector.is_some() || !session.approvals.is_empty();
+                let busy = {
+                    let state = session.state.lock().await;
+                    state.projector.is_some() || state.threads.any_running()
+                } || !session.approvals.is_empty();
                 if !busy {
                     log::info!(
                         "Releasing idle Codex native process: session_id={}",
@@ -927,6 +938,12 @@ impl CodexNativeSession {
         self.touch();
         if self.state.lock().await.projector.is_some() {
             return Err(service_error("Codex session already has an active turn"));
+        }
+        {
+            // The user is driving again; queued notifications go into this turn.
+            let mut state = self.state.lock().await;
+            state.threads.wake_suppressed = false;
+            state.threads.wake_reasons.clear();
         }
         let title_message = (self.state.lock().await.index == 0)
             .then(|| title::title_source(&input.text, original.as_deref()))
@@ -1002,6 +1019,16 @@ impl CodexNativeSession {
         input: String,
         original: Option<String>,
     ) -> OpenBitFunResult<()> {
+        self.begin_turn_with(turn_id, input, original, None).await
+    }
+
+    async fn begin_turn_with(
+        &self,
+        turn_id: String,
+        input: String,
+        original: Option<String>,
+        metadata: Option<Value>,
+    ) -> OpenBitFunResult<()> {
         let mut state = self.state.lock().await;
         let manual_compaction = input.split_whitespace().next() == Some("/compact");
         self.enqueue(vec![AgenticEvent::DialogTurnStarted {
@@ -1010,7 +1037,7 @@ impl CodexNativeSession {
             turn_index: state.index,
             user_input: input,
             original_user_input: original,
-            user_message_metadata: None,
+            user_message_metadata: metadata,
         }])
         .await?;
         state.index += 1;
@@ -1152,6 +1179,13 @@ impl CodexNativeSession {
             state.codex_turn_id.clone()
         };
         let process = self.process.lock().await.clone();
+        // Stop running subagents too and do not wake for them afterwards.
+        self.interrupt_children(
+            process
+                .as_deref()
+                .filter(|p| p.alive.load(Ordering::Acquire)),
+        )
+        .await;
         if let (Some(process), Some(turn), Some(thread)) = (
             process.as_ref().filter(|p| p.alive.load(Ordering::Acquire)),
             codex_turn,
@@ -1381,6 +1415,10 @@ impl CodexNativeSession {
         for id in stale {
             self.approvals.remove(&id);
         }
+        {
+            let mut state = self.state.lock().await;
+            self.settle_children(&mut state, &process.id).await;
+        }
         // Only the process that owns the active turn may fail it; an idle
         // exit stays silent and the next turn relaunches and resumes.
         let slot = self.process.lock().await;
@@ -1424,7 +1462,9 @@ impl CodexNativeSession {
         // Subagent threads share the app-server; only this thread is projected.
         if let (Some(thread), Some(current)) = (params["threadId"].as_str(), self.thread_id()) {
             if thread != current {
-                return Ok(());
+                return self
+                    .child_notification(process, thread, method, params)
+                    .await;
             }
         }
         if method == "serverRequest/resolved" {
@@ -1475,6 +1515,9 @@ impl CodexNativeSession {
         if method == "thread/tokenUsage/updated" {
             self.publish_context_usage(&params["tokenUsage"]);
         }
+        if method == "item/completed" {
+            self.link_spawned(&mut state, &params["item"]).await?;
+        }
         let projector = state.projector.as_mut().expect("active projector");
         let events = projector.consume(method, params);
         let finished = projector.is_finished();
@@ -1482,6 +1525,7 @@ impl CodexNativeSession {
         if finished {
             let projector = state.projector.take().expect("finished projector");
             state.codex_turn_id = None;
+            state.threads.drop_orphans();
             drop(state);
             self.clear_approvals(projector.turn_id()).await;
             self.settled.notify_waiters();
@@ -1548,22 +1592,44 @@ impl CodexNativeSession {
     ) -> OpenBitFunResult<()> {
         let item_id = params["itemId"].as_str().unwrap_or_default().to_string();
         let (tool_name, card_params, kind) = approval_card(method, params);
-        let turn_id = {
-            let mut state = self.state.lock().await;
-            let Some(projector) = state.projector.as_mut() else {
-                drop(state);
-                // No turn to show it in: refuse rather than block Codex.
-                return process.respond(&request_id, cancelled_reply(method)).await;
+        // A subagent thread's request belongs to its child session's turn.
+        let current_thread = self.thread_id();
+        let target = {
+            let mut guard = self.state.lock().await;
+            let state = &mut *guard;
+            let child = params["threadId"]
+                .as_str()
+                .filter(|thread| current_thread.as_deref() != Some(*thread))
+                .and_then(|thread| state.threads.children.get_mut(thread));
+            let target = match child {
+                Some(child) => child
+                    .projector
+                    .as_mut()
+                    .map(|projector| (projector, child.session_id.clone())),
+                None => state
+                    .projector
+                    .as_mut()
+                    .map(|projector| (projector, self.session_id.clone())),
             };
-            let events = projector.permission_tool(&item_id, tool_name, card_params.clone());
-            let turn_id = projector.turn_id().to_string();
-            self.enqueue(events).await?;
-            turn_id
+            match target {
+                Some((projector, card_session)) => {
+                    let events =
+                        projector.permission_tool(&item_id, tool_name, card_params.clone());
+                    let turn_id = projector.turn_id().to_string();
+                    self.enqueue(events).await?;
+                    Some((turn_id, card_session))
+                }
+                None => None,
+            }
+        };
+        let Some((turn_id, card_session)) = target else {
+            // No turn to show it in: refuse rather than block Codex.
+            return process.respond(&request_id, cancelled_reply(method)).await;
         };
         let permission_id = format!("codex_native_permission_{}", uuid::Uuid::new_v4());
         let payload = permission_payload(
             &permission_id,
-            &self.session_id,
+            &card_session,
             method,
             &item_id,
             tool_name,
@@ -1773,7 +1839,8 @@ fn permission_preset(mode: &str) -> Option<(&'static str, &'static str, Value)> 
 /// so remote workspaces need no local file).
 pub(super) fn user_input(input: &NativeTurnInput) -> Value {
     let mut items = Vec::with_capacity(input.images.len() + 1);
-    if !input.text.trim().is_empty() || input.images.is_empty() {
+    // Exactly empty with no images: an input-less (wake-up) turn.
+    if !input.text.trim().is_empty() || (input.images.is_empty() && !input.text.is_empty()) {
         items.push(json!({"type": "text", "text": input.text, "text_elements": []}));
     }
     items.extend(input.images.iter().map(|image| {
@@ -1963,6 +2030,9 @@ fn cancelled_reply(method: &str) -> Value {
 fn service_error(message: impl Into<String>) -> OpenBitFunError {
     OpenBitFunError::service(message.into())
 }
+
+#[path = "subagents.rs"]
+mod subagents;
 
 #[cfg(test)]
 #[path = "session_tests.rs"]
