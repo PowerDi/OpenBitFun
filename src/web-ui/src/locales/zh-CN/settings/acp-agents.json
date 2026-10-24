@@ -44,7 +44,9 @@
   "presets": {
     "opencode": { "description": "原生支持 ACP" },
     "dsh": { "description": "通过 OpenBitFun 内置 ACP 桥接，沿用 dsh 的模型与 API 密钥" },
-    "omp": { "description": "原生支持 ACP" }
+    "omp": { "description": "原生支持 ACP" },
+    "claudeCode": { "description": "通过官方 ACP 适配器连接" },
+    "codex": { "description": "通过官方 ACP 适配器连接" }
   },
   "registry": {
     "title": "智能体列表",

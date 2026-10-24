@@ -37,6 +37,7 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use super::builtin_clients::{
     builtin_acp_client_preset, builtin_client_ids, default_config_for_builtin_client,
+    migrate_legacy_builtin_client_configs,
 };
 use super::config::{
     AcpClientConfig, AcpClientConfigFile, AcpClientInfo, AcpClientPermissionMode,
@@ -269,12 +270,7 @@ impl AcpClientService {
         let driver = self.native_driver(client_id).ok_or_else(|| {
             OpenBitFunError::Validation(format!("Unknown native agent: {client_id}"))
         })?;
-        // A retired preset id (old frontend, peer, or session) names its driver.
-        let client_id = driver.client_id();
         let _guard = self.native_preparation.lock().await;
-        self.session_persistence
-            .migrate_legacy_session(session_storage_path, session_id)
-            .await?;
         let cached = self
             .native_sessions
             .get(session_id)
@@ -384,10 +380,6 @@ impl AcpClientService {
         let driver = self.native_driver(client_id).ok_or_else(|| {
             OpenBitFunError::Validation(format!("Unknown native agent: {client_id}"))
         })?;
-        let client_id = driver.client_id();
-        self.session_persistence
-            .migrate_legacy_session(session_storage_path, source_session_id)
-            .await?;
         if let Some(source) = self.native_session(source_session_id) {
             if source.client_id() != client_id {
                 return Err(OpenBitFunError::Validation(format!(
@@ -419,7 +411,6 @@ impl AcpClientService {
         let driver = self.native_driver(client_id).ok_or_else(|| {
             OpenBitFunError::Validation(format!("Unknown native agent: {client_id}"))
         })?;
-        let client_id = driver.client_id();
         self.session_persistence
             .branch_imported_session(
                 session_storage_path,
@@ -441,8 +432,6 @@ impl AcpClientService {
         client_id: &str,
         session_name: Option<String>,
     ) -> OpenBitFunResult<CreateAcpFlowSessionRecordResponse> {
-        // New sessions never record a retired preset id.
-        let client_id = super::legacy_presets::native_alias(client_id).unwrap_or(client_id);
         self.session_persistence
             .create_flow_session_record(
                 session_storage_path,
@@ -1058,8 +1047,7 @@ impl AcpClientService {
     }
 
     pub async fn stop_client(self: &Arc<Self>, client_id: &str) -> OpenBitFunResult<()> {
-        if let Some(driver) = self.native_driver(client_id) {
-            let client_id = driver.client_id();
+        if self.is_native_client(client_id) {
             let sessions: Vec<_> = self
                 .native_sessions
                 .iter()
@@ -2413,7 +2401,7 @@ fn parse_config_value(value: serde_json::Value) -> OpenBitFunResult<AcpClientCon
             "ACP client config must be an object".to_string(),
         ))
     }?;
-    super::legacy_presets::migrate_retired_preset_configs(&mut config);
+    migrate_legacy_builtin_client_configs(&mut config);
     Ok(config)
 }
 

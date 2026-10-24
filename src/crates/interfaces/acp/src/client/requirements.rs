@@ -676,13 +676,18 @@ mod tests {
     }
 
     #[test]
-    fn retired_preset_ids_resolve_to_native_drivers_without_adapters() {
-        for (id, command) in [("claude-code", "claude"), ("codex", "codex")] {
-            let spec = acp_requirement_spec(id, None);
-            assert_eq!(spec.tool_command, command);
-            assert!(spec.adapter.is_none());
-            assert!(spec.install_package.is_none());
-        }
+    fn builtin_adapter_specs_use_maintained_agent_client_protocol_packages() {
+        let claude = acp_requirement_spec("claude-code", None)
+            .adapter
+            .expect("Claude adapter");
+        assert_eq!(claude.package, "@agentclientprotocol/claude-agent-acp");
+        assert_eq!(claude.bin, "claude-agent-acp");
+
+        let codex = acp_requirement_spec("codex", None)
+            .adapter
+            .expect("Codex adapter");
+        assert_eq!(codex.package, "@agentclientprotocol/codex-acp");
+        assert_eq!(codex.bin, "codex-acp");
     }
 
     #[test]

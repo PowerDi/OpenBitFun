@@ -1,6 +1,13 @@
 use std::collections::HashMap;
 
-use super::config::{AcpClientConfig, AcpClientPermissionMode};
+use super::config::{AcpClientConfig, AcpClientConfigFile, AcpClientPermissionMode};
+
+const CLAUDE_ACP_PACKAGE: &str = "@agentclientprotocol/claude-agent-acp";
+const CLAUDE_ACP_ARGS: &[&str] = &["--yes", "@agentclientprotocol/claude-agent-acp@latest"];
+const LEGACY_CLAUDE_ACP_ARGS: &[&str] = &["--yes", "@zed-industries/claude-code-acp@latest"];
+const CODEX_ACP_PACKAGE: &str = "@agentclientprotocol/codex-acp";
+const CODEX_ACP_ARGS: &[&str] = &["--yes", "@agentclientprotocol/codex-acp@latest"];
+const LEGACY_CODEX_ACP_ARGS: &[&str] = &["--yes", "@zed-industries/codex-acp@latest"];
 
 pub(crate) struct BuiltinAcpClientPreset {
     pub(crate) id: &'static str,
@@ -38,7 +45,7 @@ const BUILTIN_ACP_CLIENT_PRESETS: &[BuiltinAcpClientPreset] = &[
     // so OpenBitFun ships one as a dsh PROFILE (packages/dsh-acp) and launches it
     // through the user's own installation. The model and the API key stay in
     // dsh, where the user configured them; OpenBitFun stores neither. Installable
-    // from npm, hence install_package; native ACP, hence no adapter.
+    // from npm like codex, hence install_package; native ACP, hence no adapter.
     BuiltinAcpClientPreset {
         id: "dsh",
         command: "dsh",
@@ -63,6 +70,26 @@ const BUILTIN_ACP_CLIENT_PRESETS: &[BuiltinAcpClientPreset] = &[
         install_package: None,
         adapter_package: None,
         adapter_bin: None,
+        bundled_profile: None,
+    },
+    BuiltinAcpClientPreset {
+        id: "claude-code",
+        command: "npx",
+        args: CLAUDE_ACP_ARGS,
+        tool_command: "claude",
+        install_package: Some("@anthropic-ai/claude-code"),
+        adapter_package: Some(CLAUDE_ACP_PACKAGE),
+        adapter_bin: Some("claude-agent-acp"),
+        bundled_profile: None,
+    },
+    BuiltinAcpClientPreset {
+        id: "codex",
+        command: "npx",
+        args: CODEX_ACP_ARGS,
+        tool_command: "codex",
+        install_package: Some("@openai/codex"),
+        adapter_package: Some(CODEX_ACP_PACKAGE),
+        adapter_bin: Some("codex-acp"),
         bundled_profile: None,
     },
 ];
@@ -97,19 +124,42 @@ pub(crate) fn default_config_for_builtin_client(client_id: &str) -> Option<AcpCl
     })
 }
 
+pub(crate) fn migrate_legacy_builtin_client_configs(config_file: &mut AcpClientConfigFile) {
+    for (client_id, legacy_args, current_args) in [
+        ("claude-code", LEGACY_CLAUDE_ACP_ARGS, CLAUDE_ACP_ARGS),
+        ("codex", LEGACY_CODEX_ACP_ARGS, CODEX_ACP_ARGS),
+    ] {
+        let Some(config) = config_file.acp_clients.get_mut(client_id) else {
+            continue;
+        };
+        let uses_legacy_preset = config.command == "npx"
+            && config
+                .args
+                .iter()
+                .map(String::as_str)
+                .eq(legacy_args.iter().copied());
+        if uses_legacy_preset {
+            config.args = current_args
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn returns_default_config_for_builtin_client() {
-        let config = default_config_for_builtin_client("opencode").expect("builtin config");
+        let config = default_config_for_builtin_client("claude-code").expect("builtin config");
         assert!(config.enabled);
-        assert_eq!(config.command, "opencode");
-        assert_eq!(config.args, vec!["acp"]);
-        // Native drivers replace the retired generic presets.
-        assert!(builtin_acp_client_preset("claude-code").is_none());
-        assert!(builtin_acp_client_preset("codex").is_none());
+        assert_eq!(config.command, "npx");
+        assert_eq!(
+            config.args,
+            vec!["--yes", "@agentclientprotocol/claude-agent-acp@latest"]
+        );
     }
 
     #[test]
@@ -152,5 +202,76 @@ mod tests {
                 preset.id
             );
         }
+    }
+
+    #[test]
+    fn migrates_only_exact_legacy_builtin_commands() {
+        let mut config_file = AcpClientConfigFile {
+            acp_clients: HashMap::from([
+                (
+                    "claude-code".to_string(),
+                    AcpClientConfig {
+                        name: Some("Claude Code".to_string()),
+                        command: "npx".to_string(),
+                        args: LEGACY_CLAUDE_ACP_ARGS
+                            .iter()
+                            .map(|value| (*value).to_string())
+                            .collect(),
+                        env: HashMap::new(),
+                        enabled: true,
+                        readonly: false,
+                        subagent: Default::default(),
+                        permission_mode: AcpClientPermissionMode::Ask,
+                    },
+                ),
+                (
+                    "codex".to_string(),
+                    AcpClientConfig {
+                        name: Some("Codex".to_string()),
+                        command: "npx".to_string(),
+                        args: LEGACY_CODEX_ACP_ARGS
+                            .iter()
+                            .map(|value| (*value).to_string())
+                            .collect(),
+                        env: HashMap::new(),
+                        enabled: true,
+                        readonly: false,
+                        subagent: Default::default(),
+                        permission_mode: AcpClientPermissionMode::Ask,
+                    },
+                ),
+                (
+                    "custom-codex".to_string(),
+                    AcpClientConfig {
+                        name: Some("Pinned Codex".to_string()),
+                        command: "npx".to_string(),
+                        args: vec![
+                            "--yes".to_string(),
+                            "@zed-industries/codex-acp@0.16.0".to_string(),
+                        ],
+                        env: HashMap::new(),
+                        enabled: true,
+                        readonly: false,
+                        subagent: Default::default(),
+                        permission_mode: AcpClientPermissionMode::Ask,
+                    },
+                ),
+            ]),
+        };
+
+        migrate_legacy_builtin_client_configs(&mut config_file);
+
+        assert_eq!(
+            config_file.acp_clients["claude-code"].args,
+            vec!["--yes", "@agentclientprotocol/claude-agent-acp@latest"]
+        );
+        assert_eq!(
+            config_file.acp_clients["codex"].args,
+            vec!["--yes", "@agentclientprotocol/codex-acp@latest"]
+        );
+        assert_eq!(
+            config_file.acp_clients["custom-codex"].args,
+            vec!["--yes", "@zed-industries/codex-acp@0.16.0"]
+        );
     }
 }
