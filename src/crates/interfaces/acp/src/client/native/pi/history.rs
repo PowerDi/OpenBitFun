@@ -65,17 +65,19 @@ impl PiHistory {
     }
 
     /// Attribute newly appended Pi entries (`get_entries` rows after the
-    /// cursor): the latest anchor, when it prompted without a known entry,
-    /// takes the first user message. Only the latest anchor can be waiting
-    /// because entries are synced before every prompt. Returns whether the
-    /// record changed.
+    /// cursor): the latest prompted anchor, when its entry is unknown, takes
+    /// the first user message. Only that anchor can be waiting because
+    /// entries are synced before every prompt (a turn that has not prompted
+    /// yet is skipped). Returns whether the record changed.
     pub(super) fn absorb_entries(&mut self, entries: &[Value], attribute: bool) -> bool {
         let mut changed = !self.synced;
         if attribute && self.synced {
             if let Some(anchor) = self
                 .turns
-                .last_mut()
-                .filter(|a| a.prompted && a.entry_id.is_none())
+                .iter_mut()
+                .rev()
+                .find(|a| a.prompted)
+                .filter(|a| a.entry_id.is_none())
             {
                 let first_user = entries
                     .iter()
@@ -182,6 +184,12 @@ mod tests {
         assert_eq!(history.turns[1].entry_id.as_deref(), Some("b"));
         assert_eq!(history.turns[0].entry_id, None);
         assert!(!history.absorb_entries(&[], true));
+        // A begun turn that has not prompted yet does not hide the one that did.
+        history.turns[1].entry_id = None;
+        history.turns.push(anchor("t2", false, None));
+        history.absorb_entries(&entries, true);
+        assert_eq!(history.turns[1].entry_id.as_deref(), Some("b"));
+        assert_eq!(history.turns[2].entry_id, None);
     }
 
     #[test]

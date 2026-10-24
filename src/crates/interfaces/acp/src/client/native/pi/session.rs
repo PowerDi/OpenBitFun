@@ -1214,6 +1214,11 @@ impl PiNativeSession {
                 Ok(())
             }
             Err(error) => {
+                // A refused prompt left no user message; a timed-out one may
+                // still land and is attributed by the next sync.
+                if let Some(anchor) = lock(&self.history).anchor_mut(&turn_id) {
+                    anchor.prompted = error.to_string().contains("timed out");
+                }
                 self.fail_turn(&error.to_string()).await;
                 Err(error)
             }
