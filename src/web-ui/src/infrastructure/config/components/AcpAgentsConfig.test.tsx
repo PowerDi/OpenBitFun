@@ -477,9 +477,9 @@ describe('AcpAgentsConfig', () => {
   });
 
   it('limits an embedded ecosystem view to its own clients and hides the aggregate JSON editor', async () => {
-    await act(async () => root.render(<AcpAgentsConfigPage clientIds={['dsh']} />));
-    expect(container.textContent).toContain('DeepSeek Harness');
-    expect(container.textContent).not.toContain('Oh My Pi');
+    await act(async () => root.render(<AcpAgentsConfigPage clientIds={['codex']} />));
+    expect(container.textContent).toContain('Codex');
+    expect(container.textContent).not.toContain('Claude Code');
     expect(container.textContent).not.toContain('OpenCode');
     expect(container.textContent).not.toContain('views.json');
   });
@@ -811,6 +811,63 @@ describe('AcpAgentsConfig', () => {
     });
   });
 
+  it('configures a preset adapter when the CLI is ready but the ACP layer is missing', async () => {
+    probeClientRequirementsMock.mockResolvedValue([
+      {
+        id: 'opencode',
+        tool: { name: 'opencode', installed: true },
+        runnable: true,
+        notes: [],
+      },
+      {
+        id: 'claude-code',
+        tool: { name: 'claude', installed: true },
+        adapter: { name: '@agentclientprotocol/claude-agent-acp', installed: false },
+        runnable: false,
+        notes: [],
+      },
+      {
+        id: 'codex',
+        tool: { name: 'codex', installed: true },
+        adapter: { name: '@agentclientprotocol/codex-acp', installed: false },
+        runnable: false,
+        notes: [],
+      },
+    ]);
+
+    await act(async () => {
+      root.render(<AcpAgentsConfig />);
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const refreshButtons = Array.from(container.querySelectorAll('button'))
+      .filter(button => button.textContent?.includes('actions.refresh'));
+    expect(refreshButtons.length).toBeGreaterThan(0);
+
+    await act(async () => {
+      refreshButtons[0].click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const configureButtons = Array.from(container.querySelectorAll('button'))
+      .filter(button => button.textContent?.includes('actions.configureAcp'));
+    expect(configureButtons.length).toBeGreaterThan(0);
+
+    await act(async () => {
+      configureButtons[configureButtons.length - 1].click();
+      await Promise.resolve();
+    });
+
+    expect(predownloadClientAdapterMock).toHaveBeenCalledWith({
+      clientId: 'codex',
+    });
+  });
+
   it('keeps enabled agents stable when adding another preset', async () => {
     const healthyProbes = [
       {
@@ -820,14 +877,15 @@ describe('AcpAgentsConfig', () => {
         notes: [],
       },
       {
-        id: 'dsh',
-        tool: { name: 'dsh', installed: true },
+        id: 'claude-code',
+        tool: { name: 'claude', installed: true },
+        adapter: { name: '@agentclientprotocol/claude-agent-acp', installed: true },
         runnable: true,
         notes: [],
       },
       {
-        id: 'omp',
-        tool: { name: 'omp', installed: true },
+        id: 'codex',
+        tool: { name: 'codex', installed: true },
         runnable: true,
         notes: [],
       },
@@ -846,19 +904,19 @@ describe('AcpAgentsConfig', () => {
             readonly: false,
             permissionMode: 'ask',
           },
-          dsh: {
-            name: 'DeepSeek Harness',
-            command: 'dsh',
-            args: ['--profile', 'openbitfun-acp'],
+          'claude-code': {
+            name: 'Claude Code',
+            command: 'npx',
+            args: ['--yes', '@agentclientprotocol/claude-agent-acp@latest'],
             env: {},
             enabled: true,
             readonly: false,
             permissionMode: 'ask',
           },
-          omp: {
-            name: 'Oh My Pi',
-            command: 'omp',
-            args: ['acp'],
+          codex: {
+            name: 'Codex',
+            command: 'npx',
+            args: ['--yes', '@agentclientprotocol/codex-acp@latest'],
             env: {},
             enabled: true,
             readonly: false,
@@ -1035,14 +1093,15 @@ describe('AcpAgentsConfig', () => {
           notes: [],
         },
         {
-          id: 'dsh',
-          tool: { name: 'dsh', installed: true },
+          id: 'claude-code',
+          tool: { name: 'claude', installed: true },
+          adapter: { name: '@agentclientprotocol/claude-agent-acp', installed: true },
           runnable: true,
           notes: [],
         },
         {
-          id: 'omp',
-          tool: { name: 'omp', installed: true },
+          id: 'codex',
+          tool: { name: 'codex', installed: true },
           runnable: true,
           notes: [],
         },
@@ -1059,14 +1118,15 @@ describe('AcpAgentsConfig', () => {
           notes: [],
         },
         {
-          id: 'dsh',
-          tool: { name: 'dsh', installed: true },
+          id: 'claude-code',
+          tool: { name: 'claude', installed: true },
+          adapter: { name: '@agentclientprotocol/claude-agent-acp', installed: true },
           runnable: true,
           notes: [],
         },
         {
-          id: 'omp',
-          tool: { name: 'omp', installed: true },
+          id: 'codex',
+          tool: { name: 'codex', installed: true },
           runnable: true,
           notes: [],
         },
@@ -1114,14 +1174,14 @@ describe('AcpAgentsConfig', () => {
             notes: [],
           },
           {
-            id: 'omp',
-            tool: { name: 'omp', installed: true },
+            id: 'claude-code',
+            tool: { name: 'claude', installed: true },
             runnable: true,
             notes: [],
           },
           {
-            id: 'dsh',
-            tool: { name: 'dsh', installed: false },
+            id: 'codex',
+            tool: { name: 'codex', installed: false },
             runnable: false,
             notes: [],
           },
@@ -1158,7 +1218,7 @@ describe('AcpAgentsConfig', () => {
     });
 
     expect(installClientCliMock).toHaveBeenCalledWith({
-      clientId: 'dsh',
+      clientId: 'codex',
       remoteConnectionId: 'huawei-server',
     });
   });

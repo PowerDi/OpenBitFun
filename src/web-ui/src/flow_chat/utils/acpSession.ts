@@ -2,22 +2,12 @@ import type { Session } from '../types/flow-chat';
 
 const ACP_AGENT_TYPE_PREFIX = 'acp:';
 
-/**
- * Retired generic ACP presets replaced by native drivers. Sessions created
- * under them keep loading; the backend migrates their record on first open.
- */
-const RETIRED_ACP_CLIENT_ALIASES: Readonly<Record<string, string>> = {
-  'claude-code': 'claude-native',
-  codex: 'codex-native',
-};
-
 export function acpClientIdFromAgentType(agentType: string | null | undefined): string | null {
   const value = agentType?.trim();
   if (!value?.startsWith(ACP_AGENT_TYPE_PREFIX)) return null;
 
   const clientId = value.slice(ACP_AGENT_TYPE_PREFIX.length).trim();
-  if (!clientId) return null;
-  return RETIRED_ACP_CLIENT_ALIASES[clientId] ?? clientId;
+  return clientId || null;
 }
 
 export function isAcpAgentType(agentType: string | null | undefined): boolean {

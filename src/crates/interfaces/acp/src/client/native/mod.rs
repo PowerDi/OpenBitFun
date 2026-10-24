@@ -339,10 +339,7 @@ pub fn drivers() -> &'static [&'static dyn NativeAgentDriver] {
     DRIVERS
 }
 
-/// Retired generic ACP preset ids resolve to the native driver that replaced
-/// them, so older frontends, peers and stored sessions keep working.
 pub fn native_driver(client_id: &str) -> Option<&'static dyn NativeAgentDriver> {
-    let client_id = super::legacy_presets::native_alias(client_id).unwrap_or(client_id);
     drivers()
         .iter()
         .copied()

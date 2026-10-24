@@ -456,38 +456,6 @@ impl AcpSessionPersistence {
             .await
     }
 
-    /// One-time, idempotent migration of a retired `acp:claude-code` /
-    /// `acp:codex` session record to its native driver. Missing records are
-    /// left to the caller; turns are never touched.
-    pub(super) async fn migrate_legacy_session(
-        &self,
-        session_storage_path: &Path,
-        openbitfun_session_id: &str,
-    ) -> OpenBitFunResult<()> {
-        // Read first: current sessions must not be rewritten on every open.
-        let Some(mut probe) = self
-            .load_metadata(session_storage_path, openbitfun_session_id)
-            .await?
-        else {
-            return Ok(());
-        };
-        if !super::legacy_presets::migrate_legacy_session_metadata(&mut probe) {
-            return Ok(());
-        }
-        let mut migrated = false;
-        self.update_metadata(session_storage_path, openbitfun_session_id, |metadata| {
-            migrated = super::legacy_presets::migrate_legacy_session_metadata(metadata);
-            Ok(())
-        })
-        .await?;
-        if migrated {
-            log::info!(
-                "Migrated retired ACP preset session to its native driver: session_id={openbitfun_session_id}"
-            );
-        }
-        Ok(())
-    }
-
     pub(super) async fn update_metadata(
         &self,
         session_storage_path: &Path,

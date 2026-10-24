@@ -19,7 +19,7 @@ describe('ecosystem recognition and scoped discovery results', () => {
   beforeEach(clearEcosystemDiscoveryCache);
 
   it('classifies a built-in preset under more apps and a user configuration under identified', () => {
-    const preset = { id: 'codex-native', readonly: true, enabled: true, status: 'configured' } as AcpClientInfo;
+    const preset = { id: 'codex', readonly: true, enabled: true, status: 'configured' } as AcpClientInfo;
     const group = (clients: AcpClientInfo[]) => buildEcosystemProductRuntimes(null, clients).find((runtime) => runtime.spec.id === 'codex')!.group;
     expect(group([preset])).toBe('more');
     expect(group([{ ...preset, readonly: false, enabled: false }])).toBe('identified');

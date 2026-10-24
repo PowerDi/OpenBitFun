@@ -151,15 +151,15 @@ export function ecosystemDiscoverySupport(
 }
 
 /**
- * Presentation catalog for product families represented by a shipped adapter,
- * native driver, or ACP preset. Session import and static discovery do not imply ACP execution.
+ * Presentation catalog for product families represented by a shipped adapter or
+ * ACP preset. Session import and static discovery do not imply ACP execution.
  */
 export const ECOSYSTEM_PRODUCT_SPECS: readonly EcosystemProductSpec[] = [
   {
     id: 'claude-code',
     name: 'Claude Code',
     ecosystemId: 'claude-code',
-    acpClientId: 'claude-native',
+    acpClientId: 'claude-code',
     sessionImport: 'claude-code',
     searchTerms: ['claude', 'anthropic', 'agent', 'mcp', 'command', 'acp'],
   },
@@ -167,7 +167,7 @@ export const ECOSYSTEM_PRODUCT_SPECS: readonly EcosystemProductSpec[] = [
     id: 'codex',
     name: 'Codex',
     ecosystemId: 'codex',
-    acpClientId: 'codex-native',
+    acpClientId: 'codex',
     sessionImport: 'codex',
     searchTerms: ['openai', 'agent', 'mcp', 'acp'],
   },
