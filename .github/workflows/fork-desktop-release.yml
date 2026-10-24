@@ -1,0 +1,407 @@
+# Fork-only Desktop beta release: Windows (NSIS + custom installer) and
+# Linux x64 (deb, rpm, AppImage), signed with the fork's own Tauri updater key
+# and published to this repository's GitHub Releases on the beta channel.
+#
+# Upstream never runs this workflow (every job is guarded on the repository),
+# so merging upstream changes into a fork never conflicts with it.
+name: Fork Desktop Release
+
+on:
+  push:
+    tags:
+      - 'v*-beta.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Fork beta version: upstream core plus -beta.N, e.g. 1.0.7-beta.1."
+        required: true
+        type: string
+      checkout_ref:
+        description: "Commit, branch, or tag to build. Defaults to the existing tag v<version>, then the dispatch ref."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-desktop-release-beta
+  cancel-in-progress: false
+
+env:
+  # Windows and Linux x64 only. macOS, arm64, Relay, CLI, and mobile are not
+  # published by the fork.
+  REQUIRED_UPDATER_PLATFORMS: windows-x86_64,linux-x86_64,linux-x86_64-deb,linux-x86_64-rpm
+
+jobs:
+  prepare:
+    name: Prepare
+    if: github.repository != 'GCWing/OpenBitFun'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      checkout_ref: ${{ steps.meta.outputs.checkout_ref }}
+      package_matrix: ${{ steps.platforms.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check signing secrets
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [[ -n "${TAURI_SIGNING_PRIVATE_KEY}" ]] || missing+=(TAURI_SIGNING_PRIVATE_KEY)
+          [[ -n "${TAURI_UPDATER_PUBKEY}" ]] || missing+=(TAURI_UPDATER_PUBKEY)
+          if [[ "${#missing[@]}" -gt 0 ]]; then
+            echo "Missing repository secrets: ${missing[*]}. Add them under Settings > Secrets and variables > Actions." >&2
+            exit 1
+          fi
+
+      - name: Resolve version metadata
+        id: meta
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          PUSHED_TAG: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_CHECKOUT_REF: ${{ inputs.checkout_ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            TAG="${PUSHED_TAG}"
+            VERSION="${TAG#v}"
+            CHECKOUT_REF="${TAG}"
+          else
+            VERSION="${INPUT_VERSION#v}"
+            TAG="v${VERSION}"
+            if [[ -n "${INPUT_CHECKOUT_REF}" ]]; then
+              CHECKOUT_REF="${INPUT_CHECKOUT_REF}"
+            elif git rev-parse --verify --quiet "refs/tags/${TAG}" >/dev/null; then
+              CHECKOUT_REF="${TAG}"
+            else
+              CHECKOUT_REF="${GITHUB_SHA}"
+            fi
+          fi
+
+          node --input-type=module -e \
+            "import { validateReleaseVersion } from './scripts/release-channel.mjs'; validateReleaseVersion('beta', process.argv[1]);" \
+            "${VERSION}"
+
+          CHECKOUT_SHA="$(git rev-parse "${CHECKOUT_REF}^{commit}")"
+          TAG_SHA="$(git rev-parse --verify --quiet "refs/tags/${TAG}^{commit}" || true)"
+          if [[ -n "${TAG_SHA}" && "${TAG_SHA}" != "${CHECKOUT_SHA}" ]]; then
+            echo "Existing tag ${TAG} points to ${TAG_SHA}, not requested commit ${CHECKOUT_SHA}." >&2
+            exit 1
+          fi
+
+          # Fork builds follow the upstream version core: 1.0.7 -> 1.0.7-beta.N.
+          SOURCE_VERSION="$(git show "${CHECKOUT_SHA}:package.json" | jq -r '.version')"
+          if [[ "${SOURCE_VERSION%%-*}" != "${VERSION%%-*}" ]]; then
+            echo "Version ${VERSION} does not follow the source version ${SOURCE_VERSION}; use ${SOURCE_VERSION%%-*}-beta.N." >&2
+            exit 1
+          fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=${CHECKOUT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "tag_exists=$([[ -n "${TAG_SHA}" ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Create the release tag (dispatch without an existing tag)
+        if: steps.meta.outputs.tag_exists == 'false'
+        env:
+          RELEASE_TAG: ${{ steps.meta.outputs.release_tag }}
+          CHECKOUT_SHA: ${{ steps.meta.outputs.checkout_ref }}
+        run: |
+          set -euo pipefail
+          # Pushed with GITHUB_TOKEN, so it does not retrigger this workflow.
+          git tag "${RELEASE_TAG}" "${CHECKOUT_SHA}"
+          git push origin "refs/tags/${RELEASE_TAG}"
+
+      - name: Select Desktop package platforms
+        id: platforms
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const all = JSON.parse(fs.readFileSync('scripts/desktop-package-platforms.json', 'utf8'));
+          const selected = all.filter((platform) => ['windows-x64', 'linux-x64'].includes(platform.name));
+          if (selected.length !== 2) throw new Error('windows-x64 and linux-x64 must both be defined');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify(selected)}\n`);
+          NODE
+
+  package:
+    name: Package (${{ matrix.platform.name }})
+    needs: prepare
+    runs-on: ${{ matrix.platform.os }}
+    env:
+      NODE_OPTIONS: --max-old-space-size=6144
+      OPENBITFUN_ENABLE_UPDATER_ARTIFACTS: 'true'
+      OPENBITFUN_RELEASE_CHANNEL: beta
+      # Installed fork builds update only from this fork's beta channel.
+      TAURI_UPDATER_ENDPOINT: https://github.com/${{ github.repository }}/releases/download/channel-v1-beta/latest-v1.json
+      TAURI_UPDATER_FALLBACK_ENDPOINT: https://github.com/${{ github.repository }}/releases/download/channel-v1-beta/latest-v1.json
+      TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      # Non-installing notice when upstream publishes a newer version core.
+      VITE_OPENBITFUN_UPSTREAM_WATCH_REPO: GCWing/OpenBitFun
+      # OPENBITFUN_RELEASE_PUBKEY is deliberately unset: remote SSH installs
+      # still download upstream release assets and must verify the upstream key.
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(needs.prepare.outputs.package_matrix) }}
+    steps:
+      - name: Preserve source bytes on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: git config --global core.autocrlf false
+
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+
+      - name: Install NSIS (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install nsis -y --no-progress
+          foreach ($dir in @("${env:ProgramFiles(x86)}\NSIS", "${env:ProgramFiles(x86)}\NSIS\Bin")) {
+            if (Test-Path $dir) { Add-Content $env:GITHUB_PATH $dir }
+          }
+
+      - name: Install Linux system dependencies (Tauri bundler)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          if apt-cache show libwebkit2gtk-4.1-dev >/dev/null 2>&1; then
+            WEBKIT_PKG=libwebkit2gtk-4.1-dev
+          else
+            WEBKIT_PKG=libwebkit2gtk-4.0-dev
+          fi
+          if apt-cache show libappindicator3-dev >/dev/null 2>&1; then
+            APPINDICATOR_PKG=libappindicator3-dev
+          else
+            APPINDICATOR_PKG=libayatana-appindicator3-dev
+          fi
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config xdg-utils libglib2.0-dev libgtk-3-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-pipewire gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            fcitx5-frontend-gtk3 libxdo-dev "$WEBKIT_PKG" "$APPINDICATOR_PKG" \
+            librsvg2-dev patchelf fakeroot rpm \
+            libleptonica-dev libtesseract-dev tesseract-ocr tesseract-ocr-eng
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+          no-cache: true
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform.target }}
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: "fork-package-v1-${{ matrix.platform.name }}"
+          cache-bin: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Project beta build version
+        run: node scripts/set-build-version.mjs --version "${{ needs.prepare.outputs.version }}"
+
+      - name: Verify release version metadata
+        run: node scripts/verify-release-version-sync.mjs --version "${{ needs.prepare.outputs.version }}"
+
+      - name: Download and verify target Flashgrep binary
+        run: node scripts/prepare-flashgrep-resource.mjs --target "${{ matrix.platform.target }}"
+
+      - name: Build desktop app
+        run: ${{ matrix.platform.build_command }}
+
+      - name: Bundle Windows updater (unsigned Authenticode)
+        if: runner.os == 'Windows'
+        timeout-minutes: 20
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node scripts/desktop-tauri-build.mjs --bundle-only --target x86_64-pc-windows-msvc --bundles nsis --verbose
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build custom Windows installer
+        if: runner.os == 'Windows'
+        timeout-minutes: 60
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:OPENBITFUN_INSTALLER_APP_EXE = 'target/x86_64-pc-windows-msvc/release/openbitfun-desktop.exe'
+          pnpm run installer:build:only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify AppImage fcitx5 GTK module
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/ci/verify-appimage-fcitx.sh "${{ matrix.platform.target }}"
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v6
+        with:
+          name: openbitfun-${{ needs.prepare.outputs.release_tag }}-${{ matrix.platform.name }}-bundle
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            target/*/release/bundle
+            OpenBitFun-Installer/src-tauri/target/release/openbitfun-installer.exe
+
+  publish:
+    name: Publish Beta Release
+    needs: [prepare, package]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      OPENBITFUN_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      OPENBITFUN_SIGNING_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      OPENBITFUN_SIGNING_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Download bundled artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: openbitfun-${{ needs.prepare.outputs.release_tag }}-*-bundle
+          path: release-assets
+          merge-multiple: true
+
+      - name: Prepare and sign versioned Windows installer
+        run: |
+          set -euo pipefail
+          node scripts/prepare-windows-installer-asset.mjs \
+            --assets-dir release-assets --version "${RELEASE_VERSION}" --out-dir release-manual-assets
+          bash scripts/sign-release-assets.sh release-manual-assets/*.exe
+
+      - name: Collect updater assets
+        run: |
+          node scripts/collect-tauri-updater-assets.mjs \
+            --assets-dir release-assets --version "${RELEASE_VERSION}" \
+            --out-dir release-updater-assets --required-platforms "${REQUIRED_UPDATER_PLATFORMS}"
+          node scripts/write-minisign-public-key.mjs --out release-updater-assets/minisign.pub
+
+      - name: Generate and verify updater manifest
+        run: |
+          set -euo pipefail
+          # A missing per-version notes file yields empty notes; the release
+          # body uses GitHub-generated notes instead.
+          node scripts/generate-tauri-latest-json.mjs \
+            --assets-dir release-updater-assets \
+            --manual-assets-dir release-manual-assets \
+            --version "${RELEASE_VERSION}" --tag "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+            --notes-file "scripts/release-notes/${RELEASE_VERSION}.md" \
+            --out release-updater-assets/latest-v1.json \
+            --required-platforms "${REQUIRED_UPDATER_PLATFORMS}"
+          node scripts/verify-tauri-latest-json.mjs \
+            --manifest release-updater-assets/latest-v1.json --version "${RELEASE_VERSION}" \
+            --required-platforms "${REQUIRED_UPDATER_PLATFORMS}" --required-manual-platforms windows-x86_64
+
+      - name: Stage release assets
+        run: |
+          node scripts/stage-github-release-assets.mjs --out-dir release-upload-assets \
+            release-updater-assets/* release-manual-assets/*.exe release-manual-assets/*.exe.sig
+
+      - name: Upload to beta prerelease
+        run: |
+          set -euo pipefail
+          if ! gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release create "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --verify-tag --draft \
+              --prerelease --title "OpenBitFun ${RELEASE_VERSION}" --generate-notes
+          fi
+          gh release upload "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --clobber release-upload-assets/*
+          gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" \
+            --draft=false --prerelease=true --latest=false
+
+      - name: Verify published updater manifest
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 5 --retry-delay 3 \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/latest-v1.json" \
+            -o latest.published.json
+          node scripts/verify-tauri-latest-json.mjs --manifest latest.published.json \
+            --version "${RELEASE_VERSION}" --required-platforms "${REQUIRED_UPDATER_PLATFORMS}" \
+            --required-manual-platforms windows-x86_64 --check-urls true
+
+      - name: Resolve beta channel promotion
+        id: beta-channel
+        run: |
+          set -euo pipefail
+          args=(--candidate latest.published.json --github-output "$GITHUB_OUTPUT")
+          if gh release view channel-v1-beta --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "channel_exists=true" >> "$GITHUB_OUTPUT"
+            if curl -fsSL --retry 5 --retry-delay 3 \
+              "https://github.com/${GITHUB_REPOSITORY}/releases/download/channel-v1-beta/latest-v1.json" \
+              -o current.beta.json; then
+              args+=(--current current.beta.json)
+            fi
+          else
+            echo "channel_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+          node scripts/plan-channel-promotion.mjs "${args[@]}"
+
+      - name: Publish beta channel manifest
+        if: steps.beta-channel.outputs.promote == 'true'
+        env:
+          CHECKOUT_REF: ${{ needs.prepare.outputs.checkout_ref }}
+          CHANNEL_EXISTS: ${{ steps.beta-channel.outputs.channel_exists }}
+          CANDIDATE_VERSION: ${{ steps.beta-channel.outputs.candidate_version }}
+        run: |
+          set -euo pipefail
+          if [[ "${CHANNEL_EXISTS}" != "true" ]]; then
+            gh release create channel-v1-beta --repo "${GITHUB_REPOSITORY}" \
+              --target "${CHECKOUT_REF}" --prerelease --latest=false \
+              --title "OpenBitFun Beta Update Channel" \
+              --notes "Mutable updater pointer for fork beta builds. Installable releases use immutable version tags."
+          fi
+          mkdir -p beta-channel
+          cp latest.published.json beta-channel/latest-v1.json
+          gh release upload channel-v1-beta beta-channel/latest-v1.json --repo "${GITHUB_REPOSITORY}" --clobber
+          for attempt in $(seq 1 60); do
+            if curl -fsSL --max-time 30 \
+              "https://github.com/${GITHUB_REPOSITORY}/releases/download/channel-v1-beta/latest-v1.json" \
+              -o channel.published.json && \
+              jq -e --arg version "${CANDIDATE_VERSION}" '.version == $version' channel.published.json >/dev/null; then
+              echo "Beta channel manifest verified: ${CANDIDATE_VERSION}"
+              exit 0
+            fi
+            echo "Beta channel manifest is not ready (attempt ${attempt}/60)."
+            sleep 5
+          done
+          echo "Beta channel manifest did not converge to ${CANDIDATE_VERSION}." >&2
+          exit 1
