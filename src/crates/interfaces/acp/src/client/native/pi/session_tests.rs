@@ -334,9 +334,7 @@ async fn approval_dialog_becomes_a_card_and_the_answer_reaches_pi() {
     assert_eq!(session.approvals.len(), 1);
     let permission_id = session.approvals.iter().next().unwrap().key().clone();
     let pending = session.approvals.get(&permission_id).unwrap();
-    let payload = pending
-        .request
-        .permission_payload(&permission_id, "s1");
+    let payload = pending.request.permission_payload(&permission_id, "s1");
     drop(pending);
     assert_eq!(payload["toolCall"]["toolCallId"], "c1");
     assert_eq!(payload["toolCall"]["kind"], "execute");
@@ -347,7 +345,14 @@ async fn approval_dialog_becomes_a_card_and_the_answer_reaches_pi() {
         .iter()
         .map(|o| o["optionId"].clone())
         .collect();
-    assert_eq!(options, [json!("allow_once"), json!("allow_session"), json!("reject_once")]);
+    assert_eq!(
+        options,
+        [
+            json!("allow_once"),
+            json!("allow_session"),
+            json!("reject_once")
+        ]
+    );
     // Another session's permission is left alone.
     let foreign = SubmitAcpPermissionResponseRequest {
         permission_id: "other".into(),
@@ -366,10 +371,18 @@ async fn approval_dialog_becomes_a_card_and_the_answer_reaches_pi() {
     };
     session.submit_permission(&request).await.unwrap().unwrap();
     // The same command is allowed for the rest of the session without a card.
-    route(&session, &process, &[approval_frame("ui-2", "c2", "bash", rm)]).await;
+    route(
+        &session,
+        &process,
+        &[approval_frame("ui-2", "c2", "bash", rm)],
+    )
+    .await;
     assert!(session.approvals.is_empty());
     let replies = wait_until(&sent, |s| {
-        s.iter().filter(|c| c["type"] == "extension_ui_response").count() == 2
+        s.iter()
+            .filter(|c| c["type"] == "extension_ui_response")
+            .count()
+            == 2
     })
     .await;
     task.abort();
@@ -398,24 +411,47 @@ async fn unanswered_approvals_are_cancelled_when_the_turn_ends() {
     route(
         &session,
         &process,
-        &[approval_frame("ui-1", "c1", "write", json!({"path":"a.txt","content":"x"}))],
+        &[approval_frame(
+            "ui-1",
+            "c1",
+            "write",
+            json!({"path":"a.txt","content":"x"}),
+        )],
     )
     .await;
     assert_eq!(session.approvals.len(), 1);
-    route(&session, &process, &[json!({"type":"agent_settled","aborted":false})]).await;
+    route(
+        &session,
+        &process,
+        &[json!({"type":"agent_settled","aborted":false})],
+    )
+    .await;
     assert!(session.approvals.is_empty());
     // Outside a turn nothing can show the card: refuse at once.
-    route(&session, &process, &[approval_frame("ui-2", "c2", "write", json!({}))]).await;
+    route(
+        &session,
+        &process,
+        &[approval_frame("ui-2", "c2", "write", json!({}))],
+    )
+    .await;
     // A cancelled turn settles its approvals too.
     session
         .start_turn("t2".into(), "again".into(), None)
         .await
         .unwrap();
-    route(&session, &process, &[approval_frame("ui-3", "c3", "bash", json!({}))]).await;
+    route(
+        &session,
+        &process,
+        &[approval_frame("ui-3", "c3", "bash", json!({}))],
+    )
+    .await;
     session.cancel().await.unwrap();
     assert!(session.approvals.is_empty());
     wait_until(&sent, |s| {
-        s.iter().filter(|c| c["type"] == "extension_ui_response").count() == 3
+        s.iter()
+            .filter(|c| c["type"] == "extension_ui_response")
+            .count()
+            == 3
     })
     .await;
     task.abort();
@@ -444,13 +480,31 @@ async fn permission_modes_answer_without_cards_and_a_missing_bridge_fails_loudly
         .start_turn("t1".into(), "look".into(), None)
         .await
         .unwrap();
-    route(&session, &process, &[approval_frame("ui-1", "c1", "edit", json!({}))]).await;
+    route(
+        &session,
+        &process,
+        &[approval_frame("ui-1", "c1", "edit", json!({}))],
+    )
+    .await;
     *lock(&session.permission_mode) = approval::MODE_FULL_ACCESS.into();
-    route(&session, &process, &[approval_frame("ui-2", "c2", "edit", json!({}))]).await;
+    route(
+        &session,
+        &process,
+        &[approval_frame("ui-2", "c2", "edit", json!({}))],
+    )
+    .await;
     assert!(session.approvals.is_empty());
-    route(&session, &process, &[json!({"type":"agent_settled","aborted":false})]).await;
+    route(
+        &session,
+        &process,
+        &[json!({"type":"agent_settled","aborted":false})],
+    )
+    .await;
     wait_until(&sent, |s| {
-        s.iter().filter(|c| c["type"] == "extension_ui_response").count() == 2
+        s.iter()
+            .filter(|c| c["type"] == "extension_ui_response")
+            .count()
+            == 2
     })
     .await;
     let replies = ui_responses(&sent);
@@ -471,7 +525,9 @@ async fn permission_modes_answer_without_cards_and_a_missing_bridge_fails_loudly
         .start_turn("t2".into(), "go".into(), None)
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("approval extension did not load"));
+    assert!(error
+        .to_string()
+        .contains("approval extension did not load"));
     assert!(session
         .set_config_option(
             approval::PERMISSION_MODE_CONFIG_ID,
@@ -519,7 +575,12 @@ async fn rollback_forks_before_the_turn_prompt_and_rebinds_the_session() {
         .start_turn("t2".into(), "second".into(), None)
         .await
         .unwrap();
-    route(&session, &process, &[json!({"type":"agent_settled","aborted":false})]).await;
+    route(
+        &session,
+        &process,
+        &[json!({"type":"agent_settled","aborted":false})],
+    )
+    .await;
     // The prompt's user message is attributed from `get_entries`.
     for _ in 0..100 {
         if lock(&session.history).turns[1].entry_id.is_some() {
@@ -534,7 +595,10 @@ async fn rollback_forks_before_the_turn_prompt_and_rebinds_the_session() {
     assert!(session.clone().rollback_last_turn("t1").await.is_err());
     let outcome = session.clone().rollback_last_turn("t2").await.unwrap();
     assert!(!outcome.files_rewound);
-    assert!(outcome.note.unwrap().contains("does not restore workspace files"));
+    assert!(outcome
+        .note
+        .unwrap()
+        .contains("does not restore workspace files"));
     task.abort();
     let fork = kinds(&sent)
         .into_iter()
@@ -568,7 +632,14 @@ fn launch_args_pin_or_fork_the_pi_session_and_compact_parsing_is_strict() {
     let open = LaunchTarget::Open("abc-1".into());
     assert_eq!(
         cli_args(&open, Some("/data/ext.ts")),
-        ["--mode", "rpc", "--session-id", "abc-1", "-e", "/data/ext.ts"]
+        [
+            "--mode",
+            "rpc",
+            "--session-id",
+            "abc-1",
+            "-e",
+            "/data/ext.ts"
+        ]
     );
     assert_eq!(
         cli_args(&LaunchTarget::Fork("src-1".into()), None),

@@ -95,12 +95,13 @@ impl ApprovalRequest {
     /// native agents).
     pub(super) fn permission_payload(&self, permission_id: &str, session_id: &str) -> Value {
         let (card_name, params) = card_input(&self.tool_name, &self.input);
-        let option = |id: &str, name: &str, kind: &str| {
-            json!({"optionId": id, "name": name, "kind": kind})
-        };
+        let option =
+            |id: &str, name: &str, kind: &str| json!({"optionId": id, "name": name, "kind": kind});
         let title = match card_name.as_str() {
             "ExecCommand" => self.input["command"].as_str().map(str::to_string),
-            "Edit" | "Write" => self.input["path"].as_str().map(|p| format!("{card_name} {p}")),
+            "Edit" | "Write" => self.input["path"]
+                .as_str()
+                .map(|p| format!("{card_name} {p}")),
             _ => None,
         }
         .unwrap_or_else(|| self.tool_name.clone());
@@ -111,13 +112,13 @@ impl ApprovalRequest {
             _ => "other",
         };
         json!({"permissionId": permission_id, "sessionId": session_id, "toolCall": {
-            "toolCallId": self.tool_call_id, "title": title, "kind": kind,
-            "toolName": card_name, "status": "pending", "rawInput": params, "content": []},
-            "options": [
-                option(ALLOW_ONCE, "Allow once", "allow_once"),
-                option(ALLOW_SESSION, "Allow for this session", "allow_session"),
-                option(REJECT_ONCE, "Reject", "reject_once"),
-            ]})
+        "toolCallId": self.tool_call_id, "title": title, "kind": kind,
+        "toolName": card_name, "status": "pending", "rawInput": params, "content": []},
+        "options": [
+            option(ALLOW_ONCE, "Allow once", "allow_once"),
+            option(ALLOW_SESSION, "Allow for this session", "allow_session"),
+            option(REJECT_ONCE, "Reject", "reject_once"),
+        ]})
     }
 }
 
@@ -186,7 +187,11 @@ pub(super) async fn install_local_extension() -> OpenBitFunResult<PathBuf> {
         ))
     };
     tokio::fs::create_dir_all(&dir).await.map_err(error)?;
-    let staging = dir.join(format!("{}.{}", extension_file_name(), uuid::Uuid::new_v4()));
+    let staging = dir.join(format!(
+        "{}.{}",
+        extension_file_name(),
+        uuid::Uuid::new_v4()
+    ));
     tokio::fs::write(&staging, EXTENSION_SOURCE)
         .await
         .map_err(error)?;
@@ -204,11 +209,11 @@ const HEREDOC_DELIMITER: &str = "OPENBITFUN_PI_APPROVAL_EOF";
 
 /// Shell lines that write the extension on a remote host (under its cache
 /// directory, not the workspace) and leave its path in `$obf_pi_ext`. The
-/// launch chain stops if the write fails, so Pi never starts without it.
+/// script exits if the file is missing, so Pi never starts without it.
 pub(super) fn remote_install_script() -> String {
     debug_assert!(!EXTENSION_SOURCE.contains(HEREDOC_DELIMITER));
     format!(
-        "obf_pi_dir=\"${{XDG_CACHE_HOME:-$HOME/.cache}}/openbitfun/pi\" && mkdir -p \"$obf_pi_dir\" && obf_pi_ext=\"$obf_pi_dir/{name}\" && if [ ! -s \"$obf_pi_ext\" ]; then cat > \"$obf_pi_ext.$$\" <<'{HEREDOC_DELIMITER}' && mv \"$obf_pi_ext.$$\" \"$obf_pi_ext\"\n{EXTENSION_SOURCE}\n{HEREDOC_DELIMITER}\nfi",
+        "obf_pi_dir=\"${{XDG_CACHE_HOME:-$HOME/.cache}}/openbitfun/pi\"\nobf_pi_ext=\"$obf_pi_dir/{name}\"\nif [ ! -s \"$obf_pi_ext\" ]; then mkdir -p \"$obf_pi_dir\" && cat > \"$obf_pi_ext.$$\" <<'{HEREDOC_DELIMITER}' && mv \"$obf_pi_ext.$$\" \"$obf_pi_ext\"\n{EXTENSION_SOURCE}\n{HEREDOC_DELIMITER}\nfi\n[ -s \"$obf_pi_ext\" ] || {{ echo \"OpenBitFun could not install the Pi approval extension in $obf_pi_dir\" >&2; exit 1; }}",
         name = extension_file_name(),
     )
 }
@@ -224,7 +229,10 @@ mod tests {
             "options":[ALLOW_ONCE, ALLOW_SESSION, REJECT_ONCE, REJECT_READ_ONLY]});
         let request = ApprovalRequest::parse(&frame).unwrap();
         assert_eq!(request.ui_id, "u1");
-        assert_eq!((request.tool_call_id.as_str(), request.tool_name.as_str()), ("c1", "bash"));
+        assert_eq!(
+            (request.tool_call_id.as_str(), request.tool_name.as_str()),
+            ("c1", "bash")
+        );
         assert_eq!(request.session_key(), "bash\u{0}rm -rf x");
         let mut other = frame.clone();
         other["title"] = json!("Allow dangerous command?");
@@ -236,8 +244,14 @@ mod tests {
 
     #[test]
     fn modes_answer_without_a_card_only_when_they_decide() {
-        assert_eq!(automatic_decision(MODE_FULL_ACCESS, false), Some(ALLOW_ONCE));
-        assert_eq!(automatic_decision(MODE_READ_ONLY, true), Some(REJECT_READ_ONLY));
+        assert_eq!(
+            automatic_decision(MODE_FULL_ACCESS, false),
+            Some(ALLOW_ONCE)
+        );
+        assert_eq!(
+            automatic_decision(MODE_READ_ONLY, true),
+            Some(REJECT_READ_ONLY)
+        );
         assert_eq!(automatic_decision(MODE_ASK, true), Some(ALLOW_ONCE));
         assert_eq!(automatic_decision(MODE_ASK, false), None);
         // Unknown persisted modes fall back to asking.
@@ -252,9 +266,11 @@ mod tests {
         assert!(EXTENSION_SOURCE.contains(&format!("\"{MARKER}\"")));
         assert!(EXTENSION_SOURCE.contains(&format!("\"{BRIDGE_COMMAND}\"")));
         assert!(EXTENSION_SOURCE.contains("signal: ctx.signal"));
-        assert!(!EXTENSION_SOURCE.contains("timeout"));
+        // No dialog timeout: Pi must not resolve a pending decision itself.
+        assert!(!EXTENSION_SOURCE.contains("timeout:"));
         let script = remote_install_script();
         assert!(script.contains(&extension_file_name()));
-        assert!(script.ends_with("\nfi"));
+        // Pi never starts without the bridge.
+        assert!(script.ends_with("exit 1; }"));
     }
 }

@@ -395,7 +395,10 @@ mod tests {
             pi_state_from_metadata(&metadata(legacy.clone())).unwrap(),
             (Some("pi-old".into()), true, 0)
         );
-        assert_eq!(PiHistory::from_metadata(Some(&legacy)), PiHistory::default());
+        assert_eq!(
+            PiHistory::from_metadata(Some(&legacy)),
+            PiHistory::default()
+        );
         let error = pi_fork_metadata(&legacy, "t-old", &[]).unwrap_err();
         assert!(error.to_string().contains("before Pi fork support"));
         let unstarted = json!({"acpClientId":"pi-native",
