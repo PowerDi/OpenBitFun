@@ -241,6 +241,9 @@ pub struct CodexNativeSession {
     legacy_notice: std::sync::Mutex<Option<String>>,
     last_activity: std::sync::Mutex<tokio::time::Instant>,
     title_resolver: std::sync::Mutex<TitleResolver>,
+    /// Every frame routed through this session (live protocol tests only).
+    #[cfg(test)]
+    frame_tap: std::sync::Mutex<Vec<Value>>,
 }
 
 fn lock<T>(slot: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -286,6 +289,8 @@ impl CodexNativeSession {
             legacy_notice: std::sync::Mutex::new(None),
             last_activity: std::sync::Mutex::new(tokio::time::Instant::now()),
             title_resolver: std::sync::Mutex::new(title::default_resolver()),
+            #[cfg(test)]
+            frame_tap: std::sync::Mutex::new(Vec::new()),
         })
     }
 
@@ -1349,6 +1354,8 @@ impl CodexNativeSession {
         process: &Arc<RpcProcess>,
         frame: Value,
     ) -> OpenBitFunResult<()> {
+        #[cfg(test)]
+        lock(&self.frame_tap).push(frame.clone());
         let method = frame["method"].as_str().map(str::to_string);
         match (method, frame.get("id").filter(|id| !id.is_null())) {
             (None, Some(_)) => {
@@ -1905,5 +1912,9 @@ fn service_error(message: impl Into<String>) -> OpenBitFunError {
 #[cfg(test)]
 #[path = "session_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "live_tests.rs"]
+mod live_tests;
 
 // SESSION_APPEND
