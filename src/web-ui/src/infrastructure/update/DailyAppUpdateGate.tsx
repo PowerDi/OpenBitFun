@@ -7,6 +7,7 @@ import { scheduleAfterStartupSignal } from '@/shared/utils/startupTaskScheduling
 import { canAutoCheckForAppUpdates, canCheckForAppUpdates } from './tauriEnv';
 import { getSkippedVersion, getAppUpdateReminderAt, recordAppUpdatePresented, shouldShowDailyUpdatePrompt } from './appUpdateStorage';
 import { UpdateInstallProgressModal } from './UpdateInstallProgressModal';
+import { UpstreamReleaseNotice } from './UpstreamReleaseNotice';
 import { useUpdateInstallStore } from './updateInstallStore';
 import { APP_UPDATE_CHECK_INTERVAL, getNextAppUpdateCheckAt } from './appUpdateSchedule';
 import { RetainedMountBoundary } from '@/shared/presence';
@@ -145,6 +146,7 @@ export function DailyAppUpdateGate(): ReactElement | null {
 
   return (
     <>
+      <UpstreamReleaseNotice />
       <RetainedMountBoundary present={state.detailsOpen}>
         <Suspense fallback={null}><AppUpdateDetailsDialog /></Suspense>
       </RetainedMountBoundary>
