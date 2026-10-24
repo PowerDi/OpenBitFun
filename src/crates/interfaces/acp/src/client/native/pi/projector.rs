@@ -700,6 +700,8 @@ pub(crate) fn native_tool_name(name: &str) -> String {
         "grep" => "Grep",
         "find" => "Glob",
         "ls" => "LS",
+        // The `subagent` extension tool renders on the subagent (Task) card.
+        super::subagents::SUBAGENT_TOOL => "Task",
         other => other,
     }
     .to_string()
@@ -718,6 +720,9 @@ fn card_params(tool_name: &str, args: Value) -> Value {
     let Value::Object(mut object) = args else {
         return args;
     };
+    if tool_name == "Task" {
+        subagent_card_params(&mut object);
+    }
     if tool_name == "Edit" && !object.contains_key("old_string") {
         let single = object
             .get("edits")
@@ -734,6 +739,54 @@ fn card_params(tool_name: &str, args: Value) -> Value {
         }
     }
     Value::Object(object)
+}
+
+/// `subagent` args (`agent`+`task`, `tasks[]` or `chain[]`) -> the Task card's
+/// `description` / `prompt` / `subagent_type`; the raw args stay alongside.
+fn subagent_card_params(object: &mut serde_json::Map<String, Value>) {
+    let steps: Vec<(String, String)> = match (object.get("tasks"), object.get("chain")) {
+        (Some(Value::Array(steps)), _) | (_, Some(Value::Array(steps))) => steps
+            .iter()
+            .map(|step| {
+                (
+                    step["agent"].as_str().unwrap_or_default().to_string(),
+                    step["task"].as_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect(),
+        _ => vec![(
+            object
+                .get("agent")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            object
+                .get("task")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        )],
+    };
+    let (description, prompt, agent) = match steps.as_slice() {
+        [(agent, task)] => (agent.clone(), task.clone(), Some(agent.clone())),
+        many => (
+            format!("{} agents", many.len()),
+            many.iter()
+                .map(|(agent, task)| format!("[{agent}] {task}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            None,
+        ),
+    };
+    object
+        .entry("description")
+        .or_insert(Value::String(description));
+    object.entry("prompt").or_insert(Value::String(prompt));
+    if let Some(agent) = agent.filter(|agent| !agent.is_empty()) {
+        object
+            .entry("subagent_type")
+            .or_insert(Value::String(agent));
+    }
 }
 
 fn content_text(content: Option<&Value>) -> String {
