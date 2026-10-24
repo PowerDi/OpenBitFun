@@ -234,6 +234,9 @@ pub struct CodexNativeSession {
     models: std::sync::Mutex<Vec<Value>>,
     /// Model the thread runs when no override is selected.
     active_model: std::sync::Mutex<Option<String>>,
+    /// Model and reasoning effort Codex applies when nothing is selected:
+    /// `config/read` (config.toml layers), refined by the thread's report.
+    config_defaults: std::sync::Mutex<ConfigDefaults>,
     notifier: Option<NativeAgentNotificationSink>,
     context_usage: std::sync::Mutex<Option<AcpSessionContextUsage>>,
     history: std::sync::Mutex<CodexHistory>,
@@ -281,6 +284,7 @@ impl CodexNativeSession {
             effort: std::sync::Mutex::new(DEFAULT_ID.to_string()),
             models: std::sync::Mutex::new(Vec::new()),
             active_model: std::sync::Mutex::new(None),
+            config_defaults: std::sync::Mutex::new(ConfigDefaults::default()),
             notifier,
             context_usage: std::sync::Mutex::new(None),
             history: std::sync::Mutex::new(CodexHistory::default()),
@@ -359,15 +363,20 @@ impl CodexNativeSession {
     }
 
     /// Model the next turn runs: the selection, else the thread's model,
-    /// else the catalog default.
+    /// else the configured default (config.toml), else the catalog default.
+    /// Without a selection no model is sent, so Codex applies its own config;
+    /// this only mirrors that choice for display.
     fn effective_model(&self, rows: &[Value]) -> Option<String> {
         let selected = lock(&self.selected_model).clone();
         let known = |id: &str| rows.iter().any(|row| model_slug(row) == Some(id));
         if selected != DEFAULT_ID && known(&selected) {
             return Some(selected);
         }
-        if let Some(active) = lock(&self.active_model).clone().filter(|m| known(m)) {
+        if let Some(active) = lock(&self.active_model).clone() {
             return Some(active);
+        }
+        if let Some(configured) = lock(&self.config_defaults).model.clone() {
+            return Some(configured);
         }
         rows.iter()
             .find(|row| row["isDefault"] == true)
@@ -378,10 +387,26 @@ impl CodexNativeSession {
 
     pub fn options(&self) -> AcpSessionOptions {
         let rows = self.model_rows();
-        let available_models: Vec<AcpSessionModelOption> =
+        let mut available_models: Vec<AcpSessionModelOption> =
             rows.iter().filter_map(model_option).collect();
+        let current_model_id = self.effective_model(&rows);
+        // A configured model outside the catalog (custom provider) is still
+        // what runs; list it so the picker can show it.
+        if let Some(current) = current_model_id.as_deref() {
+            if !available_models.iter().any(|m| m.id == current) {
+                available_models.insert(
+                    0,
+                    AcpSessionModelOption {
+                        id: current.to_string(),
+                        name: current.to_string(),
+                        provider_name: None,
+                        description: Some("Codex configured default.".to_string()),
+                    },
+                );
+            }
+        }
         AcpSessionOptions {
-            current_model_id: self.effective_model(&rows),
+            current_model_id,
             available_models,
             model_config_id: None,
             config_options: self.config_options(&rows),
@@ -412,10 +437,17 @@ impl CodexNativeSession {
                 description: Some((*description).to_string()),
             })
             .collect();
+        let default_effort = lock(&self.config_defaults).effort.clone();
         let mut efforts = vec![AcpSessionConfigSelectOption {
             value: DEFAULT_ID.to_string(),
-            name: "Default".to_string(),
-            description: Some("The model's default reasoning effort.".to_string()),
+            name: match &default_effort {
+                Some(effort) => format!("Default ({})", effort_label(effort)),
+                None => "Default".to_string(),
+            },
+            description: Some(
+                "The reasoning effort Codex is configured with (config.toml), else the model default."
+                    .to_string(),
+            ),
         }];
         efforts.extend(
             self.supported_efforts(rows)
@@ -527,6 +559,13 @@ impl CodexNativeSession {
     /// later turns of the thread).
     pub async fn set_model(&self, model_id: &str) -> OpenBitFunResult<AcpSessionOptions> {
         let rows = self.model_rows();
+        // Picking the configured default when it is outside the catalog is the
+        // same as not choosing: Codex keeps applying its own config.
+        let model_id = if self.is_uncataloged_default(model_id) {
+            DEFAULT_ID
+        } else {
+            model_id
+        };
         if model_id != DEFAULT_ID && !rows.iter().any(|row| model_slug(row) == Some(model_id)) {
             return Err(OpenBitFunError::Validation(format!(
                 "Unsupported Codex native model: {model_id}"
@@ -648,7 +687,40 @@ impl CodexNativeSession {
         if let Err(error) = self.load_models(process).await {
             log::warn!("Codex model/list failed: {error}");
         }
+        if let Err(error) = self.load_config_defaults(process).await {
+            log::warn!("Codex config/read failed: {error}");
+        }
         Ok(())
+    }
+
+    /// Read the effective config for the workspace (user plus project
+    /// layers) to show which model and effort Codex applies by default.
+    /// Only `model` and `model_reasoning_effort` are kept.
+    async fn load_config_defaults(&self, process: &RpcProcess) -> OpenBitFunResult<()> {
+        let response = process
+            .request(
+                "config/read",
+                json!({"cwd": self.workspace_path}),
+                REQUEST_TIMEOUT,
+            )
+            .await?;
+        let config = &response["config"];
+        let mut defaults = lock(&self.config_defaults);
+        defaults.model = non_empty(&config["model"]);
+        defaults.effort = non_empty(&config["model_reasoning_effort"]);
+        Ok(())
+    }
+
+    /// Whether `model_id` is the model Codex runs without a selection and
+    /// the catalog does not list it (e.g. a custom provider model).
+    fn is_uncataloged_default(&self, model_id: &str) -> bool {
+        let active = lock(&self.active_model).clone();
+        let configured = lock(&self.config_defaults).model.clone();
+        active.or(configured).as_deref() == Some(model_id)
+            && !self
+                .model_rows()
+                .iter()
+                .any(|row| model_slug(row) == Some(model_id))
     }
 
     async fn load_models(&self, process: &RpcProcess) -> OpenBitFunResult<()> {
@@ -751,6 +823,9 @@ impl CodexNativeSession {
         if let Some(model) = response["model"].as_str().filter(|m| !m.is_empty()) {
             *lock(&self.active_model) = Some(model.to_string());
             self.state.lock().await.model = Some(model.to_string());
+        }
+        if let Some(effort) = non_empty(&response["reasoningEffort"]) {
+            lock(&self.config_defaults).effort = Some(effort);
         }
         if pending.is_some() {
             let turn_ids: Vec<String> = response["thread"]["turns"]
@@ -1617,6 +1692,20 @@ pub(super) fn initialize_params() -> Value {
         "clientInfo": {"name": "openbitfun", "title": "OpenBitFun", "version": env!("CARGO_PKG_VERSION")},
         "capabilities": {"experimentalApi": false, "requestAttestation": false},
     })
+}
+
+#[derive(Default, Clone)]
+struct ConfigDefaults {
+    model: Option<String>,
+    effort: Option<String>,
+}
+
+fn non_empty(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
 }
 
 /// Id `turn/start { model }` accepts: the model slug, else the row id.
