@@ -146,6 +146,56 @@ async fn projects_thread_notifications_and_ignores_other_threads() {
 }
 
 #[tokio::test]
+async fn resume_usage_replay_of_previous_turn_does_not_capture_the_new_turn() {
+    let (session, process, mut lines) = fixture(Some("th1"));
+    session
+        .begin_turn("t2".into(), "again".into(), None)
+        .await
+        .unwrap();
+    session.state.lock().await.process_id = Some(process.id.clone());
+    // Sent by `thread/resume` for the previous turn, before `turn/start`.
+    let replay = json!({"method":"thread/tokenUsage/updated","params":{"threadId":"th1","turnId":"old",
+        "tokenUsage":{"modelContextWindow":1000,"last":{"totalTokens":120},"total":{"totalTokens":120}}}});
+    session.route_frame(&process, replay).await.unwrap();
+    assert_eq!(session.options().context_usage.map(|u| u.used), Some(120));
+    // The fixture process is the session's loaded app-server: no spawn,
+    // no `thread/resume` request.
+    *session.process.lock().await = Some(process.clone());
+    *lock(&session.thread_process) = Some(process.id.clone());
+    let submit = {
+        let session = session.clone();
+        tokio::spawn(async move { session.submit_turn("t2", &"again".to_string().into()).await })
+    };
+    let request = next_frame(&mut lines).await;
+    assert_eq!(request["method"], "turn/start");
+    session
+        .route_frame(
+            &process,
+            json!({"id": request["id"], "result": {"turn":{"id":"new","status":"inProgress"}}}),
+        )
+        .await
+        .unwrap();
+    submit.await.unwrap().unwrap();
+    for frame in [
+        json!({"method":"turn/started","params":{"threadId":"th1","turn":{"id":"new","status":"inProgress"}}}),
+        json!({"method":"item/agentMessage/delta","params":{"threadId":"th1","turnId":"new","itemId":"m1","delta":"pong"}}),
+        json!({"method":"turn/completed","params":{"threadId":"th1","turn":{"id":"new","status":"completed"}}}),
+    ] {
+        session.route_frame(&process, frame).await.unwrap();
+    }
+    let events = session.queue.dequeue_batch(100).await;
+    assert!(!events
+        .iter()
+        .any(|e| matches!(e.event, AgenticEvent::TokenUsageUpdated { .. })));
+    assert!(events
+        .iter()
+        .any(|e| matches!(&e.event, AgenticEvent::TextChunk { text, .. } if text == "pong")));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e.event, AgenticEvent::DialogTurnCompleted { .. })));
+}
+
+#[tokio::test]
 async fn approval_round_trip_and_turn_end_cancels_unanswered_requests() {
     let (session, process, mut lines) = fixture(Some("th1"));
     let params = json!({"threadId":"th1","turnId":"ct1","itemId":"c1","command":"cargo test",
@@ -305,4 +355,86 @@ async fn unsupported_server_requests_get_an_error_reply() {
     let reply = next_frame(&mut lines).await;
     assert_eq!(reply["id"], 5);
     assert_eq!(reply["error"]["code"], -32601);
+}
+
+#[tokio::test]
+async fn unmaterialized_thread_without_turns_starts_afresh() {
+    let (session, process, mut lines) = fixture(Some("th-empty"));
+    let ensure = {
+        let session = session.clone();
+        let process = process.clone();
+        tokio::spawn(async move { session.ensure_thread(&process).await })
+    };
+    let request = next_frame(&mut lines).await;
+    assert_eq!(request["method"], "thread/resume");
+    session
+        .route_frame(
+            &process,
+            json!({"id": request["id"], "error": {"code": -32600,
+                "message": "no rollout found for thread id th-empty"}}),
+        )
+        .await
+        .unwrap();
+    let start = answer(
+        &session,
+        &process,
+        &mut lines,
+        json!({"thread":{"id":"th-new"}}),
+    )
+    .await;
+    assert_eq!(start["method"], "thread/start");
+    assert_eq!(ensure.await.unwrap().unwrap(), "th-new");
+
+    // A thread with recorded Codex turns keeps the error instead.
+    let (session, process, mut lines) = fixture(Some("th1"));
+    session.apply_history(CodexHistory {
+        turns: vec![TurnAnchor {
+            turn_id: "t1".into(),
+            turn_index: 0,
+            codex_turn_id: Some("c1".into()),
+        }],
+        pending: None,
+    });
+    let ensure = {
+        let session = session.clone();
+        let process = process.clone();
+        tokio::spawn(async move { session.ensure_thread(&process).await })
+    };
+    let request = next_frame(&mut lines).await;
+    session
+        .route_frame(
+            &process,
+            json!({"id": request["id"], "error": {"code": -32600,
+                "message": "no rollout found for thread id th1"}}),
+        )
+        .await
+        .unwrap();
+    assert!(ensure.await.unwrap().is_err());
+}
+
+#[test]
+fn approval_options_follow_available_decisions() {
+    let ids = |params: Value| -> Vec<String> {
+        permission_payload(
+            "p",
+            "s",
+            "item/commandExecution/requestApproval",
+            "c1",
+            "ExecCommand",
+            "execute",
+            &json!({}),
+            &params,
+        )["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["optionId"].as_str().unwrap().to_string())
+            .collect()
+    };
+    // Shape sent by codex-cli 0.163.0 for a shell write on Windows.
+    let live = json!({"command":"pwsh","proposedExecpolicyAmendment":["pwsh"],
+        "availableDecisions":["accept",{"acceptWithExecpolicyAmendment":{"execpolicy_amendment":["pwsh"]}},"cancel"]});
+    assert_eq!(ids(live), ["allow_once", "allow_always", "reject_once"]);
+    let legacy = json!({"command":"ls"});
+    assert_eq!(ids(legacy), ["allow_once", "allow_session", "reject_once"]);
 }

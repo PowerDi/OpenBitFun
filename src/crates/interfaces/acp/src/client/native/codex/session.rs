@@ -719,7 +719,32 @@ impl CodexNativeSession {
             }
             (None, None) => ("thread/start", base),
         };
-        let response = process.request(method, params, REQUEST_TIMEOUT).await?;
+        let (method, response) = match process.request(method, params, REQUEST_TIMEOUT).await {
+            // Codex writes no rollout until a turn starts, so a thread whose
+            // first `turn/start` never landed cannot be resumed. With no
+            // Codex turn recorded there is nothing to lose: start afresh.
+            Err(error)
+                if method == "thread/resume"
+                    && error.to_string().contains("no rollout found")
+                    && lock(&self.history)
+                        .turns
+                        .iter()
+                        .all(|anchor| anchor.codex_turn_id.is_none()) =>
+            {
+                log::warn!(
+                    "Codex thread has no rollout and no turns; starting a new thread: session_id={}",
+                    self.session_id
+                );
+                let params = self.thread_base_params();
+                (
+                    "thread/start",
+                    process
+                        .request("thread/start", params, REQUEST_TIMEOUT)
+                        .await?,
+                )
+            }
+            result => (method, result?),
+        };
         let thread = response["thread"]["id"]
             .as_str()
             .filter(|id| !id.is_empty())
@@ -862,7 +887,8 @@ impl CodexNativeSession {
         let codex_turn = response["turn"]["id"].as_str().map(str::to_string);
         {
             let mut state = self.state.lock().await;
-            if state.codex_turn_id.is_none()
+            // The response is authoritative for the turn it started.
+            if codex_turn.is_some()
                 && state
                     .projector
                     .as_ref()
@@ -1374,7 +1400,18 @@ impl CodexNativeSession {
             .map(str::to_string);
         match (&state.codex_turn_id, &notification_turn) {
             (Some(current), Some(turn)) if current != turn => return Ok(()),
-            (None, Some(turn)) => state.codex_turn_id = Some(turn.clone()),
+            (None, Some(turn)) if method == "turn/started" => {
+                state.codex_turn_id = Some(turn.clone())
+            }
+            // `thread/resume` replays the previous turn's usage before the
+            // new turn starts: it restores the context meter but neither
+            // names the active turn nor belongs to it.
+            (None, Some(_)) => {
+                if method == "thread/tokenUsage/updated" {
+                    self.publish_context_usage(&params["tokenUsage"]);
+                }
+                return Ok(());
+            }
             _ => {}
         }
         if method == "turn/plan/updated" {
@@ -1737,16 +1774,25 @@ fn permission_payload(
 ) -> Value {
     let option =
         |id: &str, name: &str, kind: &str| json!({"optionId": id, "name": name, "kind": kind});
-    let mut options = vec![
-        option("allow_once", "Allow once", "allow_once"),
-        option(
+    // `availableDecisions` (when sent) is the server's list for this prompt;
+    // e.g. Codex omits `acceptForSession` for commands it cannot cache.
+    let offered = |decision: &str| match params["availableDecisions"].as_array() {
+        Some(decisions) => decisions.iter().any(|d| {
+            d.as_str() == Some(decision) || d.as_object().is_some_and(|o| o.contains_key(decision))
+        }),
+        None => true,
+    };
+    let mut options = vec![option("allow_once", "Allow once", "allow_once")];
+    if offered("acceptForSession") {
+        options.push(option(
             ALLOW_SESSION_OPTION,
             "Allow for this session",
             "allow_session",
-        ),
-    ];
+        ));
+    }
     if method == "item/commandExecution/requestApproval"
         && !params["proposedExecpolicyAmendment"].is_null()
+        && offered("acceptWithExecpolicyAmendment")
     {
         options.push(option("allow_always", "Always allow", "allow_always"));
     }
