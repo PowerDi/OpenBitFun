@@ -23,6 +23,10 @@ use super::{
 pub use capabilities::{NativeAgentCapabilities, NativeSubagentCapabilities};
 pub(crate) use preferences::NativeAgentPreferencesStore;
 
+/// `triggerSource` of a turn started because a background task or subagent
+/// finished, not typed by the user (the UI disables editing it).
+pub(crate) const NATIVE_WAKE_TRIGGER_SOURCE: &str = "native_background_task";
+
 /// Presentation updates scoped to one native session. Hosts choose their event transport.
 #[derive(Debug, Clone)]
 pub enum NativeAgentNotification {

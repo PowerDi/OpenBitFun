@@ -209,6 +209,8 @@ struct TurnState {
     process_id: Option<String>,
     /// Model reported by the thread (used for round labels).
     model: Option<String>,
+    /// Spawned agent threads and pending parent wake-ups.
+    threads: subagents::ChildThreads,
 }
 
 pub struct CodexNativeSession {
@@ -218,6 +220,8 @@ pub struct CodexNativeSession {
     /// Codex thread id once a thread exists (persisted as `acpRemoteSessionId`).
     thread_id: std::sync::Mutex<Option<String>>,
     process: Mutex<Option<Arc<RpcProcess>>>,
+    /// Owner handle for detached work (subagent wake-ups).
+    weak_self: std::sync::Weak<Self>,
     /// Process id whose app-server has the thread loaded.
     thread_process: std::sync::Mutex<Option<String>>,
     /// Serialize launch, submission and cancellation; output never takes this lock.
@@ -234,6 +238,9 @@ pub struct CodexNativeSession {
     models: std::sync::Mutex<Vec<Value>>,
     /// Model the thread runs when no override is selected.
     active_model: std::sync::Mutex<Option<String>>,
+    /// Model and reasoning effort Codex applies when nothing is selected:
+    /// `config/read` (config.toml layers), refined by the thread's report.
+    config_defaults: std::sync::Mutex<ConfigDefaults>,
     notifier: Option<NativeAgentNotificationSink>,
     context_usage: std::sync::Mutex<Option<AcpSessionContextUsage>>,
     history: std::sync::Mutex<CodexHistory>,
@@ -260,7 +267,8 @@ impl CodexNativeSession {
         turn_index: usize,
         notifier: Option<NativeAgentNotificationSink>,
     ) -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new_cyclic(|weak_self| Self {
+            weak_self: weak_self.clone(),
             session_id,
             workspace_path,
             remote_connection_id,
@@ -281,6 +289,7 @@ impl CodexNativeSession {
             effort: std::sync::Mutex::new(DEFAULT_ID.to_string()),
             models: std::sync::Mutex::new(Vec::new()),
             active_model: std::sync::Mutex::new(None),
+            config_defaults: std::sync::Mutex::new(ConfigDefaults::default()),
             notifier,
             context_usage: std::sync::Mutex::new(None),
             history: std::sync::Mutex::new(CodexHistory::default()),
@@ -359,15 +368,20 @@ impl CodexNativeSession {
     }
 
     /// Model the next turn runs: the selection, else the thread's model,
-    /// else the catalog default.
+    /// else the configured default (config.toml), else the catalog default.
+    /// Without a selection no model is sent, so Codex applies its own config;
+    /// this only mirrors that choice for display.
     fn effective_model(&self, rows: &[Value]) -> Option<String> {
         let selected = lock(&self.selected_model).clone();
         let known = |id: &str| rows.iter().any(|row| model_slug(row) == Some(id));
         if selected != DEFAULT_ID && known(&selected) {
             return Some(selected);
         }
-        if let Some(active) = lock(&self.active_model).clone().filter(|m| known(m)) {
+        if let Some(active) = lock(&self.active_model).clone() {
             return Some(active);
+        }
+        if let Some(configured) = lock(&self.config_defaults).model.clone() {
+            return Some(configured);
         }
         rows.iter()
             .find(|row| row["isDefault"] == true)
@@ -378,10 +392,26 @@ impl CodexNativeSession {
 
     pub fn options(&self) -> AcpSessionOptions {
         let rows = self.model_rows();
-        let available_models: Vec<AcpSessionModelOption> =
+        let mut available_models: Vec<AcpSessionModelOption> =
             rows.iter().filter_map(model_option).collect();
+        let current_model_id = self.effective_model(&rows);
+        // A configured model outside the catalog (custom provider) is still
+        // what runs; list it so the picker can show it.
+        if let Some(current) = current_model_id.as_deref() {
+            if !available_models.iter().any(|m| m.id == current) {
+                available_models.insert(
+                    0,
+                    AcpSessionModelOption {
+                        id: current.to_string(),
+                        name: current.to_string(),
+                        provider_name: None,
+                        description: Some("Codex configured default.".to_string()),
+                    },
+                );
+            }
+        }
         AcpSessionOptions {
-            current_model_id: self.effective_model(&rows),
+            current_model_id,
             available_models,
             model_config_id: None,
             config_options: self.config_options(&rows),
@@ -412,10 +442,17 @@ impl CodexNativeSession {
                 description: Some((*description).to_string()),
             })
             .collect();
+        let default_effort = lock(&self.config_defaults).effort.clone();
         let mut efforts = vec![AcpSessionConfigSelectOption {
             value: DEFAULT_ID.to_string(),
-            name: "Default".to_string(),
-            description: Some("The model's default reasoning effort.".to_string()),
+            name: match &default_effort {
+                Some(effort) => format!("Default ({})", effort_label(effort)),
+                None => "Default".to_string(),
+            },
+            description: Some(
+                "The reasoning effort Codex is configured with (config.toml), else the model default."
+                    .to_string(),
+            ),
         }];
         efforts.extend(
             self.supported_efforts(rows)
@@ -527,6 +564,13 @@ impl CodexNativeSession {
     /// later turns of the thread).
     pub async fn set_model(&self, model_id: &str) -> OpenBitFunResult<AcpSessionOptions> {
         let rows = self.model_rows();
+        // Picking the configured default when it is outside the catalog is the
+        // same as not choosing: Codex keeps applying its own config.
+        let model_id = if self.is_uncataloged_default(model_id) {
+            DEFAULT_ID
+        } else {
+            model_id
+        };
         if model_id != DEFAULT_ID && !rows.iter().any(|row| model_slug(row) == Some(model_id)) {
             return Err(OpenBitFunError::Validation(format!(
                 "Unsupported Codex native model: {model_id}"
@@ -550,7 +594,11 @@ impl CodexNativeSession {
 
     /// Drop the loaded thread between turns; the next turn resumes it.
     async fn release_thread_when_idle(&self) {
-        if self.state.lock().await.projector.is_some() || !self.approvals.is_empty() {
+        let busy = {
+            let state = self.state.lock().await;
+            state.projector.is_some() || state.threads.any_running()
+        };
+        if busy || !self.approvals.is_empty() {
             return;
         }
         if let Some(process) = self.process.lock().await.take() {
@@ -648,7 +696,40 @@ impl CodexNativeSession {
         if let Err(error) = self.load_models(process).await {
             log::warn!("Codex model/list failed: {error}");
         }
+        if let Err(error) = self.load_config_defaults(process).await {
+            log::warn!("Codex config/read failed: {error}");
+        }
         Ok(())
+    }
+
+    /// Read the effective config for the workspace (user plus project
+    /// layers) to show which model and effort Codex applies by default.
+    /// Only `model` and `model_reasoning_effort` are kept.
+    async fn load_config_defaults(&self, process: &RpcProcess) -> OpenBitFunResult<()> {
+        let response = process
+            .request(
+                "config/read",
+                json!({"cwd": self.workspace_path}),
+                REQUEST_TIMEOUT,
+            )
+            .await?;
+        let config = &response["config"];
+        let mut defaults = lock(&self.config_defaults);
+        defaults.model = non_empty(&config["model"]);
+        defaults.effort = non_empty(&config["model_reasoning_effort"]);
+        Ok(())
+    }
+
+    /// Whether `model_id` is the model Codex runs without a selection and
+    /// the catalog does not list it (e.g. a custom provider model).
+    fn is_uncataloged_default(&self, model_id: &str) -> bool {
+        let active = lock(&self.active_model).clone();
+        let configured = lock(&self.config_defaults).model.clone();
+        active.or(configured).as_deref() == Some(model_id)
+            && !self
+                .model_rows()
+                .iter()
+                .any(|row| model_slug(row) == Some(model_id))
     }
 
     async fn load_models(&self, process: &RpcProcess) -> OpenBitFunResult<()> {
@@ -752,6 +833,9 @@ impl CodexNativeSession {
             *lock(&self.active_model) = Some(model.to_string());
             self.state.lock().await.model = Some(model.to_string());
         }
+        if let Some(effort) = non_empty(&response["reasoningEffort"]) {
+            lock(&self.config_defaults).effort = Some(effort);
+        }
         if pending.is_some() {
             let turn_ids: Vec<String> = response["thread"]["turns"]
                 .as_array()
@@ -816,8 +900,10 @@ impl CodexNativeSession {
                     continue;
                 }
                 let _guard = session.lifecycle.lock().await;
-                let busy =
-                    session.state.lock().await.projector.is_some() || !session.approvals.is_empty();
+                let busy = {
+                    let state = session.state.lock().await;
+                    state.projector.is_some() || state.threads.any_running()
+                } || !session.approvals.is_empty();
                 if !busy {
                     log::info!(
                         "Releasing idle Codex native process: session_id={}",
@@ -852,6 +938,12 @@ impl CodexNativeSession {
         self.touch();
         if self.state.lock().await.projector.is_some() {
             return Err(service_error("Codex session already has an active turn"));
+        }
+        {
+            // The user is driving again; queued notifications go into this turn.
+            let mut state = self.state.lock().await;
+            state.threads.wake_suppressed = false;
+            state.threads.wake_reasons.clear();
         }
         let title_message = (self.state.lock().await.index == 0)
             .then(|| title::title_source(&input.text, original.as_deref()))
@@ -927,6 +1019,16 @@ impl CodexNativeSession {
         input: String,
         original: Option<String>,
     ) -> OpenBitFunResult<()> {
+        self.begin_turn_with(turn_id, input, original, None).await
+    }
+
+    async fn begin_turn_with(
+        &self,
+        turn_id: String,
+        input: String,
+        original: Option<String>,
+        metadata: Option<Value>,
+    ) -> OpenBitFunResult<()> {
         let mut state = self.state.lock().await;
         let manual_compaction = input.split_whitespace().next() == Some("/compact");
         self.enqueue(vec![AgenticEvent::DialogTurnStarted {
@@ -935,7 +1037,7 @@ impl CodexNativeSession {
             turn_index: state.index,
             user_input: input,
             original_user_input: original,
-            user_message_metadata: None,
+            user_message_metadata: metadata,
         }])
         .await?;
         state.index += 1;
@@ -1077,6 +1179,13 @@ impl CodexNativeSession {
             state.codex_turn_id.clone()
         };
         let process = self.process.lock().await.clone();
+        // Stop running subagents too and do not wake for them afterwards.
+        self.interrupt_children(
+            process
+                .as_deref()
+                .filter(|p| p.alive.load(Ordering::Acquire)),
+        )
+        .await;
         if let (Some(process), Some(turn), Some(thread)) = (
             process.as_ref().filter(|p| p.alive.load(Ordering::Acquire)),
             codex_turn,
@@ -1306,6 +1415,10 @@ impl CodexNativeSession {
         for id in stale {
             self.approvals.remove(&id);
         }
+        {
+            let mut state = self.state.lock().await;
+            self.settle_children(&mut state, &process.id).await;
+        }
         // Only the process that owns the active turn may fail it; an idle
         // exit stays silent and the next turn relaunches and resumes.
         let slot = self.process.lock().await;
@@ -1349,7 +1462,9 @@ impl CodexNativeSession {
         // Subagent threads share the app-server; only this thread is projected.
         if let (Some(thread), Some(current)) = (params["threadId"].as_str(), self.thread_id()) {
             if thread != current {
-                return Ok(());
+                return self
+                    .child_notification(process, thread, method, params)
+                    .await;
             }
         }
         if method == "serverRequest/resolved" {
@@ -1400,6 +1515,9 @@ impl CodexNativeSession {
         if method == "thread/tokenUsage/updated" {
             self.publish_context_usage(&params["tokenUsage"]);
         }
+        if method == "item/completed" {
+            self.link_spawned(&mut state, &params["item"]).await?;
+        }
         let projector = state.projector.as_mut().expect("active projector");
         let events = projector.consume(method, params);
         let finished = projector.is_finished();
@@ -1407,6 +1525,7 @@ impl CodexNativeSession {
         if finished {
             let projector = state.projector.take().expect("finished projector");
             state.codex_turn_id = None;
+            state.threads.drop_orphans();
             drop(state);
             self.clear_approvals(projector.turn_id()).await;
             self.settled.notify_waiters();
@@ -1473,22 +1592,44 @@ impl CodexNativeSession {
     ) -> OpenBitFunResult<()> {
         let item_id = params["itemId"].as_str().unwrap_or_default().to_string();
         let (tool_name, card_params, kind) = approval_card(method, params);
-        let turn_id = {
-            let mut state = self.state.lock().await;
-            let Some(projector) = state.projector.as_mut() else {
-                drop(state);
-                // No turn to show it in: refuse rather than block Codex.
-                return process.respond(&request_id, cancelled_reply(method)).await;
+        // A subagent thread's request belongs to its child session's turn.
+        let current_thread = self.thread_id();
+        let target = {
+            let mut guard = self.state.lock().await;
+            let state = &mut *guard;
+            let child = params["threadId"]
+                .as_str()
+                .filter(|thread| current_thread.as_deref() != Some(*thread))
+                .and_then(|thread| state.threads.children.get_mut(thread));
+            let target = match child {
+                Some(child) => child
+                    .projector
+                    .as_mut()
+                    .map(|projector| (projector, child.session_id.clone())),
+                None => state
+                    .projector
+                    .as_mut()
+                    .map(|projector| (projector, self.session_id.clone())),
             };
-            let events = projector.permission_tool(&item_id, tool_name, card_params.clone());
-            let turn_id = projector.turn_id().to_string();
-            self.enqueue(events).await?;
-            turn_id
+            match target {
+                Some((projector, card_session)) => {
+                    let events =
+                        projector.permission_tool(&item_id, tool_name, card_params.clone());
+                    let turn_id = projector.turn_id().to_string();
+                    self.enqueue(events).await?;
+                    Some((turn_id, card_session))
+                }
+                None => None,
+            }
+        };
+        let Some((turn_id, card_session)) = target else {
+            // No turn to show it in: refuse rather than block Codex.
+            return process.respond(&request_id, cancelled_reply(method)).await;
         };
         let permission_id = format!("codex_native_permission_{}", uuid::Uuid::new_v4());
         let payload = permission_payload(
             &permission_id,
-            &self.session_id,
+            &card_session,
             method,
             &item_id,
             tool_name,
@@ -1619,6 +1760,20 @@ pub(super) fn initialize_params() -> Value {
     })
 }
 
+#[derive(Default, Clone)]
+struct ConfigDefaults {
+    model: Option<String>,
+    effort: Option<String>,
+}
+
+fn non_empty(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
 /// Id `turn/start { model }` accepts: the model slug, else the row id.
 fn model_slug(row: &Value) -> Option<&str> {
     row["model"]
@@ -1684,7 +1839,8 @@ fn permission_preset(mode: &str) -> Option<(&'static str, &'static str, Value)> 
 /// so remote workspaces need no local file).
 pub(super) fn user_input(input: &NativeTurnInput) -> Value {
     let mut items = Vec::with_capacity(input.images.len() + 1);
-    if !input.text.trim().is_empty() || input.images.is_empty() {
+    // Exactly empty with no images: an input-less (wake-up) turn.
+    if !input.text.trim().is_empty() || (input.images.is_empty() && !input.text.is_empty()) {
         items.push(json!({"type": "text", "text": input.text, "text_elements": []}));
     }
     items.extend(input.images.iter().map(|image| {
@@ -1874,6 +2030,9 @@ fn cancelled_reply(method: &str) -> Value {
 fn service_error(message: impl Into<String>) -> OpenBitFunError {
     OpenBitFunError::service(message.into())
 }
+
+#[path = "subagents.rs"]
+mod subagents;
 
 #[cfg(test)]
 #[path = "session_tests.rs"]

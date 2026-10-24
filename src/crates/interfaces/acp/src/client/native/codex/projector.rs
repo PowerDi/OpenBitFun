@@ -785,9 +785,29 @@ pub(crate) fn generic_tool(item: &Value) -> Option<(String, Value)> {
             json!({"query": item["query"], "action": item["action"]}),
         )),
         "imageView" => Some(("Read".into(), json!({"file_path": item["path"]}))),
+        // `spawnAgent` renders as the subagent card linked to the child
+        // thread's session; other collab calls (wait, send input, ...) keep
+        // their own name on the generic card.
+        "collabAgentToolCall" if item["tool"] == "spawnAgent" => {
+            let prompt = item["prompt"].as_str().unwrap_or_default();
+            let description: String = prompt
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("Subagent")
+                .trim()
+                .chars()
+                .take(60)
+                .collect();
+            Some((
+                "Task".into(),
+                json!({"description": description, "prompt": prompt,
+                    "subagent_type": "codex", "model": item["model"]}),
+            ))
+        }
         "collabAgentToolCall" => Some((
-            "Task".into(),
-            json!({"description": item["tool"], "prompt": item["prompt"], "model": item["model"]}),
+            format!("codex_{}", item["tool"].as_str().unwrap_or("agent")),
+            json!({"tool": item["tool"], "prompt": item["prompt"],
+                "receiverThreadIds": item["receiverThreadIds"]}),
         )),
         "imageGeneration" => Some(("ImageGeneration".into(), item.clone())),
         _ => None,
