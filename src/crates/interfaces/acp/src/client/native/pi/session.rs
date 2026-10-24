@@ -259,10 +259,11 @@ impl PiNativeSession {
     pub(crate) fn apply_preferences(&self, preferences: NativeAgentPreferences) {
         *lock(&self.selected_model) = preferences.model;
         *lock(&self.selected_thinking) = preferences.thinking;
-        if let Some(mode) = preferences
-            .permission_mode
-            .filter(|mode| approval::PERMISSION_MODES.iter().any(|(id, _, _)| id == mode))
-        {
+        if let Some(mode) = preferences.permission_mode.filter(|mode| {
+            approval::PERMISSION_MODES
+                .iter()
+                .any(|(id, _, _)| id == mode)
+        }) {
             *lock(&self.permission_mode) = mode;
         }
     }
@@ -277,7 +278,12 @@ impl PiNativeSession {
         };
         let value = lock(&self.history).to_value();
         persistence
-            .set_custom_metadata(storage, &self.session_id, super::history::METADATA_KEY, value)
+            .set_custom_metadata(
+                storage,
+                &self.session_id,
+                super::history::METADATA_KEY,
+                value,
+            )
             .await
     }
 
@@ -526,7 +532,10 @@ impl PiNativeSession {
         };
         if let Some(entry) = &pending.cut_before {
             let data = process
-                .request(json!({"type":"fork", "entryId": entry}), Some(COMMAND_TIMEOUT))
+                .request(
+                    json!({"type":"fork", "entryId": entry}),
+                    Some(COMMAND_TIMEOUT),
+                )
                 .await?;
             if data["cancelled"] == true {
                 return Err(service_error(
@@ -665,7 +674,8 @@ impl PiNativeSession {
             Ok(data) => {
                 let rows = data["commands"].as_array().cloned().unwrap_or_default();
                 self.bridge_loaded.store(
-                    rows.iter().any(|row| row["name"] == approval::BRIDGE_COMMAND),
+                    rows.iter()
+                        .any(|row| row["name"] == approval::BRIDGE_COMMAND),
                     Ordering::Release,
                 );
                 let commands = rows
