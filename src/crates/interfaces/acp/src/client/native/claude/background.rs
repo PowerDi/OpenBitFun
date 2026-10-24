@@ -75,6 +75,14 @@ impl ClaudeBackgroundTasks {
         changed
     }
 
+    /// A listed (backgrounded) task by id, running or finished.
+    pub(super) fn backgrounded(&self, task_id: &str) -> Option<&NativeBackgroundTask> {
+        self.tasks
+            .iter()
+            .find(|tracked| tracked.backgrounded && tracked.task.id == task_id)
+            .map(|tracked| &tracked.task)
+    }
+
     fn find(&mut self, task_id: &str) -> Option<&mut Tracked> {
         self.tasks
             .iter_mut()
