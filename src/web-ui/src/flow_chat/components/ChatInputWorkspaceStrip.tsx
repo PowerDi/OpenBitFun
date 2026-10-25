@@ -137,6 +137,8 @@ export interface ChatInputWorkspaceStripProps {
     target: DispatchTarget;
     sourceWorkspacePath?: string;
     locked: boolean;
+    /** The session can only run on this host (directory or new worktree). */
+    localOnly?: boolean;
     onSelectLocal?: () => void;
     onSelectTarget: (selection: DispatchSelection) => void;
     /** Target worktree can be committed and synced from running onward. */
@@ -845,6 +847,7 @@ export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = (
             target={dispatchControl.target}
             sourceWorkspaceId={workspaceId} sourceWorkspacePath={dispatchControl.sourceWorkspacePath}
             locked={dispatchPickerLocked}
+            localOnly={dispatchControl.localOnly}
             localWorktreeControl={showWorktreeToggle && worktreeControl ? {
               enabled: worktreeEnabled,
               locked: worktreeToggleDisabled,
