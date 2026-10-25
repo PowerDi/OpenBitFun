@@ -197,7 +197,7 @@ describe('WorkspaceListSection layout styles', () => {
     expect(stylesheet).not.toContain('&.is-collapsed svg');
   });
 
-  it('keeps remote workspace directory and host metadata on one row with the status dot first', () => {
+  it('keeps remote host metadata on one row with the status dot first, yielding to the name', () => {
     const stylesheet = readWorkspaceListStylesheet();
     const remoteChip = extractBlock(stylesheet, '&__workspace-item-remote');
     const remoteHost = extractBlock(stylesheet, '&__workspace-item-remote-host');
@@ -209,12 +209,22 @@ describe('WorkspaceListSection layout styles', () => {
       stylesheet,
       "&__workspace-item[data-openbitfun-state~='remote'] &__workspace-item-name-btn",
     );
+    const remoteNameAction = extractBlock(
+      stylesheet,
+      ".openbitfun-nav-panel__workspace-item[data-openbitfun-state~='remote'] .openbitfun-nav-panel__workspace-item-name-action",
+    );
 
     expect(remoteNameRow).toContain('gap: var(--openbitfun-space-2);');
     expect(remoteNameButton).toContain('flex: 1 1 0;');
     expect(remoteNameButton).toContain('max-width: none;');
+    // A long host address must never squeeze the directory name to unreadable:
+    // the name action keeps a guaranteed floor and the chip yields first.
+    expect(remoteNameAction).toContain('min-width: 40%;');
     expect(remoteChip).toContain('gap: var(--openbitfun-space-2);');
-    expect(remoteChip).toContain('flex: 0 0 auto;');
+    expect(remoteChip).toContain('flex: 0 1 auto;');
+    expect(remoteChip).toContain('min-width: 0;');
+    expect(remoteChip).toContain('max-width: 55%;');
+    expect(remoteChip).toContain('overflow: hidden;');
     expect(remoteChip).toContain('margin-left: auto;');
     expect(remoteChip).toContain('padding: 0 var(--openbitfun-space-2);');
     expect(remoteChip).toContain('border-radius: var(--openbitfun-radius-base);');
@@ -223,9 +233,11 @@ describe('WorkspaceListSection layout styles', () => {
       '      background: var(--openbitfun-color-status-success-surface);\n' +
       '      color: var(--openbitfun-color-status-success-content);',
     );
-    expect(remoteHost).toContain('flex: 0 0 auto;');
+    expect(remoteHost).toContain('flex: 0 1 auto;');
+    expect(remoteHost).toContain('min-width: 0;');
+    expect(remoteHost).toContain('overflow: hidden;');
+    expect(remoteHost).toContain('text-overflow: ellipsis;');
     expect(remoteHost).toContain('white-space: nowrap;');
-    expect(remoteHost).not.toContain('text-overflow: ellipsis;');
 
     const source = readWorkspaceItemSource();
     const remoteNameStart = source.indexOf('behavior="marquee"');
