@@ -14,6 +14,7 @@ export const acpAgentsConfigAppearanceDescriptor: AppearanceSurfaceDescriptor = 
     { id: 'registryList' },
     { id: 'registryRow' },
     { id: 'registryMain' },
+    { id: 'nativeCli' },
     { id: 'capabilities' },
     { id: 'status' },
     { id: 'confirmation' },
