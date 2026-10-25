@@ -409,9 +409,11 @@
     display: inline-flex;
     align-items: center;
     gap: var(--openbitfun-space-2);
+    /* The directory name identifies the row; the chip yields first. */
     flex: 0 1 auto;
     min-width: 0;
     max-width: 45%;
+    overflow: hidden;
     margin-left: auto;
     min-height: 24px;
     padding: 0 var(--openbitfun-space-2);
@@ -1358,6 +1360,9 @@
 .openbitfun-nav-panel__workspace-item[data-openbitfun-state~='remote'] .openbitfun-nav-panel__workspace-item-name-action {
   flex: 1 1 0;
   max-width: none;
+  /* Hard floor paired with the host chip's 55% cap: the directory name keeps
+   * a guaranteed share of the row no matter how long the host address is. */
+  min-width: 40%;
 }
 
 .openbitfun-nav-panel__assistant-item-name-action[data-openbitfun-component='action-item'] {
