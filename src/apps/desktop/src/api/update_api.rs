@@ -9,6 +9,30 @@ use tauri_plugin_updater::{Update, UpdaterBuilder, UpdaterExt};
 
 const PROGRESS_EVENT: &str = "openbitfun-update-progress";
 const RECORD_NAME: &str = "pending.json";
+const RELEASE_CHANNEL: &str = match option_env!("OPENBITFUN_RELEASE_CHANNEL") {
+    Some(channel) => channel,
+    None => "stable",
+};
+
+// Beta builds stay on the beta channel, including packages cached by an older install.
+// Other delivery channels retain the updater's existing version ordering.
+fn matches_release_channel(version: &semver::Version, channel: &str) -> bool {
+    channel != "beta" || version.pre.as_str().split('.').next() == Some("beta")
+}
+
+fn is_newer_channel_update(
+    current: &semver::Version,
+    candidate: &semver::Version,
+    channel: &str,
+) -> bool {
+    candidate > current && matches_release_channel(candidate, channel)
+}
+
+pub(super) fn with_update_channel(builder: UpdaterBuilder) -> UpdaterBuilder {
+    builder.version_comparator(|current, release| {
+        is_newer_channel_update(&current, &release.version, RELEASE_CHANNEL)
+    })
+}
 
 // Serialize downloads and installs at the host, including calls from multiple windows.
 static UPDATE: OnceLock<tokio::sync::Mutex<Option<Update>>> = OnceLock::new();
@@ -65,9 +89,14 @@ impl PendingUpdateRecord {
         }
     }
 
-    fn applies_to(&self, current: &semver::Version, platform: &str) -> Result<bool, String> {
+    fn applies_to(
+        &self,
+        current: &semver::Version,
+        platform: &str,
+        channel: &str,
+    ) -> Result<bool, String> {
         let version = semver::Version::parse(&self.version).map_err(|e| e.to_string())?;
-        Ok(version > *current && self.platform == platform)
+        Ok(is_newer_channel_update(current, &version, channel) && self.platform == platform)
     }
 
     fn package_name(&self) -> Result<String, String> {
@@ -98,6 +127,7 @@ fn read_record(
     dir: &Path,
     current: &semver::Version,
     platform: &str,
+    channel: &str,
 ) -> Result<Option<PendingUpdateRecord>, String> {
     let bytes = match std::fs::read(dir.join(RECORD_NAME)) {
         Ok(bytes) => bytes,
@@ -107,7 +137,7 @@ fn read_record(
     // Never remove an unreadable record as a recovery mechanism.
     let record: PendingUpdateRecord = serde_json::from_slice(&bytes)
         .map_err(|e| format!("Cannot read pending update metadata: {e}"))?;
-    if !record.applies_to(current, platform)? {
+    if !record.applies_to(current, platform, channel)? {
         return Ok(None);
     }
     let package = dir.join(record.package_name()?);
@@ -181,7 +211,7 @@ pub async fn get_pending_update(
     let dir = cache_dir(&app)?;
     let current = app.package_info().version.clone();
     tokio::task::spawn_blocking(move || {
-        read_record(&dir, &current, &platform()).map(|r| r.map(|r| r.response()))
+        read_record(&dir, &current, &platform(), RELEASE_CHANNEL).map(|r| r.map(|r| r.response()))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -253,7 +283,7 @@ pub async fn install_pending_update(
         .ok_or_else(|| "Update signature public key is unavailable".to_string())?
         .to_owned();
     let (record, bytes) = tokio::task::spawn_blocking(move || {
-        let record = read_record(&dir, &current, &platform())?
+        let record = read_record(&dir, &current, &platform(), RELEASE_CHANNEL)?
             .ok_or_else(|| "No downloaded update is available".to_string())?;
         if record.version != request.version {
             return Err(
@@ -273,7 +303,9 @@ pub async fn install_pending_update(
         // No package is downloaded; the user's already verified version stays pinned.
         let updater = with_update_exit_cleanup(app.updater_builder(), &app)
             .timeout(std::time::Duration::from_secs(20))
-            .version_comparator(|_, _| true)
+            .version_comparator(|_, release| {
+                matches_release_channel(&release.version, RELEASE_CHANNEL)
+            })
             .build()
             .map_err(|e| e.to_string())?;
         let mut update = updater.check().await
@@ -326,25 +358,76 @@ mod tests {
         let record = record(b"package");
         save_package(dir.path(), &record, b"package").unwrap();
         assert_eq!(
-            read_record(dir.path(), &"1.0.0".parse().unwrap(), "test")
+            read_record(dir.path(), &"1.0.0".parse().unwrap(), "test", "stable")
                 .unwrap()
                 .unwrap()
                 .version,
             "2.0.0"
         );
-        assert!(read_record(dir.path(), &"2.0.0".parse().unwrap(), "test")
-            .unwrap()
-            .is_none());
-        assert!(read_record(dir.path(), &"1.0.0".parse().unwrap(), "other")
-            .unwrap()
-            .is_none());
+        assert!(
+            read_record(dir.path(), &"2.0.0".parse().unwrap(), "test", "stable")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            read_record(dir.path(), &"1.0.0".parse().unwrap(), "other", "stable")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn beta_channel_filters_discovery_and_legacy_cache_without_deleting_packages() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = "1.0.7-beta.2".parse().unwrap();
+        for (version, eligible) in [
+            ("1.0.7", false),
+            ("1.0.8", false),
+            ("1.0.7-beta.1", false),
+            ("1.0.7-beta.2", false),
+            ("1.0.7-beta.3", true),
+            ("1.0.8-beta.1", true),
+            ("1.0.8-nightly.20261025", false),
+        ] {
+            let mut cached = record(b"package");
+            cached.version = version.into();
+            // Keep the original persisted shape: no migration or new required fields.
+            save_package(dir.path(), &cached, b"package").unwrap();
+            let metadata = std::fs::read(dir.path().join(RECORD_NAME)).unwrap();
+            assert_eq!(
+                is_newer_channel_update(&current, &version.parse().unwrap(), "beta"),
+                eligible,
+                "discovered version {version}"
+            );
+            assert_eq!(
+                read_record(dir.path(), &current, "test", "beta")
+                    .unwrap()
+                    .is_some(),
+                eligible,
+                "cached version {version}"
+            );
+            assert_eq!(
+                std::fs::read(dir.path().join(RECORD_NAME)).unwrap(),
+                metadata
+            );
+            assert_eq!(
+                std::fs::read(dir.path().join(cached.package_name().unwrap())).unwrap(),
+                b"package"
+            );
+        }
+        // Do not change stable builds' existing prerelease-to-stable upgrade path.
+        assert!(is_newer_channel_update(
+            &current,
+            &"1.0.7".parse().unwrap(),
+            "stable"
+        ));
     }
 
     #[test]
     fn corrupt_metadata_is_preserved_and_invalid_package_paths_are_rejected() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(RECORD_NAME), b"invalid").unwrap();
-        assert!(read_record(dir.path(), &"1.0.0".parse().unwrap(), "test").is_err());
+        assert!(read_record(dir.path(), &"1.0.0".parse().unwrap(), "test", "stable").is_err());
         assert_eq!(
             std::fs::read(dir.path().join(RECORD_NAME)).unwrap(),
             b"invalid"
@@ -370,7 +453,7 @@ mod tests {
         let mut replacement = record(b"replacement");
         replacement.version = "2.1.0".into();
         save_package(dir.path(), &replacement, b"replacement").unwrap();
-        let restored = read_record(dir.path(), &"1.0.0".parse().unwrap(), "test")
+        let restored = read_record(dir.path(), &"1.0.0".parse().unwrap(), "test", "stable")
             .unwrap()
             .unwrap();
         assert_eq!(restored.version, "2.1.0");
@@ -390,7 +473,7 @@ mod tests {
         record.signature = signature.into();
         let dir = tempfile::tempdir().unwrap();
         save_package(dir.path(), &record, bytes).unwrap();
-        let mut restored = read_record(dir.path(), &"1.0.0".parse().unwrap(), "test")
+        let mut restored = read_record(dir.path(), &"1.0.0".parse().unwrap(), "test", "stable")
             .unwrap()
             .unwrap();
         verify_package(bytes, &restored, key).unwrap();

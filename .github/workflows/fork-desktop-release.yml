@@ -146,8 +146,6 @@ jobs:
       TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      # Non-installing notice when upstream publishes a newer version core.
-      VITE_OPENBITFUN_UPSTREAM_WATCH_REPO: GCWing/OpenBitFun
       # OPENBITFUN_RELEASE_PUBKEY is deliberately unset: remote SSH installs
       # still download upstream release assets and must verify the upstream key.
     strategy:
