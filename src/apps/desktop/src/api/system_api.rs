@@ -238,7 +238,7 @@ pub(super) async fn ranked_updater(
             app.updater_builder()
         }
     };
-    crate::api::update_api::configure_updater(builder)
+    crate::api::update_api::configure_updater(super::update_api::with_update_channel(builder))
         .build()
         .map_err(|error| error.to_string())
 }
@@ -301,8 +301,7 @@ pub async fn check_for_updates(
 ) -> Result<CheckForUpdatesResponse, String> {
     let _ = request;
     // Discovery reads only the manifests. Package throughput probes belong to download.
-    let updater = app
-        .updater_builder()
+    let updater = super::update_api::with_update_channel(app.updater_builder())
         .endpoints(default_endpoints())
         .map_err(|e| e.to_string())?
         .timeout(std::time::Duration::from_secs(20))
