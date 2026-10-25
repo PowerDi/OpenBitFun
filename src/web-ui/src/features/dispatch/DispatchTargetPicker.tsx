@@ -30,6 +30,8 @@ interface DispatchTargetPickerProps {
   sourceWorkspaceId?: string;
   locked: boolean;
   disabled?: boolean;
+  /** Only this host and its worktree: the session cannot run elsewhere. */
+  localOnly?: boolean;
   localWorktreeControl?: {
     enabled: boolean;
     locked: boolean;
@@ -52,6 +54,7 @@ export const DispatchTargetPicker: React.FC<DispatchTargetPickerProps> = ({
   sourceWorkspaceId,
   locked,
   disabled = false,
+  localOnly = false,
   localWorktreeControl,
   onSelectLocal,
   onSelectTarget,
@@ -67,7 +70,7 @@ export const DispatchTargetPicker: React.FC<DispatchTargetPickerProps> = ({
   const [open, setOpen] = useState(false);
   const [configureTarget, setConfigureTarget] = useState<DispatchTargetOption | null>(null);
   const [sshDialogOpen, setSshDialogOpen] = useState(false);
-  const { targets, loading, error, refresh } = useDispatchTargets(open);
+  const { targets, loading, error, refresh } = useDispatchTargets(open && !localOnly);
   const menuLayout = useAnchoredPopoverPosition({
     open,
     anchorRef: triggerRef,
@@ -197,6 +200,7 @@ export const DispatchTargetPicker: React.FC<DispatchTargetPickerProps> = ({
         ) : null}
       </MenuSection>
 
+      {localOnly ? null : (<>
       <MenuSeparator />
       <MenuSection title={t('chatInput.dispatch.sshSection')}>
         {loading ? (
@@ -252,6 +256,7 @@ export const DispatchTargetPicker: React.FC<DispatchTargetPickerProps> = ({
       >
         {t('chatInput.dispatch.addSsh')}
       </MenuItem>
+      </>)}
     </Menu>
   ) : null;
 

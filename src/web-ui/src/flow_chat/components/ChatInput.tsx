@@ -3095,10 +3095,24 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       registration ||
       isBtwSession ||
       isSubagentInputTarget ||
-      !canUseDispatch ||
       remoteWorkspaceSession
     ) {
       return undefined;
+    }
+    if (!canUseDispatch) {
+      // Agents that cannot be dispatched still choose between this host's
+      // directory and a new worktree through the same execution-target menu.
+      if (!canUseWorktree) return undefined;
+      return {
+        target: { kind: 'local' } as DispatchTarget,
+        sourceWorkspacePath: workspacePath || undefined,
+        localOnly: true,
+        locked:
+          effectiveTargetSessionStarted ||
+          isWorkspaceSubmitting ||
+          !!derivedState?.isProcessing,
+        onSelectTarget: handleSelectDispatchTarget,
+      };
     }
     const target: DispatchTarget =
       effectiveTargetSession?.config.dispatchTarget ?? { kind: 'local' };
@@ -3142,6 +3156,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     dispatchObserverJob?.branch,
     handleSelectDispatchTarget,
     canUseDispatch,
+    canUseWorktree,
     isBtwSession,
     isSubagentInputTarget,
     registration,
