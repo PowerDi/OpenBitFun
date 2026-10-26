@@ -56,6 +56,9 @@ export function normalizeRecoveredTurnFinishReason(
 /**
  * Whether a restored Turn was settled only because its persisted record was
  * still in progress (see `normalizeRecoveredTurnFinishReason`).
+ *
+ * The inference is right for a Turn left behind by a restart or crash, but it
+ * is not evidence about a Turn whose live stream is still running.
  */
 export function isInferredInterruptedTurn(
   turn: Pick<DialogTurn, 'status' | 'finishReason'>,
