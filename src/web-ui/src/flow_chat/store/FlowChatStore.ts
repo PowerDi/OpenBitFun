@@ -795,6 +795,14 @@ function persistedReadMayReplaceTurn(
     // interruption. That reflects only the reader's view, not an outcome: a
     // native-agent child runs inside its CLI where Core never reports it as
     // executing, yet its live stream still owns the Turn.
+    //
+    // Scope: this branch is reached only while this window saw the Turn start
+    // and has not seen it settle (ownership is in memory). Interrupted Turns
+    // restored after a restart, shutdown settlement, local cancellation, and
+    // persisted terminal outcomes take other paths and still settle as before.
+    // Trade-off: a Turn whose terminal event is lost stays running until a
+    // later event or restart; native drivers emit terminal events for their
+    // children on exit, failure, and cancellation.
     return (
       !hostServesRuntimeProjection &&
       !isInferredInterruptedTurn(incoming) &&
