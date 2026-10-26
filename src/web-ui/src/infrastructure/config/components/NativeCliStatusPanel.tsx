@@ -1,4 +1,4 @@
-import { Button, OverflowText, Spinner, StatusPill, type StatusPillTone } from '@openbitfun/ui';
+import { Button, Icon, OverflowText, Spinner, StatusPill, type StatusPillTone } from '@openbitfun/ui';
 import React, { useCallback, useState } from 'react';
 import { useI18n } from '@/infrastructure/i18n';
 import { useNotification } from '@/shared/notification-system';
@@ -112,6 +112,9 @@ export const NativeCliStatusPanel: React.FC<NativeCliStatusPanelProps> = ({
       data-native-client-id={clientId}
     >
       <div className="openbitfun-acp-agents__registry-main">
+        <span className="openbitfun-acp-agents__registry-icon">
+          <Icon name="terminal" size="md" />
+        </span>
         <div className="openbitfun-acp-agents__registry-copy">
           <OverflowText className="openbitfun-acp-agents__registry-name">{name}</OverflowText>
           {checking && !probe ? (
