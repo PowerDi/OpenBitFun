@@ -19,6 +19,7 @@ import { dispatchJobStore } from '@/features/dispatch/dispatchJobStore';
 import { resetLiveSessionInteractionStoreForTest } from '../services/liveSessionInteractionStore';
 import { resourceBudget } from '@/shared/utils/resourceBudget';
 import { HARNESS_IDS } from '@/shared/agents/identity';
+import { resetSessionStreamsForTest, sessionStream } from '../session-stream/SessionStream';
 import {
   askUserQuestionDraftKey,
   askUserQuestionDraftStore,
@@ -2539,6 +2540,100 @@ describe('FlowChatStore historical session hydration state', () => {
       id: 'read-readme',
       status: 'completed',
     });
+  });
+
+  it('keeps a live native subagent turn running when Core does not report it executing', async () => {
+    // Native-agent children run inside their CLI, so Core restores them idle and
+    // their in-progress checkpoint converts to an inferred interruption.
+    const liveTurn = {
+      id: 'child-turn',
+      sessionId: 'claude-subagent',
+      userMessage: { id: 'child-user', content: 'explore the repo', timestamp: 1 },
+      modelRounds: [{
+        id: 'child-round',
+        index: 0,
+        items: [{
+          id: 'child-text',
+          type: 'text' as const,
+          content: 'Searching',
+          isStreaming: true,
+          isMarkdown: true,
+          timestamp: 2,
+          status: 'streaming' as const,
+        }],
+        isStreaming: true,
+        isComplete: false,
+        status: 'streaming' as const,
+        startTime: 1,
+      }],
+      status: 'processing' as const,
+      startTime: 1,
+    };
+    flowChatStore.setState(() => ({
+      sessions: new Map([
+        ['claude-subagent', createSession({
+          sessionId: 'claude-subagent',
+          sessionKind: 'subagent',
+          historyState: 'ready',
+          dialogTurns: [liveTurn],
+        })],
+      ]),
+      activeSessionId: 'claude-subagent',
+    }));
+    apiMocks.restoreSessionView.mockResolvedValueOnce({
+      session: {
+        sessionId: 'claude-subagent',
+        sessionName: 'Explore',
+        agentType: 'Standard',
+        state: 'Idle',
+        turnCount: 1,
+        createdAt: 1,
+      },
+      turns: [{
+        turnId: 'child-turn',
+        turnIndex: 0,
+        sessionId: 'claude-subagent',
+        timestamp: 1,
+        userMessage: { id: 'child-user', content: 'explore the repo', timestamp: 1 },
+        modelRounds: [{
+          id: 'child-round',
+          turnId: 'child-turn',
+          roundIndex: 0,
+          timestamp: 1,
+          textItems: [{
+            id: 'child-text',
+            content: 'Searching',
+            isStreaming: true,
+            timestamp: 2,
+            status: 'streaming',
+          }],
+          toolItems: [],
+          thinkingItems: [],
+          startTime: 1,
+          status: 'streaming',
+        }],
+        startTime: 1,
+        status: 'inprogress',
+      }],
+      contextRestoreState: 'ready',
+    });
+    // The child's live stream opened this Turn, as the native driver's events do.
+    sessionStream(LOCAL_SURFACE_ID, 'claude-subagent').offer(
+      'agentic://dialog-turn-started',
+      { sessionId: 'claude-subagent', turnId: 'child-turn' },
+      null,
+      () => {},
+    );
+
+    try {
+      await flowChatStore.loadSessionHistory('claude-subagent', { includeInternal: true });
+
+      expect(
+        flowChatStore.getState().sessions.get('claude-subagent')?.dialogTurns[0],
+      ).toMatchObject({ id: 'child-turn', status: 'processing' });
+    } finally {
+      resetSessionStreamsForTest();
+    }
   });
 
   it('re-attaches a missed AskUserQuestion mailbox without restarting the running turn', async () => {
