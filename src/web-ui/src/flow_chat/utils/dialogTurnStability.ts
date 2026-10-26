@@ -53,6 +53,16 @@ export function normalizeRecoveredTurnFinishReason(
   return isTransientTurnStatus(status) ? 'interrupted' : undefined;
 }
 
+/**
+ * Whether a restored Turn was settled only because its persisted record was
+ * still in progress (see `normalizeRecoveredTurnFinishReason`).
+ */
+export function isInferredInterruptedTurn(
+  turn: Pick<DialogTurn, 'status' | 'finishReason'>,
+): boolean {
+  return turn.status === 'cancelled' && turn.finishReason === 'interrupted';
+}
+
 function isTerminalTurnStatus(status: DialogTurn['status']): boolean {
   return status === 'completed' || status === 'cancelled' || status === 'error';
 }

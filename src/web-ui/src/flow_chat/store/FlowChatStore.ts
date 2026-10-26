@@ -106,6 +106,7 @@ import {
 } from '../utils/sessionTitle';
 import {
   isTransientToolStatus,
+  isInferredInterruptedTurn,
   normalizeRecoveredRoundStatus,
   normalizeRecoveredTextStatus,
   normalizeRecoveredThinkingStatus,
@@ -991,8 +992,13 @@ function persistedReadMayReplaceTurn(
     return true;
   }
   if (!persistedMayWriteTurn(sessionId, incoming.id, hostExecutingTurnId)) {
+    // A checkpoint still marked in progress converts to an inferred
+    // interruption. That reflects only the reader's view, not an outcome: a
+    // native-agent child runs inside its CLI where Core never reports it as
+    // executing, yet its live stream still owns the Turn.
     return (
       !hostServesRuntimeProjection &&
+      !isInferredInterruptedTurn(incoming) &&
       isRunningSnapshotForwardProgress(projected, incoming)
     );
   }
