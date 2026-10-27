@@ -9868,7 +9868,12 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         );
         if execution_absent {
             for turn in &mut turns {
-                if turn.status != TurnStatus::InProgress {
+                if turn.status != TurnStatus::InProgress
+                    || self.event_queue.has_unsettled_turn(session_id, &turn.turn_id)
+                {
+                    // Native/external executors publish lifecycle evidence at
+                    // event ingress without necessarily moving Core's state machine.
+                    // Do not project a still-running turn as interrupted.
                     continue;
                 }
                 // Observer projection only: retain the original history and

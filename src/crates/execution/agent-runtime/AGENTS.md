@@ -192,8 +192,18 @@ For evidence summary bounds and compression contract projection:
 cargo test --locked -p openbitfun-agent-runtime --no-default-features --features agent-runtime --lib evidence_ledger
 ```
 
-For next-input suggestion eligibility, surrounding whitespace trimming with
-message content preservation, and cancellation:
+For accepted event-ingress lifecycle evidence (including external executors),
+queue drains, capacity fallback and terminal cleanup:
+
+```bash
+cargo test --locked -p openbitfun-agent-runtime --no-default-features --features agent-runtime --lib event_queue::tests
+```
+
+These in-memory fixtures do not establish live Peer, SSH, relay or dispatch behavior.
+
+For next-input suggestion eligibility, plain-text output without text
+post-processing and surrounding whitespace trimming with message content
+preservation, and cancellation:
 
 ```bash
 cargo test --locked -p openbitfun-agent-runtime --no-default-features --features agent-runtime --lib prompt_suggestion::tests

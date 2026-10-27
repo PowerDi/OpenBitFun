@@ -102,6 +102,16 @@ highest revision for each identity; an older child record cannot regress a
 completed parent. Text, thinking and tool-body content have this one authority.
 Permission and other control events remain separate from transcript content.
 
+Host history reads must not infer interruption from Core's idle state alone:
+native external executors publish dialog lifecycle through `EventQueue` without
+running in Core's execution engine. A turn observed starting/recovering at this
+host's accepted ingress remains unsettled until its terminal/interruption event;
+a model-round completion is not a dialog-turn completion. This process-local
+evidence survives controller disconnects and queue drains, but is not restored
+from disk after a host restart. It prevents idle-shell/writer-lease inference
+from cancelling a running external turn in the observer projection; actual
+terminal records and abandoned-checkpoint recovery retain their existing behavior.
+
 The relay stores none of this. A controller opens a stream with the
 `read_stream` device RPC (`{stream_id, after|before, epoch, subscribe}`), which
 answers a `stream_page` with `epoch`, `cursor`, `events`, `has_more` and
