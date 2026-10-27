@@ -78,6 +78,47 @@ pub(crate) fn apply_headers(
     })
 }
 
+fn parse_claude_model_version(model_name: &str, family: &str) -> Option<ClaudeModelVersion> {
+    let prefix = format!("claude-{family}-");
+    let rest = model_name.strip_prefix(&prefix)?;
+    let mut parts = rest.split('-');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
+    Some(ClaudeModelVersion { major, minor })
+}
+
+pub(crate) fn anthropic_thinking_capability(model_name: &str) -> AnthropicThinkingCapability {
+    if model_name.starts_with("claude-mythos") || model_name.starts_with("claude-fable") {
+        return AnthropicThinkingCapability::AdaptiveDefaultNoDisabled;
+    }
+
+    if let Some(version) = parse_claude_model_version(model_name, "opus") {
+        if version.major > 4 || (version.major == 4 && version.minor >= 7) {
+            return AnthropicThinkingCapability::AdaptiveOnly;
+        }
+        if version.major == 4 && version.minor >= 6 {
+            return AnthropicThinkingCapability::AdaptivePreferred;
+        }
+    }
+
+    if let Some(version) = parse_claude_model_version(model_name, "sonnet") {
+        if version.major > 4 || (version.major == 4 && version.minor >= 7) {
+            return AnthropicThinkingCapability::AdaptiveOnly;
+        }
+        if version.major == 4 && version.minor >= 6 {
+            return AnthropicThinkingCapability::AdaptivePreferred;
+        }
+    }
+
+    if let Some(version) = parse_claude_model_version(model_name, "haiku") {
+        if version.major > 4 || (version.major == 4 && version.minor >= 7) {
+            return AnthropicThinkingCapability::AdaptiveOnly;
+        }
+    }
+
+    AnthropicThinkingCapability::ManualOnly
+}
+
 fn anthropic_supports_adaptive_reasoning(capability: AnthropicThinkingCapability) -> bool {
     matches!(
         capability,
