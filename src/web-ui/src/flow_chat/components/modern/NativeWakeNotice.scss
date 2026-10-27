@@ -1,0 +1,30 @@
+@use '../../transcript-layout' as transcriptLayout;
+
+.native-wake-notice {
+  @include transcriptLayout.content-column;
+
+  display: flex;
+  align-items: center;
+  gap: var(--openbitfun-space-1);
+  min-width: 0;
+  margin-block: var(--openbitfun-control-flow-chat-user-message-margin-block-start) var(--openbitfun-control-flow-chat-flow-item-gap);
+  color: var(--openbitfun-color-content-muted);
+  font-size: var(--openbitfun-type-flow-meta-font-size);
+  line-height: var(--openbitfun-type-flow-meta-line-height);
+}
+
+.native-wake-notice__icon {
+  flex-shrink: 0;
+}
+
+.native-wake-notice__title {
+  flex-shrink: 0;
+  color: var(--openbitfun-color-content-secondary);
+}
+
+.native-wake-notice__detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
