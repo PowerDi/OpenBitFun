@@ -162,6 +162,15 @@ so `autotests = false` cannot silently omit a new contract.
 
 ## Verification
 
+For accepted event-ingress lifecycle evidence (including external executors),
+queue drains, capacity fallback and terminal cleanup:
+
+```bash
+cargo test --locked -p openbitfun-agent-runtime --no-default-features --features agent-runtime --lib event_queue::tests
+```
+
+These in-memory fixtures do not establish live Peer, SSH, relay or dispatch behavior.
+
 For next-input suggestion eligibility, plain-text output without text
 post-processing, and cancellation:
 

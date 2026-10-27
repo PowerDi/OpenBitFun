@@ -272,8 +272,14 @@ For workspace metadata catalog paging, cache reuse and cross-process invalidatio
 
 For host-stream history reads and abandoned execution after a runtime restart:
 `cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib load_relay_session_turns_`.
-The observer must preserve terminal history and another process's writer lease;
-absence from one coordinator's memory alone never proves execution stopped.
+The observer must preserve terminal history and another process's writer lease.
+It must also preserve turns whose start/recovery has entered this host's
+`EventQueue` without a matching terminal/interruption event: native external
+executors do not set Core's `SessionState` to Processing. This process-local
+lifecycle evidence survives queue drains and controller disconnects, never a
+host restart. The focused tests cover loaded-idle and unloaded Core shells,
+latest-page/live reads and abandoned checkpoints; they do not exercise a live
+Peer connection.
 
 For built-in provider overlay, trusted endpoint validation, and reasoning catalog changes:
 

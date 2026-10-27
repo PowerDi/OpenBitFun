@@ -6,7 +6,7 @@ use openbitfun_agent_stream::StreamEventSink;
 use openbitfun_events::{
     AgenticEvent, AgenticEventEnvelope as EventEnvelope, AgenticEventPriority as EventPriority,
 };
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, RwLock as StdRwLock, Weak,
@@ -229,6 +229,11 @@ pub struct EventQueue {
     /// no protocol consumer is active.
     has_session_broadcasts: Arc<AtomicBool>,
 
+    /// Turns observed starting in this host, not yet observed settling. This
+    /// survives dequeue and subscriber disconnects, but never a host restart.
+    /// External executors use the same ingress without a Core SessionState.
+    unsettled_turns: StdRwLock<HashMap<String, HashSet<String>>>,
+
     /// Configuration
     config: EventQueueConfig,
 
@@ -250,8 +255,78 @@ impl EventQueue {
             broadcast_tx,
             session_broadcasts: Arc::new(StdRwLock::new(HashMap::new())),
             has_session_broadcasts: Arc::new(AtomicBool::new(false)),
+            unsettled_turns: StdRwLock::new(HashMap::new()),
             config,
             stats: Arc::new(Mutex::new(QueueStats::default())),
+        }
+    }
+
+    /// Positive, process-local evidence that a turn's producer has not settled.
+    /// Absence is not proof of interruption: another process may own execution.
+    pub fn has_unsettled_turn(&self, session_id: &str, turn_id: &str) -> bool {
+        self.unsettled_turns
+            .read()
+            .expect("turn activity lock poisoned")
+            .get(session_id)
+            .is_some_and(|turns| turns.contains(turn_id))
+    }
+
+    fn observe_turn_lifecycle(&self, event: &AgenticEvent) {
+        match event {
+            AgenticEvent::DialogTurnStarted {
+                session_id,
+                turn_id,
+                ..
+            }
+            | AgenticEvent::DialogTurnRecovered {
+                session_id,
+                turn_id,
+                ..
+            } => {
+                self.unsettled_turns
+                    .write()
+                    .expect("turn activity lock poisoned")
+                    .entry(session_id.clone())
+                    .or_default()
+                    .insert(turn_id.clone());
+            }
+            AgenticEvent::DialogTurnCompleted {
+                session_id,
+                turn_id,
+                ..
+            }
+            | AgenticEvent::DialogTurnCancelled {
+                session_id,
+                turn_id,
+            }
+            | AgenticEvent::DialogTurnFailed {
+                session_id,
+                turn_id,
+                ..
+            }
+            | AgenticEvent::DialogTurnInterrupted {
+                session_id,
+                turn_id,
+                ..
+            } => {
+                let mut sessions = self
+                    .unsettled_turns
+                    .write()
+                    .expect("turn activity lock poisoned");
+                if let Some(turns) = sessions.get_mut(session_id) {
+                    turns.remove(turn_id);
+                    if turns.is_empty() {
+                        sessions.remove(session_id);
+                    }
+                }
+            }
+            AgenticEvent::SessionDeleted { session_id } => {
+                self.unsettled_turns
+                    .write()
+                    .expect("turn activity lock poisoned")
+                    .remove(session_id);
+            }
+            _ => {}
         }
     }
 
@@ -427,6 +502,10 @@ impl EventQueue {
                 }
                 queue.push(std::cmp::Reverse(envelope.clone()));
             }
+            // Observe accepted ingress in the same order as queue admission,
+            // before any consumer can synchronize a persisted history read.
+            // Broadcast remains accepted even when best-effort storage is full.
+            self.observe_turn_lifecycle(&envelope.event);
             (queue.len(), queued)
         };
 
@@ -663,6 +742,119 @@ mod tests {
     use openbitfun_events::{AgenticEvent, AgenticEventPriority};
     use std::sync::{Arc, Barrier};
     use std::time::Duration;
+
+    fn turn_started(session_id: &str, turn_id: &str) -> AgenticEvent {
+        AgenticEvent::DialogTurnStarted {
+            session_id: session_id.into(),
+            turn_id: turn_id.into(),
+            turn_index: 0,
+            user_input: "work".into(),
+            original_user_input: None,
+            user_message_metadata: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn unsettled_turns_survive_delivery_and_round_boundaries() {
+        let queue = EventQueue::new(EventQueueConfig::default());
+        queue
+            .enqueue(turn_started("session", "turn"), None)
+            .await
+            .unwrap();
+        queue.dequeue_batch(100).await;
+        assert!(queue.has_unsettled_turn("session", "turn"));
+        // Pi turn_end closes one model round, not the encompassing dialog turn.
+        queue
+            .enqueue(
+                AgenticEvent::ModelRoundCompleted {
+                    session_id: "session".into(),
+                    turn_id: "turn".into(),
+                    round_id: "round".into(),
+                    has_tool_calls: true,
+                    duration_ms: None,
+                    provider_id: None,
+                    model_config_id: "pi-native".into(),
+                    effective_model_name: "model".into(),
+                    first_chunk_ms: None,
+                    first_visible_output_ms: None,
+                    stream_duration_ms: None,
+                    attempt_count: None,
+                    failure_category: None,
+                    token_details: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        queue.dequeue_batch(100).await;
+        assert!(queue.has_unsettled_turn("session", "turn"));
+        assert!(!queue.has_unsettled_turn("other-session", "turn"));
+        assert!(!queue.has_unsettled_turn("session", "other-turn"));
+        assert!(!EventQueue::new(EventQueueConfig::default()).has_unsettled_turn("session", "turn"));
+
+        queue
+            .enqueue(
+                AgenticEvent::DialogTurnCompleted {
+                    session_id: "session".into(),
+                    turn_id: "turn".into(),
+                    total_rounds: 1,
+                    total_tools: 1,
+                    duration_ms: 20,
+                    partial_recovery_reason: None,
+                    success: Some(true),
+                    finish_reason: Some("complete".into()),
+                    has_final_response: Some(true),
+                    background_delivery: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(!queue.has_unsettled_turn("session", "turn"));
+    }
+
+    #[tokio::test]
+    async fn unsettled_turns_follow_accepted_ingress_even_when_legacy_storage_is_full() {
+        let queue = EventQueue::new(EventQueueConfig {
+            max_queue_size: 1,
+            batch_size: 1,
+        });
+        queue
+            .enqueue(turn_started("session", "old"), None)
+            .await
+            .unwrap();
+        queue
+            .enqueue(turn_started("session", "new"), None)
+            .await
+            .unwrap();
+        queue
+            .enqueue(
+                AgenticEvent::DialogTurnCancelled {
+                    session_id: "session".into(),
+                    turn_id: "old".into(),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(!queue.has_unsettled_turn("session", "old"));
+        assert!(queue.has_unsettled_turn("session", "new"));
+        queue
+            .enqueue(
+                AgenticEvent::DialogTurnFailed {
+                    session_id: "session".into(),
+                    turn_id: "new".into(),
+                    error: "transport closed".into(),
+                    error_category: None,
+                    error_detail: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(!queue.has_unsettled_turn("session", "new"));
+        assert!(queue.unsettled_turns.read().unwrap().is_empty());
+    }
 
     #[tokio::test]
     async fn legacy_dequeue_ack_separates_later_high_priority_events() {
