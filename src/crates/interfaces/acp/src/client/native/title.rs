@@ -45,19 +45,12 @@ pub(crate) fn title_source(input: &str, original: Option<&str>) -> Option<String
     (!text.is_empty() && !text.starts_with('/')).then(|| text.to_string())
 }
 
-/// The title a turn started under, unless the user already renamed it.
-pub(crate) fn expected_title(metadata: &SessionMetadata) -> Option<String> {
-    (!user_edited(metadata)).then(|| metadata.session_name.clone())
-}
-
-/// Compare-and-set the generated title. Returns false when the session was
-/// renamed since `expected` was read, so a user rename is never overwritten.
-pub(crate) fn apply_generated_title(
-    metadata: &mut SessionMetadata,
-    expected: &str,
-    title: &str,
-) -> bool {
-    if user_edited(metadata) || metadata.session_name != expected {
+/// Apply the generated title unless the user renamed the session. Only the
+/// `titleUserEdited` flag marks a rename: the client persists its placeholder
+/// title (the truncated first message) while the title model runs, so a
+/// changed name alone is not a rename.
+pub(crate) fn apply_generated_title(metadata: &mut SessionMetadata, title: &str) -> bool {
+    if user_edited(metadata) {
         return false;
     }
     metadata.session_name = title.to_string();
@@ -74,7 +67,7 @@ pub(crate) fn apply_generated_title(
     true
 }
 
-fn user_edited(metadata: &SessionMetadata) -> bool {
+pub(crate) fn user_edited(metadata: &SessionMetadata) -> bool {
     metadata
         .custom_metadata
         .as_ref()
@@ -84,17 +77,16 @@ fn user_edited(metadata: &SessionMetadata) -> bool {
 }
 
 impl AcpSessionPersistence {
-    /// Persist a generated title only if the record still has `expected`.
+    /// Persist a generated title unless the user renamed the session.
     pub(crate) async fn set_generated_title(
         &self,
         storage: &Path,
         session_id: &str,
-        expected: &str,
         title: &str,
     ) -> OpenBitFunResult<bool> {
         let mut applied = false;
         self.update_metadata(storage, session_id, |metadata| {
-            applied = apply_generated_title(metadata, expected, title);
+            applied = apply_generated_title(metadata, title);
             Ok(())
         })
         .await?;
@@ -119,32 +111,28 @@ mod tests {
     }
 
     #[test]
-    fn generated_title_replaces_only_the_title_the_turn_started_under() {
+    fn generated_title_replaces_any_title_except_a_user_rename() {
         let mut fresh = metadata(
             "New Session",
             json!({"titleSource":"i18n", "titleKey":"flow-chat:session.new", "keep":1}),
         );
-        let expected = expected_title(&fresh).unwrap();
-        assert!(apply_generated_title(&mut fresh, &expected, "Fix login"));
+        assert!(apply_generated_title(&mut fresh, "Fix login"));
         assert_eq!(fresh.session_name, "Fix login");
         let custom = fresh.custom_metadata.unwrap();
         assert_eq!(custom["titleSource"], "text");
         assert!(custom.get("titleKey").is_none());
         assert_eq!(custom["keep"], 1);
 
-        // Renamed while the title model ran: the rename wins.
-        let mut renamed = metadata("Mine", json!({}));
-        assert!(!apply_generated_title(
-            &mut renamed,
-            "New Session",
-            "Fix login"
-        ));
-        assert_eq!(renamed.session_name, "Mine");
+        // Regression: the client persists its placeholder title while the
+        // title model runs; the generated title still replaces it.
+        let mut placeholder = metadata("fix the login...", json!({}));
+        assert!(apply_generated_title(&mut placeholder, "Fix login"));
+        assert_eq!(placeholder.session_name, "Fix login");
 
-        // A user-edited title is never replaced, even with a matching name.
+        // A user rename is never replaced.
         let mut edited = metadata("Mine", json!({"titleUserEdited": true}));
-        assert_eq!(expected_title(&edited), None);
-        assert!(!apply_generated_title(&mut edited, "Mine", "Fix login"));
+        assert!(!apply_generated_title(&mut edited, "Fix login"));
+        assert_eq!(edited.session_name, "Mine");
     }
 
     #[test]

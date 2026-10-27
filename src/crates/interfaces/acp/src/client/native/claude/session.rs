@@ -983,36 +983,30 @@ impl ClaudeNativeSession {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
         tokio::spawn(async move {
-            let expected = match &session.persistence {
-                Some((persistence, storage)) => {
-                    match persistence
-                        .load_metadata(storage, &session.session_id)
-                        .await
-                    {
-                        Ok(Some(metadata)) => match title::expected_title(&metadata) {
-                            Some(expected) => Some(expected),
-                            None => return,
-                        },
-                        Ok(None) => return,
-                        Err(error) => {
-                            log::warn!("Claude session title skipped: {error}");
-                            return;
-                        }
+            if let Some((persistence, storage)) = &session.persistence {
+                match persistence
+                    .load_metadata(storage, &session.session_id)
+                    .await
+                {
+                    Ok(Some(metadata)) if !title::user_edited(&metadata) => {}
+                    Ok(_) => return,
+                    Err(error) => {
+                        log::warn!("Claude session title skipped: {error}");
+                        return;
                     }
                 }
-                None => None,
-            };
+            }
             let resolved = resolver(message).await;
-            if let (Some((persistence, storage)), Some(expected)) =
-                (&session.persistence, expected.as_deref())
-            {
+            if let Some((persistence, storage)) = &session.persistence {
                 match persistence
-                    .set_generated_title(storage, &session.session_id, expected, &resolved.title)
+                    .set_generated_title(storage, &session.session_id, &resolved.title)
                     .await
                 {
                     Ok(true) => {}
                     Ok(false) => {
-                        log::debug!("Claude session title skipped because the title changed");
+                        log::debug!(
+                            "Claude session title skipped because the user renamed the session"
+                        );
                         return;
                     }
                     Err(error) => {
