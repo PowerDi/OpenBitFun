@@ -3691,6 +3691,13 @@
     "noDraft": "完整草稿仅在提交消息的设备上可用。",
     "legacy": "旧队列中的草稿，请逐条发送或恢复。"
   },
+  "nativeWake": {
+    "agentFinished": "后台代理已完成",
+    "agentFailed": "后台代理失败",
+    "taskFinished": "后台任务已完成",
+    "taskFailed": "后台任务失败",
+    "agentsFinished": "后台代理已完成"
+  },
   "backgroundDelivery": {
     "recoveryCompleted": "该次执行已恢复并完成。",
     "adjudicationUsage": "投递判定额外使用 {{tokens}} tokens",

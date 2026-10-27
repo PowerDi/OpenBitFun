@@ -65,6 +65,7 @@ import { useSubmittedMessageMotion } from './useSubmittedMessageMotion';
 import { finishSubmittedMessagePreview } from '../../services/submittedMessagePresentation';
 import { getActiveSurfaceScope } from '@/infrastructure/peer-device/deviceSurface';
 import { backgroundDeliveryFromMetadata } from '../../utils/backgroundDelivery';
+import { NativeWakeNotice } from './NativeWakeNotice';
 import './UserMessageItem.scss';
 
 const log = createLogger('UserMessageItem');
@@ -197,6 +198,9 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
       [restoredComposerContexts],
     );
     const isUsageReportMessage = message?.metadata?.localCommandKind === 'usage_report';
+    const nativeWake = message?.metadata?.triggerSource === 'native_background_task'
+      ? message.metadata.nativeWake
+      : undefined;
     const isGoalLoadingMessage = Boolean(message?.metadata?.threadGoalKickoff);
     const isThreadGoalContinuationCheck = Boolean(message?.metadata?.threadGoalContinuation);
     const isThreadGoalSystemMessage = Boolean(
@@ -613,6 +617,10 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
           onOpenDetails={usageReport ? handleOpenUsageReport : undefined}
         />
       );
+    }
+
+    if (nativeWake) {
+      return <NativeWakeNotice wake={nativeWake} fallback={messageContent} />;
     }
 
     if (isGoalLoadingMessage) {

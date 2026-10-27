@@ -405,6 +405,31 @@ describe('UserMessageItem steering tag', () => {
     expect(tag?.textContent).toBe('等待触发');
   });
 
+  it('renders a native background wake as a system notice instead of a user bubble', () => {
+    act(() => {
+      root.render(
+        <FlowChatContext.Provider value={{}}>
+          <UserMessageItem
+            message={{
+              id: 'user-wake-1',
+              content: 'Background task finished: Run build',
+              timestamp: 1000,
+              metadata: {
+                triggerSource: 'native_background_task',
+                nativeWake: { source: 'background_task', taskType: 'local_bash', description: 'Run build', status: 'completed' },
+              },
+            }}
+            turnId="turn-1"
+          />
+        </FlowChatContext.Provider>,
+      );
+    });
+
+    expect(container.querySelector('[data-testid="chat-user-message"]')).toBeNull();
+    const notice = container.querySelector('.native-wake-notice');
+    expect(notice?.querySelector('.native-wake-notice__detail')?.textContent).toBe('Run build');
+  });
+
   it('renders a localized send time outside the user message bubble', () => {
     const timestamp = Date.UTC(2026, 8, 3, 6, 32, 8);
 

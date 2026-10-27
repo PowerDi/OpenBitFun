@@ -3691,6 +3691,13 @@
     "noDraft": "The complete draft is only available on the device that submitted it.",
     "legacy": "Saved drafts from the previous queue. Send or restore each explicitly."
   },
+  "nativeWake": {
+    "agentFinished": "Background agent finished",
+    "agentFailed": "Background agent failed",
+    "taskFinished": "Background task finished",
+    "taskFailed": "Background task failed",
+    "agentsFinished": "Background agents finished"
+  },
   "backgroundDelivery": {
     "recoveryCompleted": "This execution recovered and completed.",
     "adjudicationUsage": "Delivery adjudication used {{tokens}} additional tokens",
