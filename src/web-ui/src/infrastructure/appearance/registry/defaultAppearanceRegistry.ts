@@ -43,6 +43,7 @@ import { inlineDiffPreviewAppearanceDescriptor } from '@/flow_chat/components/In
 import { exportImageAppearanceDescriptor } from '@/flow_chat/components/modern/ExportImageButton.appearance';
 import { userMessageItemAppearanceDescriptor } from '@/flow_chat/components/modern/UserMessageItem.appearance';
 import { externalHistoryNoticeAppearanceDescriptor } from '@/flow_chat/components/ExternalHistoryNotice.appearance';
+import { nativeWakeNoticeAppearanceDescriptor } from '@/flow_chat/components/modern/NativeWakeNotice.appearance';
 import { sessionUsageReportCardAppearanceDescriptor } from '@/flow_chat/components/usage/SessionUsageReportCard.appearance';
 import { sessionUsageModalAppearanceDescriptor } from '@/flow_chat/components/usage/SessionUsageModal.appearance';
 import { createPlanDisplayAppearanceDescriptor } from '@/flow_chat/tool-cards/CreatePlanDisplay.appearance';
@@ -305,6 +306,7 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(exportImageAppearanceDescriptor)
     .registerComponent(userMessageItemAppearanceDescriptor)
     .registerComponent(externalHistoryNoticeAppearanceDescriptor)
+    .registerComponent(nativeWakeNoticeAppearanceDescriptor)
     .registerComponent(sessionUsageReportCardAppearanceDescriptor)
     .registerComponent(sessionUsageModalAppearanceDescriptor)
     .registerComponent(createPlanDisplayAppearanceDescriptor)
