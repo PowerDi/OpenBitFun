@@ -83,6 +83,10 @@ impl NativeAgentDriver for ClaudeNativeDriver {
             // OpenBitFun-managed worktrees only (never `claude --worktree`);
             // the cwd is fixed once the first turn creates a transcript.
             worktree: true,
+            // `/compact` runs as a prompt (the CLI compacts); context usage
+            // comes from `get_context_usage` after each turn.
+            compact: true,
+            context_usage: true,
             ..Default::default()
         }
     }

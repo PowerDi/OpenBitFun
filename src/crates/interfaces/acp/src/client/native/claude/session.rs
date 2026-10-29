@@ -31,6 +31,7 @@ use super::background::ClaudeBackgroundTasks;
 use super::history::{resume_args, ClaudeHistory, PendingResume, RollbackPlan, TurnAnchor};
 use super::projector::{native_tool_name, ClaudeTurnProjector};
 use super::tasks::ClaudeTasks;
+use crate::client::native::questions::{self, CardOutcome, Decision, Elicitation};
 use crate::client::remote_shell::{remote_user_shell_command, shell_escape};
 use crate::client::session_persistence::AcpSessionPersistence;
 use crate::client::{
@@ -164,6 +165,15 @@ impl PermissionKind {
     }
 }
 
+/// An MCP elicitation shown on the question card.
+struct PendingElicitation {
+    process: Arc<NativeProcess>,
+    turn_id: String,
+    request_id: String,
+    card_id: String,
+    elicitation: Elicitation,
+}
+
 struct PendingPermission {
     process: Arc<NativeProcess>,
     turn_id: String,
@@ -294,6 +304,7 @@ pub struct ClaudeNativeSession {
     lifecycle: Mutex<()>,
     state: Mutex<TurnState>,
     permissions: DashMap<String, PendingPermission>,
+    elicitations: DashMap<String, PendingElicitation>,
     settled: Notify,
     queue: Arc<EventQueue>,
     persistence: Option<(Arc<AcpSessionPersistence>, PathBuf)>,
@@ -343,6 +354,7 @@ impl ClaudeNativeSession {
                 ..Default::default()
             }),
             permissions: DashMap::new(),
+            elicitations: DashMap::new(),
             settled: Notify::new(),
             queue,
             persistence,
@@ -468,6 +480,7 @@ impl ClaudeNativeSession {
         }
         let busy = self.state.lock().await.projector.is_some()
             || !self.permissions.is_empty()
+            || !self.elicitations.is_empty()
             || self.background().has_running();
         if busy {
             return false;
@@ -1516,11 +1529,17 @@ impl ClaudeNativeSession {
             }
         }
         if frame["type"] == "control_request" {
-            if frame["request"]["subtype"] == "can_use_tool" {
-                self.handle_permission(process, &frame, &mut state).await?;
-            } else {
-                process.write(&json!({"type":"control_response", "response":{"subtype":"error",
-                    "request_id":frame["request_id"], "error":"Unsupported Claude control request"}})).await?;
+            match frame["request"]["subtype"].as_str() {
+                Some("can_use_tool") => self.handle_permission(process, &frame, &mut state).await?,
+                Some("elicitation") => self.handle_elicitation(process, &frame, &mut state).await?,
+                subtype => {
+                    log::debug!(
+                        "Claude control request not supported: subtype={}",
+                        subtype.unwrap_or("(none)")
+                    );
+                    process.write(&json!({"type":"control_response", "response":{"subtype":"error",
+                        "request_id":frame["request_id"], "error":"Unsupported Claude control request"}})).await?;
+                }
             }
             return Ok(());
         }
@@ -2017,10 +2036,185 @@ impl ClaudeNativeSession {
         Ok(())
     }
 
+    /// MCP elicitation (`control_request` subtype `elicitation`): ask simple
+    /// forms on the question card; decline anything else visibly.
+    async fn handle_elicitation(
+        &self,
+        process: &Arc<NativeProcess>,
+        frame: &Value,
+        state: &mut TurnState,
+    ) -> OpenBitFunResult<()> {
+        let request = &frame["request"];
+        let request_id = frame["request_id"]
+            .as_str()
+            .ok_or_else(|| service_error("Claude elicitation has no request_id"))?
+            .to_string();
+        let server = request["mcp_server_name"]
+            .as_str()
+            .unwrap_or("MCP server")
+            .to_string();
+        let message = request["message"].as_str().unwrap_or_default();
+        let parsed = match request["mode"].as_str() {
+            None | Some("form") => Elicitation::parse(
+                message,
+                request.get("requested_schema").unwrap_or(&Value::Null),
+            ),
+            Some("url") => Err("it asks to open a URL in a browser".to_string()),
+            Some(other) => Err(format!("its mode {other} is unknown")),
+        };
+        let card_id = format!("claude_mcp_elicitation_{}", uuid::Uuid::new_v4());
+        let title = request["title"]
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{server} asks for input"));
+        if state.projector.is_none() {
+            // Same as a permission between turns: Claude is working on its own.
+            self.begin_turn(
+                state,
+                uuid::Uuid::new_v4().to_string(),
+                String::new(),
+                None,
+                true,
+            )
+            .await?;
+        }
+        let Some(projector) = state.projector.as_mut() else {
+            log::warn!("Claude MCP elicitation arrived outside a turn; cancelled: server={server}");
+            return process
+                .write(
+                    &json!({"type":"control_response", "response":{"subtype":"success",
+                    "request_id":request_id, "response":{"action":"cancel"}}}),
+                )
+                .await;
+        };
+        let turn_id = projector.turn_id().to_string();
+        let elicitation = match parsed {
+            Ok(elicitation) => elicitation,
+            Err(reason) => {
+                log::warn!("Claude MCP elicitation declined: server={server}, reason={reason}");
+                let mut events = projector.permission_tool(
+                    &card_id,
+                    questions::INTERACTION_TOOL,
+                    json!({"server": server, "message": message, "url": request["url"]}),
+                );
+                events.extend(projector.settle_interaction(
+                    &card_id,
+                    CardOutcome::Failed(format!(
+                        "OpenBitFun declined this request from {server} because {reason}. Use the Claude Code CLI to answer it."
+                    )),
+                ));
+                self.enqueue(events).await?;
+                return process
+                    .write(
+                        &json!({"type":"control_response", "response":{"subtype":"success",
+                        "request_id":request_id, "response":{"action":"decline"}}}),
+                    )
+                    .await;
+            }
+        };
+        let (tool_name, input) = match &elicitation {
+            Elicitation::Confirm => (
+                questions::INTERACTION_TOOL,
+                json!({"server": server, "message": message}),
+            ),
+            form => (
+                questions::QUESTION_TOOL,
+                questions::card_input(&form.questions()),
+            ),
+        };
+        self.enqueue(projector.permission_tool(&card_id, tool_name, input.clone()))
+            .await?;
+        let permission_id = format!("claude_native_permission_{}", uuid::Uuid::new_v4());
+        let payload = if tool_name == questions::QUESTION_TOOL {
+            questions::question_payload(&permission_id, &self.session_id, &card_id, &title, &input)
+        } else {
+            questions::confirm_payload(&permission_id, &self.session_id, &card_id, &title, &input)
+        };
+        self.elicitations.insert(
+            permission_id.clone(),
+            PendingElicitation {
+                process: process.clone(),
+                turn_id,
+                request_id,
+                card_id,
+                elicitation,
+            },
+        );
+        if let Err(error) = emit_global_event(BackendEvent::Custom {
+            event_name: "backend-event-acppermissionrequest".into(),
+            payload,
+        })
+        .await
+        {
+            if let Some((_, pending)) = self.elicitations.remove(&permission_id) {
+                self.settle_elicitation_card(
+                    &pending,
+                    CardOutcome::Failed("The request could not be shown".into()),
+                    Some(state),
+                )
+                .await;
+                let _ = write_elicitation_reply(&pending, json!({"action":"cancel"})).await;
+            }
+            return Err(service_error(format!(
+                "Claude elicitation delivery failed: {error}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Close an elicitation card in its (still running) turn.
+    async fn settle_elicitation_card(
+        &self,
+        pending: &PendingElicitation,
+        outcome: CardOutcome,
+        state: Option<&mut TurnState>,
+    ) {
+        let mut guard;
+        let state = match state {
+            Some(state) => state,
+            None => {
+                guard = self.state.lock().await;
+                &mut *guard
+            }
+        };
+        let Some(projector) = state
+            .projector
+            .as_mut()
+            .filter(|projector| projector.turn_id() == pending.turn_id)
+        else {
+            return;
+        };
+        let events = projector.settle_interaction(&pending.card_id, outcome);
+        if let Err(error) = self.enqueue(events).await {
+            log::error!("Claude elicitation card delivery failed: {error}");
+        }
+    }
+
+    async fn submit_elicitation(
+        &self,
+        request: &SubmitAcpPermissionResponseRequest,
+    ) -> Option<OpenBitFunResult<()>> {
+        let (_, pending) = self.elicitations.remove(&request.permission_id)?;
+        let (reply, outcome) = match elicitation_reply(&pending.elicitation, request) {
+            Ok(reply) => reply,
+            Err(error) => {
+                self.elicitations
+                    .insert(request.permission_id.clone(), pending);
+                return Some(Err(error));
+            }
+        };
+        let result = write_elicitation_reply(&pending, reply).await;
+        self.settle_elicitation_card(&pending, outcome, None).await;
+        Some(result)
+    }
+
     pub(crate) async fn submit_permission(
         &self,
         request: &SubmitAcpPermissionResponseRequest,
     ) -> Option<OpenBitFunResult<()>> {
+        if self.elicitations.contains_key(&request.permission_id) {
+            return self.submit_elicitation(request).await;
+        }
         let (_, pending) = self.permissions.remove(&request.permission_id)?;
         let reply = match permission_reply(&pending, request) {
             Ok(reply) => reply,
@@ -2156,6 +2350,18 @@ impl ClaudeNativeSession {
                 let _ = cancel_permission(pending).await;
             }
         }
+        let ids: Vec<String> = self
+            .elicitations
+            .iter()
+            .filter(|p| p.turn_id == turn_id)
+            .map(|p| p.key().clone())
+            .collect();
+        for id in ids {
+            if let Some((_, pending)) = self.elicitations.remove(&id) {
+                // The turn is over: its card was settled with the turn.
+                let _ = write_elicitation_reply(&pending, json!({"action":"cancel"})).await;
+            }
+        }
     }
 
     async fn fail_turn(&self, error: &str) {
@@ -2251,7 +2457,10 @@ impl ClaudeNativeSession {
         turn_id: &str,
     ) -> OpenBitFunResult<NativeRollbackOutcome> {
         let _guard = self.lifecycle.lock().await;
-        if self.state.lock().await.projector.is_some() || !self.permissions.is_empty() {
+        if self.state.lock().await.projector.is_some()
+            || !self.permissions.is_empty()
+            || !self.elicitations.is_empty()
+        {
             return Err(OpenBitFunError::Validation(
                 "Wait until the Claude turn finishes before rolling back".into(),
             ));
@@ -2696,6 +2905,57 @@ async fn cancel_permission(pending: PendingPermission) -> OpenBitFunResult<()> {
     };
     let reply = denied(&pending.tool_id, message);
     write_permission_reply(&pending, reply).await
+}
+
+/// MCP `ElicitResult` and card outcome for the user's answer.
+fn elicitation_reply(
+    elicitation: &Elicitation,
+    request: &SubmitAcpPermissionResponseRequest,
+) -> OpenBitFunResult<(Value, CardOutcome)> {
+    let declined = || {
+        (
+            json!({"action":"decline"}),
+            CardOutcome::Failed("The user declined the request".into()),
+        )
+    };
+    Ok(match elicitation {
+        Elicitation::Confirm => {
+            if questions::approved(request)? {
+                (
+                    json!({"action":"accept", "content":{}}),
+                    CardOutcome::Completed {
+                        result: json!({"result": "Accepted"}),
+                        text: "Accepted".into(),
+                    },
+                )
+            } else {
+                declined()
+            }
+        }
+        form => {
+            let questions = form.questions();
+            match questions::decision(request, &questions)? {
+                Decision::Answered(answers) => (
+                    json!({"action":"accept", "content": form.content(&answers)?}),
+                    questions::answered_outcome(&questions, &answers),
+                ),
+                Decision::Skipped => declined(),
+            }
+        }
+    })
+}
+
+async fn write_elicitation_reply(
+    pending: &PendingElicitation,
+    reply: Value,
+) -> OpenBitFunResult<()> {
+    pending
+        .process
+        .write(
+            &json!({"type":"control_response", "response":{"subtype":"success",
+        "request_id":pending.request_id, "response":reply}}),
+        )
+        .await
 }
 
 /// `get_context_usage` response: `{totalTokens, maxTokens, model}`.

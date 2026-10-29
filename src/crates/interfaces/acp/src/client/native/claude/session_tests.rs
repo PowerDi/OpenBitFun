@@ -1986,3 +1986,119 @@ fn injected_notification_task_reads_only_main_conversation_notifications() {
     let typed = json!({"type":"user", "message":{"content":"please check <task-id>b7</task-id>"}});
     assert_eq!(injected_notification_task(&typed), None);
 }
+
+#[tokio::test]
+async fn mcp_elicitation_form_round_trips_through_the_question_card() {
+    let (session, process, output) = fixture();
+    let mut lines = BufReader::new(output).lines();
+    session
+        .begin_turn(
+            &mut *session.state.lock().await,
+            "t1".into(),
+            "hi".into(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    session
+        .route_frame(
+            &process,
+            json!({"type":"control_request", "request_id":"e1", "request":{
+                "subtype":"elicitation", "mcp_server_name":"db", "message":"Pick one",
+                "requested_schema":{"type":"object","properties":{
+                    "env":{"type":"string","enum":["dev","prod"],"enumNames":["Dev","Prod"]}}}}}),
+        )
+        .await
+        .unwrap();
+    let permission_id = session.elicitations.iter().next().unwrap().key().clone();
+    // An option outside the enum keeps the request pending.
+    let mut request = decision(&permission_id, true, Some("allow_once"));
+    request.answers = Some(json!({"0": "staging"}));
+    assert!(session.submit_permission(&request).await.unwrap().is_err());
+    assert!(session.elicitations.contains_key(&permission_id));
+    request.answers = Some(json!({"0": "Prod"}));
+    session.submit_permission(&request).await.unwrap().unwrap();
+    let frame: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(frame["response"]["request_id"], "e1");
+    assert_eq!(
+        frame["response"]["response"],
+        json!({"action":"accept", "content":{"env":"prod"}})
+    );
+    // Skip declines explicitly; a URL elicitation is declined with a visible card.
+    session
+        .route_frame(
+            &process,
+            json!({"type":"control_request", "request_id":"e2", "request":{
+                "subtype":"elicitation", "mcp_server_name":"db", "message":"Confirm?"}}),
+        )
+        .await
+        .unwrap();
+    let permission_id = session.elicitations.iter().next().unwrap().key().clone();
+    session
+        .submit_permission(&decision(&permission_id, false, Some("reject_once")))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(next_reply(&mut lines).await, json!({"action":"decline"}));
+    session
+        .route_frame(
+            &process,
+            json!({"type":"control_request", "request_id":"e3", "request":{
+                "subtype":"elicitation", "mcp_server_name":"auth", "mode":"url",
+                "url":"https://example.test", "message":"Sign in"}}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(next_reply(&mut lines).await, json!({"action":"decline"}));
+    // Other control requests stay unsupported.
+    session
+        .route_frame(
+            &process,
+            json!({"type":"control_request", "request_id":"x1", "request":{"subtype":"request_user_dialog"}}),
+        )
+        .await
+        .unwrap();
+    let frame: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(frame["response"]["subtype"], "error");
+    let events = session.queue.dequeue_batch(200).await;
+    let failed: Vec<String> = events
+        .iter()
+        .filter_map(|e| match &e.event {
+            AgenticEvent::ToolEvent {
+                tool_event: openbitfun_events::ToolEventData::Failed { error, .. },
+                ..
+            } => Some(error.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(failed.iter().any(|e| e.contains("declined")));
+    assert!(failed.iter().any(|e| e.contains("URL")));
+}
+
+#[tokio::test]
+async fn unanswered_elicitation_is_cancelled_when_the_turn_ends() {
+    let (session, process, output) = fixture();
+    session
+        .begin_turn(
+            &mut *session.state.lock().await,
+            "t1".into(),
+            "hi".into(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    session
+        .route_frame(
+            &process,
+            json!({"type":"control_request", "request_id":"e1", "request":{
+                "subtype":"elicitation", "mcp_server_name":"db", "message":"Confirm?"}}),
+        )
+        .await
+        .unwrap();
+    session.clear_permissions("t1").await;
+    assert!(session.elicitations.is_empty());
+    let mut lines = BufReader::new(output).lines();
+    assert_eq!(next_reply(&mut lines).await, json!({"action":"cancel"}));
+}

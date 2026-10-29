@@ -930,6 +930,46 @@ impl ClaudeTurnProjector {
         })
     }
 
+    /// Close a card the driver projected for an interactive request (MCP
+    /// elicitation); Claude reports no tool result for it.
+    pub(crate) fn settle_interaction(
+        &mut self,
+        card_id: &str,
+        outcome: crate::client::native::questions::CardOutcome,
+    ) -> Vec<AgenticEvent> {
+        let Some(call) = self.tools.remove(card_id) else {
+            return Vec::new();
+        };
+        let identity = ToolEventIdentity::direct(card_id, call.tool_name.clone());
+        let duration_ms = call.started_at.elapsed().as_millis() as u64;
+        let event = match outcome {
+            crate::client::native::questions::CardOutcome::Completed { result, text } => {
+                ToolEventData::Completed {
+                    identity,
+                    result,
+                    result_for_assistant: Some(text),
+                    image_attachments: None,
+                    duration_ms,
+                    queue_wait_ms: None,
+                    preflight_ms: None,
+                    confirmation_wait_ms: None,
+                    execution_ms: None,
+                }
+            }
+            crate::client::native::questions::CardOutcome::Failed(error) => ToolEventData::Failed {
+                identity,
+                error,
+                error_detail: None,
+                duration_ms: Some(duration_ms),
+                queue_wait_ms: None,
+                preflight_ms: None,
+                confirmation_wait_ms: None,
+                execution_ms: None,
+            },
+        };
+        vec![self.tool_event(&call.round_id, event)]
+    }
+
     fn tool_event(&self, round_id: &str, tool_event: ToolEventData) -> AgenticEvent {
         AgenticEvent::ToolEvent {
             session_id: self.session_id.clone(),
