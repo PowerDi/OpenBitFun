@@ -8,6 +8,7 @@ pub(crate) mod preferences;
 mod process;
 mod questions;
 mod round_latency;
+pub mod runtime_status;
 pub(crate) mod title;
 
 use std::path::PathBuf;
@@ -24,6 +25,7 @@ use super::{
 };
 pub use capabilities::{NativeAgentCapabilities, NativeSubagentCapabilities};
 pub(crate) use preferences::NativeAgentPreferencesStore;
+pub use runtime_status::{NativeRateLimitSnapshot, NativeRateLimitWindow, NativeRetryStatus};
 
 /// `triggerSource` of a turn started because a background task or subagent
 /// finished, not typed by the user (the UI disables editing it).
@@ -43,6 +45,14 @@ pub enum NativeAgentNotification {
     OptionsChanged,
     /// The agent's background tasks changed; the payload is the full list.
     BackgroundTasksUpdated(Vec<NativeBackgroundTask>),
+    /// The agent is automatically retrying the model request of `turn_id`
+    /// (`Some`), or the retry is over (`None`): output resumed or the turn ended.
+    RetryStatusChanged {
+        turn_id: String,
+        retry: Option<NativeRetryStatus>,
+    },
+    /// Account rate limits changed; the payload is the merged latest snapshot.
+    RateLimitsUpdated(NativeRateLimitSnapshot),
 }
 
 /// One background task run by the external agent (shell, subagent, ...).

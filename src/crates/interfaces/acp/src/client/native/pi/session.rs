@@ -22,6 +22,7 @@ use tokio::sync::{oneshot, Mutex, Notify};
 
 use super::super::preferences::NativeAgentPreferences;
 use super::super::process::{Reader, Writer};
+use super::super::runtime_status::{self, NativeRuntimeStatus};
 use super::super::title::{self, TitleResolver};
 use super::super::{
     NativeAgentNotification, NativeAgentNotificationSink, NativeRollbackOutcome, NativeTurnInput,
@@ -201,6 +202,8 @@ pub struct PiNativeSession {
     thinking: std::sync::Mutex<Option<String>>,
     commands: std::sync::Mutex<Vec<AcpAvailableCommand>>,
     context_usage: std::sync::Mutex<Option<AcpSessionContextUsage>>,
+    /// Automatic retry status (presentation only).
+    runtime_status: NativeRuntimeStatus,
     notifier: Option<NativeAgentNotificationSink>,
     title_resolver: std::sync::Mutex<TitleResolver>,
     /// Pi session id the running process has open (changes on fork/rollback).
@@ -263,6 +266,7 @@ impl PiNativeSession {
             thinking: std::sync::Mutex::new(None),
             commands: std::sync::Mutex::new(Vec::new()),
             context_usage: std::sync::Mutex::new(None),
+            runtime_status: NativeRuntimeStatus::default(),
             notifier,
             title_resolver: std::sync::Mutex::new(title::default_resolver()),
             permission_mode: std::sync::Mutex::new(approval::MODE_ASK.to_string()),
@@ -420,6 +424,7 @@ impl PiNativeSession {
             context_usage: lock(&self.context_usage).clone(),
             capabilities: Some(super::capabilities()),
             background_tasks: Vec::new(),
+            rate_limits: None,
         }
     }
 
@@ -899,7 +904,16 @@ impl PiNativeSession {
             }
         }
         let projector = state.projector.as_mut().expect("active turn");
+        if let Some(retry) = runtime_status::pi_retry(&frame) {
+            let update = self.runtime_status.retry(projector.turn_id(), retry);
+            self.notify(update);
+        } else if frame["type"] == "auto_retry_end" {
+            if let Some(update) = self.runtime_status.settle_retry() {
+                self.notify(update);
+            }
+        }
         let events = projector.consume(&frame);
+        let settled = self.runtime_status.settle_retry_after(&events);
         let usage = events.iter().find_map(|event| match event {
             AgenticEvent::TokenUsageUpdated {
                 input_tokens,
@@ -909,6 +923,9 @@ impl PiNativeSession {
             _ => None,
         });
         self.enqueue(events).await?;
+        if let Some(update) = settled {
+            self.notify(update);
+        }
         if let Some((used, size)) = usage {
             self.publish_context_usage(Some(used), size, None);
         }
@@ -1021,6 +1038,9 @@ impl PiNativeSession {
             drop(state);
             self.clear_approvals(projector.turn_id()).await;
             self.settled.notify_waiters();
+        }
+        if let Some(update) = self.runtime_status.settle_retry() {
+            self.notify(update);
         }
     }
 

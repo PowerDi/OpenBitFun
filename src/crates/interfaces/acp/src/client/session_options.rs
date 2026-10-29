@@ -104,6 +104,9 @@ pub struct AcpSessionOptions {
     /// Native agents: current background tasks, for re-hydration.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub background_tasks: Vec<super::native::NativeBackgroundTask>,
+    /// Native agents: latest account rate-limit snapshot, for re-hydration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limits: Option<super::native::NativeRateLimitSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
