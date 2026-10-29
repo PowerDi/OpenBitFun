@@ -27,6 +27,7 @@ use super::super::{
 };
 use super::history::{CodexHistory, PendingFork, TurnAnchor};
 use super::projector::CodexTurnProjector;
+use crate::client::native::questions::{self, CardOutcome, Decision, Elicitation, Question};
 use crate::client::remote_shell::{remote_user_shell_command, shell_escape};
 use crate::client::session_persistence::AcpSessionPersistence;
 use crate::client::{
@@ -191,13 +192,35 @@ impl RpcProcess {
     }
 }
 
-/// One approval request waiting for the user.
+/// One approval or question request waiting for the user.
 struct PendingApproval {
     process: Arc<RpcProcess>,
     request_id: Value,
     method: String,
     params: Value,
     turn_id: String,
+    /// Question/elicitation card the driver projected (approvals use
+    /// Codex's own item card and leave this `None`).
+    interaction: Option<Interaction>,
+}
+
+/// A `requestUserInput` or MCP elicitation shown on the question card.
+#[derive(Debug, Clone)]
+struct Interaction {
+    card_id: String,
+    /// Child thread whose session shows the card, when a subagent asked.
+    child_thread: Option<String>,
+    kind: InteractionKind,
+}
+
+#[derive(Debug, Clone)]
+enum InteractionKind {
+    /// `item/tool/requestUserInput`: question ids in card order.
+    UserInput {
+        ids: Vec<String>,
+        questions: Vec<Question>,
+    },
+    Elicitation(Elicitation),
 }
 
 #[derive(Default)]
@@ -939,6 +962,12 @@ impl CodexNativeSession {
         if self.state.lock().await.projector.is_some() {
             return Err(service_error("Codex session already has an active turn"));
         }
+        let text = input.text.trim();
+        if text.split_whitespace().next() == Some("/compact") && !is_compact_command(text) {
+            return Err(OpenBitFunError::Validation(
+                "Codex /compact does not take instructions; send /compact alone".into(),
+            ));
+        }
         {
             // The user is driving again; queued notifications go into this turn.
             let mut state = self.state.lock().await;
@@ -970,6 +999,18 @@ impl CodexNativeSession {
         let process = self.ensure_process().await?;
         self.state.lock().await.process_id = Some(process.id.clone());
         let thread = self.ensure_thread(&process).await?;
+        if is_compact_command(&input.text) {
+            // Codex runs compaction as a turn of its own: its notifications
+            // (contextCompaction item, turn/completed) settle this turn.
+            process
+                .request(
+                    "thread/compact/start",
+                    json!({"threadId": thread}),
+                    REQUEST_TIMEOUT,
+                )
+                .await?;
+            return Ok(());
+        }
         let params = self.turn_params(&thread, input);
         let response = process
             .request("turn/start", params, REQUEST_TIMEOUT)
@@ -1337,9 +1378,7 @@ impl CodexNativeSession {
             .collect();
         for id in ids {
             if let Some((_, pending)) = self.approvals.remove(&id) {
-                let _ = pending
-                    .process
-                    .respond(&pending.request_id, cancelled_reply(&pending.method))
+                self.cancel_pending(pending, "The turn ended before the question was answered")
                     .await;
             }
         }
@@ -1555,16 +1594,54 @@ impl CodexNativeSession {
             | "item/permissions/requestApproval" => {
                 self.handle_approval(process, id, method, params).await
             }
-            // OpenBitFun has no Codex question UI yet: answer with no
-            // answers so the turn continues instead of blocking.
-            "item/tool/requestUserInput" => process.respond(&id, json!({"answers": {}})).await,
+            "item/tool/requestUserInput" => {
+                let (ids, questions) = user_input_questions(params);
+                if questions.is_empty() {
+                    return process
+                        .respond_error(&id, -32602, "requestUserInput has no questions")
+                        .await;
+                }
+                let card_id = params["itemId"]
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("codex_user_input_{}", uuid::Uuid::new_v4()));
+                self.handle_interaction(
+                    process,
+                    id,
+                    method,
+                    params,
+                    card_id,
+                    InteractionKind::UserInput { ids, questions },
+                )
+                .await
+            }
             "mcpServer/elicitation/request" => {
-                process
-                    .respond(
-                        &id,
-                        json!({"action": "decline", "content": null, "_meta": null}),
-                    )
-                    .await
+                let card_id = format!("codex_mcp_elicitation_{}", uuid::Uuid::new_v4());
+                let parsed = match params["mode"].as_str() {
+                    Some("form" | "openai/form" | "openaiForm") => Elicitation::parse(
+                        params["message"].as_str().unwrap_or_default(),
+                        &params["requestedSchema"],
+                    ),
+                    Some("url") => Err("it asks to open a URL in a browser".to_string()),
+                    other => Err(format!("its mode {} is unknown", other.unwrap_or("(none)"))),
+                };
+                match parsed {
+                    Ok(elicitation) => {
+                        self.handle_interaction(
+                            process,
+                            id,
+                            method,
+                            params,
+                            card_id,
+                            InteractionKind::Elicitation(elicitation),
+                        )
+                        .await
+                    }
+                    Err(reason) => {
+                        self.decline_elicitation(process, id, params, &card_id, &reason)
+                            .await
+                    }
+                }
             }
             other => {
                 log::debug!("Codex server request not supported: {other}");
@@ -1637,6 +1714,7 @@ impl CodexNativeSession {
                 method: method.to_string(),
                 params: params.clone(),
                 turn_id,
+                interaction: None,
             },
         );
         if let Err(error) = emit_global_event(BackendEvent::Custom {
@@ -1658,12 +1736,235 @@ impl CodexNativeSession {
         Ok(())
     }
 
+    /// Project a driver-owned card into the turn (or child turn) a request
+    /// belongs to. `None` when no turn can show it.
+    async fn project_card(
+        &self,
+        params: &Value,
+        card_id: &str,
+        tool_name: &str,
+        input: Value,
+    ) -> OpenBitFunResult<Option<(String, String, Option<String>)>> {
+        let current_thread = self.thread_id();
+        let mut guard = self.state.lock().await;
+        let state = &mut *guard;
+        let child_thread = params["threadId"]
+            .as_str()
+            .filter(|thread| current_thread.as_deref() != Some(*thread))
+            .filter(|thread| state.threads.children.contains_key(*thread))
+            .map(str::to_string);
+        let target = match &child_thread {
+            Some(thread) => state.threads.children.get_mut(thread).and_then(|child| {
+                child
+                    .projector
+                    .as_mut()
+                    .map(|projector| (projector, child.session_id.clone()))
+            }),
+            None => state
+                .projector
+                .as_mut()
+                .map(|projector| (projector, self.session_id.clone())),
+        };
+        let Some((projector, card_session)) = target else {
+            return Ok(None);
+        };
+        let events = projector.permission_tool(card_id, tool_name, input);
+        let turn_id = projector.turn_id().to_string();
+        self.enqueue(events).await?;
+        Ok(Some((turn_id, card_session, child_thread)))
+    }
+
+    /// Close a driver-owned card while its turn still runs.
+    async fn settle_card(&self, interaction: &Interaction, outcome: CardOutcome) {
+        let mut state = self.state.lock().await;
+        let projector = match &interaction.child_thread {
+            Some(thread) => state
+                .threads
+                .children
+                .get_mut(thread)
+                .and_then(|child| child.projector.as_mut()),
+            None => state.projector.as_mut(),
+        };
+        let Some(projector) = projector else {
+            return;
+        };
+        let events = projector.settle_interaction(&interaction.card_id, outcome);
+        if let Err(error) = self.enqueue(events).await {
+            log::error!("Codex interaction card delivery failed: {error}");
+        }
+    }
+
+    /// Ask a `requestUserInput` or MCP elicitation on the question card.
+    async fn handle_interaction(
+        &self,
+        process: &Arc<RpcProcess>,
+        request_id: Value,
+        method: &str,
+        params: &Value,
+        card_id: String,
+        kind: InteractionKind,
+    ) -> OpenBitFunResult<()> {
+        let server = params["serverName"].as_str().unwrap_or("MCP server");
+        let (tool_name, input, title) = match &kind {
+            InteractionKind::UserInput { questions, .. } => (
+                questions::QUESTION_TOOL,
+                questions::card_input(questions),
+                "Codex question".to_string(),
+            ),
+            InteractionKind::Elicitation(Elicitation::Confirm) => (
+                questions::INTERACTION_TOOL,
+                json!({"server": server, "message": params["message"]}),
+                format!(
+                    "{server}: {}",
+                    params["message"].as_str().unwrap_or("Confirm")
+                ),
+            ),
+            InteractionKind::Elicitation(elicitation) => (
+                questions::QUESTION_TOOL,
+                questions::card_input(&elicitation.questions()),
+                format!("{server} asks for input"),
+            ),
+        };
+        let Some((turn_id, card_session, child_thread)) = self
+            .project_card(params, &card_id, tool_name, input.clone())
+            .await?
+        else {
+            log::warn!(
+                "Codex interactive request arrived outside a turn; cancelled: method={method}"
+            );
+            return reply_cancelled(process, &request_id, method, &kind, "No turn is running")
+                .await;
+        };
+        let permission_id = format!("codex_native_permission_{}", uuid::Uuid::new_v4());
+        let payload = if tool_name == questions::QUESTION_TOOL {
+            questions::question_payload(&permission_id, &card_session, &card_id, &title, &input)
+        } else {
+            questions::confirm_payload(&permission_id, &card_session, &card_id, &title, &input)
+        };
+        self.approvals.insert(
+            permission_id.clone(),
+            PendingApproval {
+                process: process.clone(),
+                request_id,
+                method: method.to_string(),
+                params: params.clone(),
+                turn_id,
+                interaction: Some(Interaction {
+                    card_id,
+                    child_thread,
+                    kind,
+                }),
+            },
+        );
+        if let Err(error) = emit_global_event(BackendEvent::Custom {
+            event_name: "backend-event-acppermissionrequest".into(),
+            payload,
+        })
+        .await
+        {
+            if let Some((_, pending)) = self.approvals.remove(&permission_id) {
+                self.cancel_pending(pending, "The question could not be shown")
+                    .await;
+            }
+            return Err(service_error(format!(
+                "Codex question delivery failed: {error}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Decline an elicitation the card cannot show, with a visible notice.
+    async fn decline_elicitation(
+        &self,
+        process: &Arc<RpcProcess>,
+        request_id: Value,
+        params: &Value,
+        card_id: &str,
+        reason: &str,
+    ) -> OpenBitFunResult<()> {
+        let server = params["serverName"].as_str().unwrap_or("MCP server");
+        log::warn!("Codex MCP elicitation declined: server={server}, reason={reason}");
+        let input = json!({"server": server, "message": params["message"], "url": params["url"]});
+        if let Some((_, _, child_thread)) = self
+            .project_card(params, card_id, questions::INTERACTION_TOOL, input)
+            .await?
+        {
+            let interaction = Interaction {
+                card_id: card_id.to_string(),
+                child_thread,
+                kind: InteractionKind::Elicitation(Elicitation::Confirm),
+            };
+            let error = format!(
+                "OpenBitFun declined this request from {server} because {reason}. Use the Codex CLI to answer it."
+            );
+            self.settle_card(&interaction, CardOutcome::Failed(error))
+                .await;
+        }
+        process
+            .respond(
+                &request_id,
+                json!({"action": "decline", "content": null, "_meta": null}),
+            )
+            .await
+    }
+
+    /// Answer a request nobody will decide and close its card.
+    async fn cancel_pending(&self, pending: PendingApproval, reason: &str) {
+        let result = match &pending.interaction {
+            Some(interaction) => {
+                self.settle_card(interaction, CardOutcome::Failed(reason.to_string()))
+                    .await;
+                reply_cancelled(
+                    &pending.process,
+                    &pending.request_id,
+                    &pending.method,
+                    &interaction.kind,
+                    reason,
+                )
+                .await
+            }
+            None => {
+                pending
+                    .process
+                    .respond(&pending.request_id, cancelled_reply(&pending.method))
+                    .await
+            }
+        };
+        if let Err(error) = result {
+            log::debug!("Codex cancelled request reply failed: {error}");
+        }
+    }
+
+    /// Answer a question/elicitation card.
+    async fn submit_interaction(
+        &self,
+        pending: &PendingApproval,
+        interaction: &Interaction,
+        request: &SubmitAcpPermissionResponseRequest,
+    ) -> OpenBitFunResult<()> {
+        let (reply, outcome) = interaction_reply(&interaction.kind, &pending.params, request)?;
+        pending.process.respond(&pending.request_id, reply).await?;
+        self.settle_card(interaction, outcome).await;
+        Ok(())
+    }
+
     pub(crate) async fn submit_permission(
         &self,
         request: &SubmitAcpPermissionResponseRequest,
     ) -> Option<OpenBitFunResult<()>> {
         let (_, pending) = self.approvals.remove(&request.permission_id)?;
         self.touch();
+        if let Some(interaction) = pending.interaction.clone() {
+            let result = self
+                .submit_interaction(&pending, &interaction, request)
+                .await;
+            if result.is_err() {
+                // Invalid answers keep the card answerable.
+                self.approvals
+                    .insert(request.permission_id.clone(), pending);
+            }
+            return Some(result);
+        }
         let reply = match approval_reply(&pending.method, &pending.params, request) {
             Ok(reply) => reply,
             Err(error) => {
@@ -2016,6 +2317,167 @@ fn cancelled_reply(method: &str) -> Value {
     match method {
         "item/permissions/requestApproval" => json!({"permissions": {}, "scope": "turn"}),
         _ => json!({"decision": "cancel"}),
+    }
+}
+
+/// `/compact` alone: compact the thread instead of prompting the model.
+fn is_compact_command(text: &str) -> bool {
+    text.trim() == "/compact"
+}
+
+/// Answer to a question the user skipped, in Codex's own `user_note:`
+/// convention, so the model is told explicitly that nothing was chosen.
+const SKIPPED_NOTE: &str = "user_note: The user skipped this question without answering.";
+
+/// Question ids and card questions of `item/tool/requestUserInput`.
+fn user_input_questions(params: &Value) -> (Vec<String>, Vec<Question>) {
+    params["questions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|question| {
+            let id = question["id"].as_str()?.to_string();
+            let header = question["header"].as_str().unwrap_or_default();
+            let text = question["question"]
+                .as_str()
+                .filter(|text| !text.trim().is_empty())
+                .unwrap_or(header);
+            let options = question["options"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|option| {
+                    Some((
+                        option["label"].as_str()?.to_string(),
+                        option["description"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                    ))
+                })
+                .collect();
+            Some((
+                id,
+                Question {
+                    header: header.to_string(),
+                    question: text.to_string(),
+                    options,
+                    multi_select: false,
+                },
+            ))
+        })
+        .unzip()
+}
+
+/// `ToolRequestUserInputResponse`: answers keyed by question id.
+fn user_input_reply(ids: &[String], answers: &[Vec<String>]) -> Value {
+    let answers: serde_json::Map<String, Value> = ids
+        .iter()
+        .zip(answers)
+        .map(|(id, values)| (id.clone(), json!({"answers": values})))
+        .collect();
+    json!({"answers": answers})
+}
+
+/// Answered card; `isSecret` answers are not kept in the transcript.
+fn masked_outcome(params: &Value, questions: &[Question], answers: &[Vec<String>]) -> CardOutcome {
+    let secret: Vec<bool> = params["questions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|question| question["id"].is_string())
+        .map(|question| question["isSecret"] == true)
+        .collect();
+    let shown: Vec<Vec<String>> = answers
+        .iter()
+        .enumerate()
+        .map(|(index, values)| {
+            if secret.get(index).copied().unwrap_or(false) {
+                vec!["(hidden)".to_string()]
+            } else {
+                values.clone()
+            }
+        })
+        .collect();
+    questions::answered_outcome(questions, &shown)
+}
+
+/// Codex reply and card outcome for the user's answer to an interaction.
+fn interaction_reply(
+    kind: &InteractionKind,
+    params: &Value,
+    request: &SubmitAcpPermissionResponseRequest,
+) -> OpenBitFunResult<(Value, CardOutcome)> {
+    let declined = || {
+        (
+            json!({"action": "decline", "content": null, "_meta": null}),
+            CardOutcome::Failed("The user declined the request".into()),
+        )
+    };
+    Ok(match kind {
+        InteractionKind::UserInput { ids, questions } => {
+            match questions::decision(request, questions)? {
+                Decision::Answered(answers) => (
+                    user_input_reply(ids, &answers),
+                    masked_outcome(params, questions, &answers),
+                ),
+                Decision::Skipped => (
+                    user_input_reply(ids, &vec![vec![SKIPPED_NOTE.to_string()]; ids.len()]),
+                    CardOutcome::Failed("The user skipped the question".into()),
+                ),
+            }
+        }
+        InteractionKind::Elicitation(Elicitation::Confirm) => {
+            if questions::approved(request)? {
+                (
+                    json!({"action": "accept", "content": {}, "_meta": null}),
+                    CardOutcome::Completed {
+                        result: json!({"result": "Accepted"}),
+                        text: "Accepted".into(),
+                    },
+                )
+            } else {
+                declined()
+            }
+        }
+        InteractionKind::Elicitation(elicitation) => {
+            let questions = elicitation.questions();
+            match questions::decision(request, &questions)? {
+                Decision::Answered(answers) => (
+                    json!({"action": "accept", "content": elicitation.content(&answers)?, "_meta": null}),
+                    questions::answered_outcome(&questions, &answers),
+                ),
+                Decision::Skipped => declined(),
+            }
+        }
+    })
+}
+
+/// Settle a question/elicitation nobody will answer. MCP elicitations take
+/// `cancel`; `requestUserInput` has no cancel answer, so the request fails
+/// with an error instead of pretending the user chose nothing.
+async fn reply_cancelled(
+    process: &RpcProcess,
+    request_id: &Value,
+    method: &str,
+    kind: &InteractionKind,
+    reason: &str,
+) -> OpenBitFunResult<()> {
+    match kind {
+        InteractionKind::Elicitation(_) => {
+            process
+                .respond(
+                    request_id,
+                    json!({"action": "cancel", "content": null, "_meta": null}),
+                )
+                .await
+        }
+        InteractionKind::UserInput { .. } => {
+            log::debug!("Codex user input request cancelled: method={method}");
+            process
+                .respond_error(request_id, -32800, &format!("Request cancelled: {reason}"))
+                .await
+        }
     }
 }
 
