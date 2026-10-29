@@ -20,6 +20,7 @@ use tokio::sync::{oneshot, Mutex, Notify};
 
 use super::super::preferences::NativeAgentPreferences;
 use super::super::process::{Reader, Writer};
+use super::super::runtime_status::{self, NativeRuntimeStatus};
 use super::super::title::{self, TitleResolver};
 use super::super::{
     NativeAgentDriver, NativeAgentNotification, NativeAgentNotificationSink, NativeRollbackOutcome,
@@ -266,6 +267,10 @@ pub struct CodexNativeSession {
     config_defaults: std::sync::Mutex<ConfigDefaults>,
     notifier: Option<NativeAgentNotificationSink>,
     context_usage: std::sync::Mutex<Option<AcpSessionContextUsage>>,
+    /// Request retry and account rate-limit status (presentation only).
+    runtime_status: NativeRuntimeStatus,
+    /// A trailing flush of throttled command output is scheduled.
+    output_flush_scheduled: AtomicBool,
     history: std::sync::Mutex<CodexHistory>,
     last_activity: std::sync::Mutex<tokio::time::Instant>,
     title_resolver: std::sync::Mutex<TitleResolver>,
@@ -315,6 +320,8 @@ impl CodexNativeSession {
             config_defaults: std::sync::Mutex::new(ConfigDefaults::default()),
             notifier,
             context_usage: std::sync::Mutex::new(None),
+            runtime_status: NativeRuntimeStatus::default(),
+            output_flush_scheduled: AtomicBool::new(false),
             history: std::sync::Mutex::new(CodexHistory::default()),
             last_activity: std::sync::Mutex::new(tokio::time::Instant::now()),
             title_resolver: std::sync::Mutex::new(title::default_resolver()),
@@ -441,6 +448,7 @@ impl CodexNativeSession {
             context_usage: lock(&self.context_usage).clone(),
             capabilities: Some(super::CodexNativeDriver.capabilities()),
             background_tasks: Vec::new(),
+            rate_limits: self.runtime_status.rate_limits(),
         }
     }
 
@@ -1366,6 +1374,9 @@ impl CodexNativeSession {
             self.clear_approvals(projector.turn_id()).await;
             self.settled.notify_waiters();
         }
+        if let Some(update) = self.runtime_status.settle_retry() {
+            self.notify(update);
+        }
     }
 
     /// Settle approvals nobody will answer (turn ended, process gone).
@@ -1498,6 +1509,14 @@ impl CodexNativeSession {
                     .await;
             }
         }
+        if method == "account/rateLimits/updated" {
+            if let Some(update) =
+                runtime_status::codex_rate_limits(params, runtime_status::unix_ms())
+            {
+                self.notify(self.runtime_status.update_rate_limits(update));
+            }
+            return Ok(());
+        }
         if method == "serverRequest/resolved" {
             let request = &params["requestId"];
             self.approvals
@@ -1550,9 +1569,24 @@ impl CodexNativeSession {
             self.link_spawned(&mut state, &params["item"]).await?;
         }
         let projector = state.projector.as_mut().expect("active projector");
+        if method == "error" {
+            let attempt = self.runtime_status.next_attempt(projector.turn_id());
+            if let Some(retry) = runtime_status::codex_retry(params, attempt) {
+                let update = self.runtime_status.retry(projector.turn_id(), retry);
+                self.notify(update);
+            }
+        }
         let events = projector.consume(method, params);
         let finished = projector.is_finished();
+        let pending_output = projector.has_pending_output();
+        let settled = self.runtime_status.settle_retry_after(&events);
         self.enqueue(events).await?;
+        if let Some(update) = settled {
+            self.notify(update);
+        }
+        if pending_output && !finished {
+            self.schedule_output_flush();
+        }
         if finished {
             let projector = state.projector.take().expect("finished projector");
             state.codex_turn_id = None;
@@ -1562,6 +1596,32 @@ impl CodexNativeSession {
             self.settled.notify_waiters();
         }
         Ok(())
+    }
+
+    /// Trailing edge of the live-output throttle: emit output that arrived
+    /// inside the last window once no newer delta flushed it.
+    fn schedule_output_flush(&self) {
+        if self.output_flush_scheduled.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let Some(session) = self.weak_self.upgrade() else {
+            self.output_flush_scheduled.store(false, Ordering::Release);
+            return;
+        };
+        tokio::spawn(async move {
+            tokio::time::sleep(super::projector::OUTPUT_FLUSH_INTERVAL).await;
+            session
+                .output_flush_scheduled
+                .store(false, Ordering::Release);
+            let mut state = session.state.lock().await;
+            let Some(projector) = state.projector.as_mut() else {
+                return;
+            };
+            let events = projector.flush_output();
+            if let Err(error) = session.enqueue(events).await {
+                log::debug!("Codex live output flush failed: {error}");
+            }
+        });
     }
 
     fn publish_context_usage(&self, usage: &Value) {

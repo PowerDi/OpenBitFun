@@ -52,6 +52,14 @@ fn native_notification_sink(
                 "agentic://acp-background-tasks-updated",
                 serde_json::json!({"sessionId":session_id, "clientId":client_id, "tasks":tasks}),
             ),
+            NativeAgentNotification::RetryStatusChanged { turn_id, retry } => app_handle.emit(
+                "agentic://acp-retry-status-changed",
+                serde_json::json!({"sessionId":session_id, "clientId":client_id, "turnId":turn_id, "retry":retry}),
+            ),
+            NativeAgentNotification::RateLimitsUpdated(rate_limits) => app_handle.emit(
+                "agentic://acp-rate-limits-updated",
+                serde_json::json!({"sessionId":session_id, "clientId":client_id, "rateLimits":rate_limits}),
+            ),
         };
         if let Err(error) = result {
             log::warn!("Failed to publish native agent update for {session_id}: {error}");

@@ -22,6 +22,7 @@ use tokio::sync::{oneshot, Mutex, Notify};
 
 use super::super::preferences::NativeAgentPreferences;
 use super::super::process::{Reader, Writer};
+use super::super::runtime_status::{self, NativeRuntimeStatus};
 use super::super::title::{self, TitleResolver};
 use super::super::{
     NativeAgentDriver, NativeAgentNotification, NativeAgentNotificationSink, NativeBackgroundTask,
@@ -323,6 +324,8 @@ pub struct ClaudeNativeSession {
     history: std::sync::Mutex<ClaudeHistory>,
     /// Background shells/subagents; they outlive turns but not the process.
     background: std::sync::Mutex<ClaudeBackgroundTasks>,
+    /// API retry and account rate-limit status (presentation only).
+    runtime_status: NativeRuntimeStatus,
     /// Last process output or session request; drives the idle release.
     last_activity: std::sync::Mutex<tokio::time::Instant>,
     /// First-turn title generation; replaced in tests.
@@ -368,6 +371,7 @@ impl ClaudeNativeSession {
             context_usage: std::sync::Mutex::new(None),
             history: std::sync::Mutex::new(ClaudeHistory::default()),
             background: std::sync::Mutex::new(ClaudeBackgroundTasks::default()),
+            runtime_status: NativeRuntimeStatus::default(),
             last_activity: std::sync::Mutex::new(tokio::time::Instant::now()),
             title_resolver: std::sync::Mutex::new(title::default_resolver()),
         })
@@ -711,6 +715,7 @@ impl ClaudeNativeSession {
                 .clone(),
             capabilities: Some(super::ClaudeNativeDriver.capabilities()),
             background_tasks: self.background_tasks(),
+            rate_limits: self.runtime_status.rate_limits(),
         }
     }
 
@@ -1227,6 +1232,14 @@ impl ClaudeNativeSession {
         });
         let mut projector =
             ClaudeTurnProjector::new(&self.session_id, &turn_id, state.model.as_deref());
+        if let Some(usage) = self
+            .context_usage
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
+            projector.set_context_window(usage.size as usize);
+        }
         if manual_compaction {
             projector.mark_manual_compaction();
         }
@@ -1546,6 +1559,16 @@ impl ClaudeNativeSession {
         if !process.alive.load(Ordering::Acquire) {
             return Ok(());
         }
+        if let Some(update) = runtime_status::claude_rate_limit(&frame, unix_ms()) {
+            self.notify(self.runtime_status.update_rate_limits(update));
+            return Ok(());
+        }
+        if let Some(retry) = runtime_status::claude_retry(&frame) {
+            if let Some(turn_id) = state.projector.as_ref().map(|p| p.turn_id().to_string()) {
+                self.notify(self.runtime_status.retry(&turn_id, retry));
+            }
+            return Ok(());
+        }
         if frame["type"] == "system" {
             self.track_background(process, &frame);
             match frame["subtype"].as_str() {
@@ -1575,7 +1598,14 @@ impl ClaudeNativeSession {
                     }
                     return Ok(());
                 }
-                Some("task_progress" | "task_updated" | "background_tasks_changed") => {
+                Some("task_progress") => {
+                    // Background tracking ran above; also show it on the Task card.
+                    if let Some(projector) = state.projector.as_ref() {
+                        self.enqueue(projector.task_progress(&frame)).await?;
+                    }
+                    return Ok(());
+                }
+                Some("task_updated" | "background_tasks_changed") => {
                     return Ok(());
                 }
                 _ => {}
@@ -1632,7 +1662,11 @@ impl ClaudeNativeSession {
             if frame["type"] == "result" {
                 self.publish_result_usage(&events, projector.total_cost_usd());
             }
+            let settled = self.runtime_status.settle_retry_after(&events);
             self.enqueue(events).await?;
+            if let Some(update) = settled {
+                self.notify(update);
+            }
             // Background root responses sometimes end at message_stop without
             // a result; close that autonomous segment, but retain the process.
             if state.autonomous
@@ -2372,6 +2406,9 @@ impl ClaudeNativeSession {
             }
             self.clear_permissions(projector.turn_id()).await;
             self.settled.notify_waiters();
+        }
+        if let Some(update) = self.runtime_status.settle_retry() {
+            self.notify(update);
         }
         self.settle_children(&mut state, false).await;
     }
