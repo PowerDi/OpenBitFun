@@ -185,6 +185,15 @@ struct TurnState {
     process_id: Option<String>,
     /// Subagent transcripts keyed by the parent `Agent`/`Task` tool_use id.
     children: std::collections::HashMap<String, ChildTranscript>,
+    /// Claude `agent_id` (= task_id) to the `Agent` tool_use id that spawned
+    /// it. A resumed agent keeps that id on its sidechain frames, while the
+    /// resuming `SendMessage` gets its own task frames; both map back here.
+    agent_children: std::collections::HashMap<String, String>,
+    /// Later tool_use ids (`SendMessage`) aliased to the spawning tool_use id.
+    child_aliases: std::collections::HashMap<String, String>,
+    /// Next child turn index per spawning tool_use id, so a resumed agent
+    /// appends a turn instead of overwriting turn 0.
+    child_turns: std::collections::HashMap<String, usize>,
     tasks: ClaudeTasks,
     /// Steering messages written to stdin and not yet taken in by Claude.
     steers: Vec<PendingSteer>,
@@ -1523,9 +1532,13 @@ impl ClaudeNativeSession {
                     return Ok(());
                 }
                 Some("task_started") => {
-                    if let Some(tool_id) = frame["tool_use_id"].as_str() {
+                    // Background shells also carry a tool_use_id; only agents
+                    // get a child transcript.
+                    if let (Some(tool_id), true) =
+                        (frame["tool_use_id"].as_str(), is_agent_task(&frame))
+                    {
                         let tool_id = tool_id.to_string();
-                        self.ensure_child(&mut state, &tool_id, &frame).await?;
+                        self.start_child_task(&mut state, &tool_id, &frame).await?;
                     }
                     return Ok(());
                 }
@@ -1533,8 +1546,7 @@ impl ClaudeNativeSession {
                     if let Some(reason) = self.wake_reason(&frame) {
                         state.wake_reasons.push_back(reason);
                     }
-                    if let Some(tool_id) = frame["tool_use_id"].as_str() {
-                        let tool_id = tool_id.to_string();
+                    if let Some(tool_id) = Self::task_child_key(&state, &frame) {
                         let failed = frame["status"].as_str().is_some_and(|s| s != "completed");
                         self.finish_child(&mut state, &tool_id, failed, frame["summary"].as_str())
                             .await?;
@@ -1639,12 +1651,53 @@ impl ClaudeNativeSession {
         Ok(())
     }
 
-    /// Create the child session for a subagent and link it to the parent
-    /// `Task` card. Order mirrors the core agent: link first, then the turn.
+    /// Open the child for an agent `task_started`. A `SendMessage` that
+    /// resumes a known agent reopens that agent's child from its own card.
+    async fn start_child_task(
+        &self,
+        state: &mut TurnState,
+        tool_id: &str,
+        frame: &Value,
+    ) -> OpenBitFunResult<()> {
+        let key = frame["task_id"]
+            .as_str()
+            .and_then(|agent| state.agent_children.get(agent))
+            .or_else(|| state.child_aliases.get(tool_id))
+            .cloned()
+            .unwrap_or_else(|| tool_id.to_string());
+        if key != tool_id {
+            state.child_aliases.insert(tool_id.to_string(), key.clone());
+        }
+        self.ensure_child(state, &key, tool_id, frame).await
+    }
+
+    /// Child key of a `task_notification`: by agent id, else by tool_use id.
+    fn task_child_key(state: &TurnState, frame: &Value) -> Option<String> {
+        if let Some(key) = frame["task_id"]
+            .as_str()
+            .and_then(|agent| state.agent_children.get(agent))
+            .filter(|key| state.children.contains_key(*key))
+        {
+            return Some(key.clone());
+        }
+        let tool_id = frame["tool_use_id"].as_str()?;
+        Some(
+            state
+                .child_aliases
+                .get(tool_id)
+                .cloned()
+                .unwrap_or_else(|| tool_id.to_string()),
+        )
+    }
+
+    /// Create (or reopen) the child session keyed by the spawning tool_use id
+    /// and link it to the `link_tool_id` card. Order mirrors the core agent:
+    /// link first, then the turn.
     async fn ensure_child(
         &self,
         state: &mut TurnState,
         tool_id: &str,
+        link_tool_id: &str,
         info: &Value,
     ) -> OpenBitFunResult<()> {
         if state.children.contains_key(tool_id) {
@@ -1657,6 +1710,23 @@ impl ClaudeNativeSession {
         // Path-safe and stable per tool call (session ids may become file names).
         let session_id = format!("{}-subagent-{tool_id}", self.session_id);
         let turn_id = uuid::Uuid::new_v4().to_string();
+        let turn_index = match state.child_turns.get(tool_id) {
+            Some(index) => *index,
+            None => self.persisted_child_turns(&session_id).await,
+        };
+        state
+            .child_turns
+            .insert(tool_id.to_string(), turn_index + 1);
+        let agent_id = info["task_id"]
+            .as_str()
+            .or_else(|| info["agent_id"].as_str())
+            .map(str::to_string);
+        if let Some(agent) = &agent_id {
+            state
+                .agent_children
+                .entry(agent.clone())
+                .or_insert_with(|| tool_id.to_string());
+        }
         let prompt = info["prompt"].as_str().unwrap_or_default().to_string();
         let subagent_type = info["subagent_type"].as_str().map(str::to_string);
         // The frontend persists child turns and restores the child from disk,
@@ -1684,7 +1754,7 @@ impl ClaudeNativeSession {
                 subagent_dialog_turn_id: turn_id.clone(),
                 parent_session_id: self.session_id.clone(),
                 parent_dialog_turn_id: parent_turn_id,
-                parent_tool_call_id: tool_id.to_string(),
+                parent_tool_call_id: link_tool_id.to_string(),
                 agent_type: subagent_type,
                 model_id: None,
                 focused_review_display_label: None,
@@ -1693,7 +1763,7 @@ impl ClaudeNativeSession {
             AgenticEvent::DialogTurnStarted {
                 session_id: session_id.clone(),
                 turn_id: turn_id.clone(),
-                turn_index: 0,
+                turn_index,
                 user_input: prompt,
                 original_user_input: None,
                 user_message_metadata: None,
@@ -1708,13 +1778,24 @@ impl ClaudeNativeSession {
             ChildTranscript {
                 session_id,
                 projector,
-                agent_id: info["task_id"]
-                    .as_str()
-                    .or_else(|| info["agent_id"].as_str())
-                    .map(str::to_string),
+                agent_id,
             },
         );
         Ok(())
+    }
+
+    /// Turns already saved for a child, e.g. one reopened after a restart.
+    async fn persisted_child_turns(&self, child_session_id: &str) -> usize {
+        let Some((persistence, storage)) = &self.persistence else {
+            return 0;
+        };
+        match persistence.load_metadata(storage, child_session_id).await {
+            Ok(metadata) => metadata.map_or(0, |metadata| metadata.turn_count),
+            Err(error) => {
+                log::warn!("Claude subagent metadata read failed: {error}");
+                0
+            }
+        }
     }
 
     async fn persist_child_record(
@@ -1768,15 +1849,20 @@ impl ClaudeNativeSession {
         tool_id: &str,
         frame: &Value,
     ) -> OpenBitFunResult<()> {
-        if !state.children.contains_key(tool_id) {
+        let tool_id = state
+            .child_aliases
+            .get(tool_id)
+            .cloned()
+            .unwrap_or_else(|| tool_id.to_string());
+        if !state.children.contains_key(&tool_id) {
             // Synchronous subagents may stream before (or without) task_started.
             let info = json!({"subagent_type": frame["subagent_type"],
                 "description": frame["task_description"],
                 "prompt": frame["task_description"],
                 "agent_id": frame["agent_id"]});
-            self.ensure_child(state, tool_id, &info).await?;
+            self.ensure_child(state, &tool_id, &tool_id, &info).await?;
         }
-        if let Some(child) = state.children.get_mut(tool_id) {
+        if let Some(child) = state.children.get_mut(&tool_id) {
             let events = child.projector.consume(frame);
             self.enqueue(events).await?;
         }
@@ -2375,6 +2461,14 @@ fn unix_ms() -> u64 {
 
 /// Task id of a `<task-notification>` the CLI injected into the main
 /// conversation as a user message.
+/// A `task_started` for a subagent (not a background shell or other task).
+fn is_agent_task(frame: &Value) -> bool {
+    match frame["task_type"].as_str() {
+        Some(task_type) => task_type == "local_agent",
+        None => frame["subagent_type"].is_string(),
+    }
+}
+
 fn injected_notification_task(frame: &Value) -> Option<String> {
     if frame["type"] != "user" || !frame.get("parent_tool_use_id").is_none_or(Value::is_null) {
         return None;
