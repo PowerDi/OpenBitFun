@@ -220,6 +220,7 @@ async fn run_inner(store: &DispatchStore, job_id: &str) -> Result<()> {
                 selection: AgentSessionModelSelection {
                     model_id: model,
                     reasoning_preset,
+                    routing_mode: None,
                 },
             })
             .await

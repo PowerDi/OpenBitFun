@@ -55,6 +55,24 @@ Set `OPENBITFUN_E2E_FRONTEND_DIR` to a completed build directory with
 The runner also snapshots the executable; `OPENBITFUN_E2E_DESKTOP_BINARY` can
 select a freshly linked artifact when a development instance locks the default exe.
 
+For pet/bubble main-window activation after opening an embedded browser, build
+Desktop and run `node tests/e2e/scripts/run-browser-window-activation.mjs`.
+It uses completed frontend assets and isolated storage to exercise native window
+activation, focus, tray hiding, geometry persistence, main-view command routing
+and remote child-view ACL rejection with multiple browser children. The same
+binary/frontend snapshot overrides above are supported. This is native command
+coverage, not a pet-pointer or remote-session integration test.
+
+For conversation-owned browser pages, build Desktop and Web UI and run
+`node tests/e2e/scripts/run-browser-session-isolation.mjs`. The fixture uses
+isolated storage and loopback model/page servers. It drives the actual session
+controls and Agent tool dispatcher to check background opening, concurrent reads,
+native visibility and document preservation across repeated session switches.
+Inspect its `result.json`; local native coverage does not prove remote behavior.
+Full visibility coverage needs an unlocked desktop. For a locked/headless display,
+`OPENBITFUN_E2E_BACKGROUND_ONLY=1` runs background execution and panel binding;
+the report explicitly excludes foreground native visibility in that mode.
+
 Markdown editor browser interaction tests (no desktop binary required):
 
 ```bash
@@ -137,3 +155,20 @@ after overlay rendering settles, not from a recreated mock page.
 The runner records the copied binary SHA-256 and frontend revision, then removes
 only its copied binary/frontend after stopping the app. Logs, result and the
 isolated profile remain; set `OPENBITFUN_E2E_KEEP_SNAPSHOT=1` to retain the copies.
+
+For workspace HTML preview resource loading, build Desktop and Web UI, then run:
+
+```bash
+node tests/e2e/scripts/run-html-preview.mjs
+```
+
+The native browser fixture uses isolated product storage and completed binary /
+frontend snapshots. It verifies nested build output with root-relative CSS,
+relative JavaScript modules and dynamic imports, parent-relative styles, images,
+encoded filenames, and reloading one preview after opening another. Inspect its
+`result.json`. It also opens a nested site index at `/`, follows a real page link,
+reloads a history route, loads a deep link with a query, and verifies images/modules
+plus a true 404 for a missing image. Views are shown and an image entrance
+animation must finish, so decoding in a hidden view cannot satisfy the check.
+This is native local browser coverage. The services-integrations
+OpenSSH fixture separately covers the SSH/SFTP resource provider.

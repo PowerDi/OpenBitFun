@@ -30,11 +30,11 @@ import {
   type AcpClientInfo,
 } from '@/infrastructure/api/service-api/ACPClientAPI';
 import { useNotification } from '@/shared/notification-system';
+import { ProductBrandIcon } from '@/shared/ui/ProductBrandIcon';
 import { usePeerDeviceModeOptional } from '@/infrastructure/peer-device/peerDeviceContextState';
 import {
   buildEcosystemProductRuntimes,
   totalDiscoveredAssets,
-  type EcosystemProductId,
   type EcosystemProductRuntime,
 } from './ecosystemCompatibilityModel';
 import ExternalAgentContent, { type ExternalAgentContentHandle, type ExternalAgentContentActionState } from './ExternalAgentContent';
@@ -48,40 +48,6 @@ import './EcosystemCompatibilityScene.scss';
 const AcpAgentsConfig = lazyWithRecovery(
   () => import('@/infrastructure/config/components/AcpAgentsConfig'),
 );
-const PRODUCT_ICON_SOURCES: Record<EcosystemProductId, string> = {
-  'claude-code': '/assets/ecosystem-compatibility/claude-code.svg',
-  codex: '/assets/ecosystem-compatibility/codex.svg',
-  zcode: '/assets/ecosystem-compatibility/zcode.png',
-  pi: '/assets/ecosystem-compatibility/pi.svg',
-  dsh: '/assets/ecosystem-compatibility/deepseek-harness.svg',
-  opencode: '/assets/ecosystem-compatibility/opencode.svg',
-  cursor: '/assets/ecosystem-compatibility/cursor.svg',
-};
-
-function EcosystemProductIcon({ productId, size }: {
-  productId: EcosystemProductId;
-  size?: number;
-}) {
-  const source = PRODUCT_ICON_SOURCES[productId];
-  if (productId === 'cursor') return (
-    <span
-      className="ecosystem-compatibility__brand-image ecosystem-compatibility__brand-image--monochrome"
-      data-product-logo={productId}
-      aria-hidden="true"
-      style={{ width: size ?? '100%', height: size ?? '100%', maskImage: `url("${source}")` }}
-    />
-  );
-  return (
-    <img
-      className="ecosystem-compatibility__brand-image"
-      src={source}
-      alt=""
-      width={size}
-      height={size}
-      draggable={false}
-    />
-  );
-}
 
 type LoadIssue = 'externalSources' | 'acpClients';
 interface AcpSubagentDraft {
@@ -558,7 +524,7 @@ const EcosystemCompatibilityScene: React.FC = () => {
                 }}
                 options={productRuntimes.map((runtime) => ({
                   value: runtime.spec.id,
-                  icon: <EcosystemProductIcon productId={runtime.spec.id} />,
+                  icon: <ProductBrandIcon productId={runtime.spec.id} size="100%" />,
                   label: (
                     <span
                       data-product-id={runtime.spec.id}
@@ -585,7 +551,7 @@ const EcosystemCompatibilityScene: React.FC = () => {
               <div className="ecosystem-compatibility__header-top">
                 <div className="ecosystem-compatibility__product-identity">
                   <span className="ecosystem-compatibility__product-logo" aria-hidden="true">
-                    <EcosystemProductIcon productId={selectedRuntime.spec.id} size={38} />
+                    <ProductBrandIcon productId={selectedRuntime.spec.id} size={38} />
                   </span>
                   <div className="ecosystem-compatibility__header-details">
                     <div className="ecosystem-compatibility__product-title-row">

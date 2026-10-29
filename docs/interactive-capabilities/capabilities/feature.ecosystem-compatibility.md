@@ -44,8 +44,8 @@ Inspect external AI content and status, import supported Skills, MCP, Hooks, and
 
 1. 打开“外部导入”并选择应用
    Open External Import and choose an app
-2. 在左侧导航搜索框上方切换自动发现，悬停查看说明；关闭后保留结果，也可手动刷新
-   Toggle automatic discovery above the sidebar search and hover for details; pausing retains results and manual refresh remains available
+2. 在左侧导航搜索框上方切换自动发现，悬停查看说明；关闭后立即隐藏对应来源的跟随会话，已分叉副本继续保留
+   Toggle automatic discovery above the sidebar search and hover for details; disabling immediately hides source-following sessions while local forks remain visible
 3. 查看分类状态，打开分类弹窗浏览、搜索并选择内容
    Inspect category status, then open a category dialog to browse, search, and select content
 4. 审阅可导入项目并确认创建副本；Command、Tool、子智能体按已有兼容功能使用

@@ -72,10 +72,6 @@
     "forward": "前進",
     "backShortcut": "後退 (Alt+←)",
     "forwardShortcut": "前進 (Alt+→)",
-    "programmersDay": {
-      "tooltip": "2¹⁰ = 1024 · 程式設計師節快樂，願你今天零 Bug",
-      "ariaLabel": "1024 程式設計師節快樂"
-    },
     "items": {
       "personalOverview": "首頁",
       "sessions": "會話",
@@ -196,7 +192,9 @@
         "activationFailed": "無法開啟該結果",
         "remoteFileSearchUnavailable": "遠端項目 {{workspace}} 暫不支援檔案搜尋",
         "sessionUnavailable": "該會話已不可用"
-      }
+      },
+      "diagnosticTarget": "搜尋裝置：{{host}}",
+      "retrySource": "重試此來源"
     },
     "displayModes": {
       "pro": "專業模式",
@@ -495,6 +493,9 @@
       "allSourceAgents": "全部 Agent",
       "sourceAgentLabel": "來自 {{name}} 的工作階段",
       "discoveryPartial": "部分外部工作階段無法探索，既有工作階段仍可使用。",
+      "discoveryWarningTitle": "外部工作階段探索",
+      "discoveryReadFailed": "部分 {{source}} 工作階段記錄無法讀取，既有工作階段仍可使用。",
+      "discoveryWorkspaceUnresolved": "部分 {{source}} 工作階段無法對應到工作區，既有工作階段仍可使用。",
       "discoveringExternal": "正在探索外部工作階段…"
     },
     "scheduledJobs": {
@@ -527,7 +528,7 @@
         "workspacePath": "請輸入工作區路徑",
         "session": "請選擇或輸入會話 ID",
         "optionalSession": "留空則建立新會話後執行",
-        "agentType": "例如：Standard、Cowork 或 Claw",
+        "agentType": "例如：$t(shared:agents.Standard)、$t(shared:agents.Cowork) 或 $t(shared:agents.Claw)",
         "name": "例如：每日全球新聞簡報",
         "anchorMs": "留空則使用建立時刻",
         "timezone": "例如：Asia/Shanghai",
@@ -802,7 +803,8 @@
     "hostDiscoveryFailed": "無法載入主機，請重試。",
     "existingHostRequired": "請選擇現有的 SSH 主機。",
     "sshHost": "SSH 主機",
-    "sourceUnsupported": "目前主機不支援此環境。"
+    "sourceUnsupported": "目前主機不支援此環境。",
+    "checkingWsl": "正在檢查目前主機的 WSL 支援…"
   },
   "newProject": {
     "title": "建立專案",
@@ -832,6 +834,7 @@
     "emptyProjectHint": "儲存至目前裝置：",
     "invalidDirectoryName": "請輸入單一資料夾名稱，不可包含斜線，也不可為 . 或 ..",
     "sameHostRequired": "同一專案的資料夾必須位於同一台主機。",
+    "assistantFolderUnavailable": "此資料夾屬於助理工作區，無法新增為專案。請選擇其他資料夾，或移除此資料夾並輸入名稱以建立新專案。",
     "remoteUnavailable": "目前介面不支援選擇遠端資料夾。",
     "remoteConnectionChanged": "遠端連線已變更，請重新選擇專案資料夾。",
     "defaultDirectoryUnavailable": "目標裝置未提供使用者目錄，請更新或重新連線至該裝置後重試。",
@@ -1684,6 +1687,7 @@
     "panelView": "面板視圖"
   },
   "sceneBar": {
+    "recentSessions": "最近開啟的工作階段",
     "tabsLabel": "場景標籤頁",
     "scrollPrevious": "向左捲動標籤頁",
     "scrollNext": "向右捲動標籤頁",
@@ -2067,6 +2071,7 @@
       "targetIsPullRequest": "此項目是提取請求，請以提取請求開啟，而非以問題開啟。"
     },
     "messages": {
+      "hostUnsupported": "目前裝置不支援內建 PR 檢視，請使用系統瀏覽器開啟 PR 連結。",
       "noWorkspace": "沒有可用的作用中工作區。",
       "unsupportedLink": "此連結不是支援的提取請求連結。",
       "detailsFailed": "載入提取請求詳細資料失敗。",

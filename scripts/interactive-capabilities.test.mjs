@@ -229,6 +229,7 @@ test('every product Agent tool is mapped to a user capability or explicitly clas
   const byId = new Map(source.capabilities.map((capability) => [capability.id, capability]));
   const item = (capabilityId, itemId) => byId.get(capabilityId)?.items
     .find(({ id }) => id === itemId);
+  assert.deepEqual(item('feature.ai-assistant', 'image-generation').control.tools, ['generate_image']);
   assert.ok(item('feature.remote-workspaces', 'remote-files').control.tools.includes('Read'));
   assert.deepEqual(item('feature.remote-workspaces', 'port-forwarding').control.tools, ['PortForward']);
   assert.ok(item('setting.tools.mcp', 'resources').control.tools.includes('ReadMCPResource'));

@@ -42,6 +42,7 @@ import { createLogger } from '@/shared/utils/logger';
 import { useInstalledSkills } from './hooks/useInstalledSkills';
 import { useSkillsPagination } from './hooks/useSkillsPagination';
 import { useSkillsPageLayout } from './hooks/useSkillsPageLayout';
+import { SkillScanDiagnostics } from './components/SkillScanDiagnostics';
 import { SkillsPagination } from './components/SkillsPagination';
 import { useSkillMarket } from './hooks/useSkillMarket';
 import { SkillMarketSettings } from '@/infrastructure/config/components/SkillMarketSettings';
@@ -420,6 +421,18 @@ const SkillsScene: React.FC = () => {
             {activeTab === 'installed' && (
               <div className="skills-installed" id="skills-panel-installed" role="region" aria-label={t('installed.titleAll')} data-openbitfun-scene="skills" data-openbitfun-part="installed">
                 <div className="skills-main" data-openbitfun-scene="skills" data-openbitfun-part="main">
+                  {desktopConfigAvailable && (
+                    <SkillScanDiagnostics
+                      key={installed.catalogContextKey}
+                      diagnostics={installed.diagnostics}
+                      diagnosticsAvailable={installed.diagnosticsAvailable}
+                      loading={installed.loading}
+                      canRevealPath={canRevealSkillPath}
+                      onRetry={() => { void installed.loadSkills(true); }}
+                      onCopyPath={handleCopySkillPath}
+                      onRevealPath={handleRevealSkillPath}
+                    />
+                  )}
                   {!desktopConfigAvailable ? (
                     <div className="skills-main__empty" data-testid="skills-management-unavailable" data-openbitfun-scene="skills" data-openbitfun-part="empty">
                       <Icon name="book-open" size="lg" />

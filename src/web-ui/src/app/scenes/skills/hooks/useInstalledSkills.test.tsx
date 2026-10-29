@@ -8,6 +8,7 @@ import { globalEventBus } from '@/infrastructure/event-bus';
 import { useInstalledSkills } from './useInstalledSkills';
 import type { InstalledFilter } from '../skillsSceneStore';
 
+const workspaceMock = vi.hoisted(() => ({ id: 'workspace-id' }));
 const getSkillConfigsMock = vi.hoisted(() => vi.fn());
 const translateMock = vi.hoisted(() => (key: string, options?: { field?: string }) => options?.field ? `${key}:${options.field}` : key);
 const diagnosticsMock = vi.hoisted(() => ({
@@ -42,7 +43,7 @@ vi.mock('@/infrastructure/api', () => ({
 }));
 vi.mock('@/infrastructure/hooks/useWorkspaceManagerSync', () => ({
   useWorkspaceManagerSync: () => ({
-    workspace: { id: 'workspace-id' },
+    workspace: workspaceMock,
     workspacePath: 'D:/workspace/project',
     hasWorkspace: true,
     isRemoteWorkspace: false,
@@ -91,6 +92,7 @@ describe('useInstalledSkills', () => {
     notificationMocks.info.mockReset();
     notificationMocks.error.mockReset();
     currentInstalled = null;
+    workspaceMock.id = 'workspace-id';
     diagnosticsMock.items = [];
     diagnosticsMock.available = true;
   });
@@ -113,6 +115,33 @@ describe('useInstalledSkills', () => {
       title: 'nav.title',
       metadata: { diagnostics: '/skills/bad/SKILL.md: missing description' },
     });
+  });
+
+  it('clears repaired diagnostics after a forced rescan and keeps healthy skills', async () => {
+    const good = { key: 'good', name: 'good', sourceId: 'openbitfun', level: 'user', path: '/skills/good' };
+    getSkillConfigsMock.mockResolvedValue([good]);
+    diagnosticsMock.items = [{ path: '/skills/bad', sourceId: 'codex', message: 'invalid metadata' }];
+    await act(async () => root.render(<Harness enabled />));
+    diagnosticsMock.items = [];
+    getSkillConfigsMock.mockResolvedValue([good, { ...good, key: 'repaired', name: 'repaired' }]);
+    await act(async () => { await currentInstalled?.loadSkills(true); });
+    expect(getSkillConfigsMock).toHaveBeenLastCalledWith({ forceRefresh: true, workspaceId: 'workspace-id' });
+    expect(currentInstalled?.diagnostics).toEqual([]);
+    expect(currentInstalled?.skills.map(skill => skill.key)).toEqual(['good', 'repaired']);
+  });
+
+  it('hides the previous workspace catalog while the new workspace scan is pending', async () => {
+    getSkillConfigsMock.mockResolvedValue([{ key: 'old', name: 'old', level: 'user', path: '/old/private' }]);
+    diagnosticsMock.items = [{ path: '/old/private/bad', sourceId: 'codex', message: 'invalid metadata' }];
+    await act(async () => root.render(<Harness enabled />));
+    getSkillConfigsMock.mockReturnValue(new Promise(() => {}));
+    workspaceMock.id = 'different-workspace';
+    await act(async () => root.render(<Harness enabled />));
+    expect(currentInstalled?.skills).toEqual([]);
+    expect(currentInstalled?.filteredSkills).toEqual([]);
+    expect(currentInstalled?.diagnostics).toEqual([]);
+    expect(currentInstalled?.catalogReady).toBe(false);
+    expect(currentInstalled?.counts.all).toBe(0);
   });
 
   it('reports unsupported skill capabilities without claiming a scan failure', async () => {

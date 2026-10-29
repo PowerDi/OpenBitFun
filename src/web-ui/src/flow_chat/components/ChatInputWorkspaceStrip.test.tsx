@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ChatInputWorkspaceStrip } from './ChatInputWorkspaceStrip';
 import type { WorkspaceInfo } from '@/shared/types';
+import { formatDuration } from '@/shared/utils/format';
 
 const mocks = vi.hoisted(() => ({
   refreshBasic: vi.fn(async () => undefined),
@@ -1375,7 +1376,7 @@ describe('ChatInputWorkspaceStrip git refresh behavior', () => {
     expect(control?.getAttribute('aria-haspopup')).toBe('dialog');
     expect(control?.getAttribute('aria-label')).toBe('Open thread goal');
     expect(control?.textContent).toContain('Active');
-    expect(control?.textContent).toContain('1h 30m');
+    expect(control?.textContent).toContain(formatDuration(5_400_000));
     // The objective is long-form, so it stays in the tooltip rather than
     // competing with the state for the width of the track.
     expect(control?.textContent).not.toContain('Ship the goal entry');
@@ -1511,13 +1512,13 @@ describe('ChatInputWorkspaceStrip git refresh behavior', () => {
         );
       });
 
-      expect(readout()).toContain('5s');
+      expect(readout()).toContain(formatDuration(5_000));
 
       act(() => {
         vi.advanceTimersByTime(3_000);
       });
 
-      expect(readout()).toContain('8s');
+      expect(readout()).toContain(formatDuration(8_000));
     } finally {
       vi.useRealTimers();
     }
@@ -1551,7 +1552,7 @@ describe('ChatInputWorkspaceStrip git refresh behavior', () => {
         vi.advanceTimersByTime(3_000);
       });
 
-      expect(readout()).toContain('5s');
+      expect(readout()).toContain(formatDuration(5_000));
     } finally {
       vi.useRealTimers();
     }

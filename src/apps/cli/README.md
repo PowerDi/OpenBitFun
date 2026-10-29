@@ -94,6 +94,23 @@ is not automatic restart/recovery. Review the saved session and explicitly resum
 after an interruption. Completion still depends on the model verifying the user's
 requirements against real evidence; the runtime does not prove arbitrary tasks.
 
+### Scheduled tasks
+
+The Agent can create, list, edit, remove, and run scheduled tasks through the
+`Cron` tool in ordinary interactive CLI sessions and Peer Device sessions hosted
+by that CLI, including the always-on `daemon run` host. The executing host owns
+the schedule; a remote controller does not need to stay connected. Existing
+workspace and permission rules still apply.
+
+Keep the CLI host running until tasks are due. Schedules survive process restarts,
+and due tasks resume when a scheduling host starts again. `exec` also exposes
+`Cron`, but exits after its turn; it does not stay alive to wait for future tasks.
+Shared TUI (`--shared`), ACP, and the stdio `server` host do not start a scheduler.
+
+Only one process schedules tasks for a shared user data directory. If another
+CLI or Desktop instance already owns scheduling, this instance can list tasks
+but cannot edit or manually run them. It takes over after the owner exits.
+
 ### Prompt continuity
 
 Unsent drafts stay with their session while the TUI remains open. Switching,

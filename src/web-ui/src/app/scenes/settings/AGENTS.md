@@ -71,6 +71,20 @@ pnpm --dir src/web-ui run test:run src/app/scenes/settings/pages/ai/subscription
 These tests cover product grouping, regional selection and account isolation in
 local DOM/fixtures; they do not exercise a real remote host or provider login.
 
+Subscription import presents provider cards with their own sign-in buttons and
+in-card region selection; existing account management is opened from account
+entries. Starting sign-in replaces the picker with the selected provider's
+authorization tracker; cancel waits for host cleanup before returning to the
+picker, and failed attempts can retry in the same slot or return.
+For picker loading, regional sign-in, retry/cancel,
+and the separate account-management route, run:
+
+```bash
+pnpm --dir src/web-ui run test:run src/app/scenes/settings/pages/ai/ModelSettingsPage.loading.test.tsx src/app/scenes/settings/pages/ai/ModelSettingsPage.presentation.test.ts
+```
+
+These DOM fixtures do not establish visual fidelity or live remote sign-in.
+
 Subscription allowance panels use `useSubscriptionQuota` and the typed host API.
 Keep observations scoped to device activation and exact account slot; gate peers
 on `subscription_quota_v1`, with an explicit unsupported state and no local
@@ -84,6 +98,16 @@ pnpm --dir src/web-ui run test:run src/app/scenes/settings/pages/ai/Subscription
 
 These fixtures verify data presentation and activation/account isolation; they
 do not establish rendered visual fidelity or physical remote-host behavior.
+
+For the three-row subscription capsule summary, its always-visible More entry,
+resize/focus behavior, and provider-filtered account browser:
+
+```bash
+pnpm --dir src/web-ui run test:run src/app/scenes/settings/pages/ai/SubscriptionCapsuleList.test.tsx src/app/scenes/settings/pages/ai/ModelSettingsPage.loading.test.tsx
+```
+
+These DOM fixtures use measured-width stubs and simulated device activation;
+they do not establish native rendering or live remote behavior.
 
 Service headings use the provider catalog; account rows use exact host-owned slots
 from `list_subscription_account_instances`. Preserve retained signed-out identities,

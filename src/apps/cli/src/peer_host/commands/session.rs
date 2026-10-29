@@ -765,6 +765,33 @@ pub(crate) async fn get_session_thread_goal(
     Ok(json!({ "goal": goal }))
 }
 
+pub(crate) async fn get_model_routing_status(
+    state: &PeerHostState,
+    args: &Value,
+) -> Result<Value, String> {
+    let request = request_value(args);
+    let session = if let Some(id) = optional_string(request, "sessionId") {
+        ensure_coordinator_session(state, args).await?;
+        Some(
+            state
+                .compatibility
+                .loaded_session_snapshot(&id)
+                .map_err(|error| error.to_string())?
+                .ok_or("Session not found")?,
+        )
+    } else {
+        None
+    };
+    let status =
+        openbitfun_core::agentic::execution::round_model_routing::configuration::session_status(
+            session.as_ref(),
+            optional_bool(request, "probe").unwrap_or(false),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    serde_json::to_value(status).map_err(|error| error.to_string())
+}
+
 pub(crate) async fn update_session_model(
     state: &PeerHostState,
     args: &Value,
@@ -772,6 +799,7 @@ pub(crate) async fn update_session_model(
     let request = request_value(args);
     let session_id = validated_session_id(request)?;
     let model_name = get_string(request, "modelName")?;
+    let routing_mode = optional_string(request, "routingMode");
     let reasoning_preset = optional_string(request, "reasoningPreset")
         .map(|preset| preset.trim().to_string())
         .filter(|preset| !preset.is_empty());
@@ -780,11 +808,12 @@ pub(crate) async fn update_session_model(
         let storage = resolved_session_storage_path(state, request).await?;
         state
             .compatibility
-            .update_session_model_selection_from_storage_path(
+            .update_session_model_selection_from_storage_path_with_routing(
                 &storage,
                 &session_id,
                 &model_name,
                 reasoning_preset.as_deref(),
+                routing_mode.as_deref(),
                 optional_bool(request, "includeInternal").unwrap_or(false),
             )
             .await
@@ -798,6 +827,7 @@ pub(crate) async fn update_session_model(
             selection: AgentSessionModelSelection {
                 model_id: model_name,
                 reasoning_preset,
+                routing_mode,
             },
         })
         .await

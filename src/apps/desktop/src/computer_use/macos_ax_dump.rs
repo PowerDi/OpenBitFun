@@ -18,6 +18,12 @@
 #![allow(dead_code)]
 
 use super::ax_snapshot_digest::compute_digest;
+use super::macos_ax_dispatch::{
+    copy_action_names as AXUIElementCopyActionNames,
+    copy_attribute_value as AXUIElementCopyAttributeValue,
+    copy_element_at_position as AXUIElementCopyElementAtPosition,
+    set_attribute_value as AXUIElementSetAttributeValue,
+};
 use core_foundation::array::{CFArray, CFArrayRef};
 use core_foundation::base::{CFGetTypeID, CFTypeRef, TCFType};
 use core_foundation::boolean::{CFBoolean, CFBooleanGetTypeID, CFBooleanRef};
@@ -44,23 +50,6 @@ unsafe extern "C" {
     fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
     fn AXUIElementGetPid(element: AXUIElementRef, pid: *mut i32) -> i32;
     fn AXUIElementSetMessagingTimeout(element: AXUIElementRef, timeout: f32) -> i32;
-    fn AXUIElementCopyElementAtPosition(
-        element: AXUIElementRef,
-        x: f32,
-        y: f32,
-        result: *mut AXUIElementRef,
-    ) -> i32;
-    fn AXUIElementCopyAttributeValue(
-        element: AXUIElementRef,
-        attribute: CFStringRef,
-        value: *mut CFTypeRef,
-    ) -> i32;
-    fn AXUIElementCopyActionNames(element: AXUIElementRef, names: *mut CFArrayRef) -> i32;
-    fn AXUIElementSetAttributeValue(
-        element: AXUIElementRef,
-        attribute: CFStringRef,
-        value: CFTypeRef,
-    ) -> i32;
     fn AXValueGetType(value: AXValueRef) -> u32;
     fn AXValueGetValue(value: AXValueRef, the_type: u32, ptr: *mut c_void) -> bool;
     fn AXUIElementGetTypeID() -> CFTypeID;

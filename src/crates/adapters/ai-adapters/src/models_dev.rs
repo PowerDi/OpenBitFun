@@ -25,6 +25,13 @@ pub struct ModelsDevCatalog {
     providers: BTreeMap<String, ModelsDevProvider>,
 }
 
+/// Protocol-only manual controls are not a declaration that a particular model
+/// accepts them. This uses host-side compiler metadata before serialization.
+pub fn is_protocol_generic_reasoning_preset(preset: &ReasoningPresetDescriptor) -> bool {
+    preset.source == ReasoningPresetSource::AdapterFallback
+        && crate::providers::shared::is_generic_reasoning_preset(preset)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct ModelsDevProvider {
     id: String,
@@ -1324,7 +1331,8 @@ fn display_label(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        project_reasoning_catalog, project_reasoning_catalog_with_limit,
+        is_protocol_generic_reasoning_preset, project_reasoning_catalog,
+        project_reasoning_catalog_with_limit,
         project_reasoning_catalog_with_limit_and_auto_binding, ModelsDevCatalog,
     };
     use crate::providers::shared::GENERIC_REASONING_PROVIDER_ID;
@@ -1637,6 +1645,10 @@ mod tests {
             .presets
             .iter()
             .all(|preset| preset.source == ReasoningPresetSource::AdapterFallback));
+        assert!(projection
+            .presets
+            .iter()
+            .all(|preset| !is_protocol_generic_reasoning_preset(preset)));
     }
 
     #[test]
@@ -2047,6 +2059,10 @@ mod tests {
                 preset.source == ReasoningPresetSource::AdapterFallback
                     && preset.execution_provider.as_deref() == Some(GENERIC_REASONING_PROVIDER_ID)
             }));
+            assert!(projection
+                .presets
+                .iter()
+                .all(is_protocol_generic_reasoning_preset));
         }
     }
 

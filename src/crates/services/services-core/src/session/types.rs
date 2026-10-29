@@ -766,6 +766,8 @@ pub struct ModelRoundData {
     pub model_config_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_model_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<openbitfun_events::agentic::ModelRoutingDecision>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -784,6 +786,9 @@ pub struct ModelRoundData {
         alias = "stream_duration_ms"
     )]
     pub stream_duration_ms: Option<u64>,
+    /// Request start to first effective output for the accepted model attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "ttft_ms")]
+    pub ttft_ms: Option<u64>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -1733,6 +1738,15 @@ mod tests {
         assert_eq!(legacy_round.duration_ms, None);
         assert_eq!(legacy_round.model_config_id, None);
         assert_eq!(legacy_round.first_chunk_ms, None);
+        assert_eq!(legacy_round.ttft_ms, None);
+        let legacy_encoded = serde_json::to_value(&legacy_round).unwrap();
+        assert!(legacy_encoded.get("ttftMs").is_none());
+        assert_eq!(
+            serde_json::from_value::<ModelRoundData>(legacy_encoded)
+                .unwrap()
+                .ttft_ms,
+            None
+        );
 
         let round_payload = serde_json::json!({
             "id": "round-1",
@@ -1751,6 +1765,7 @@ mod tests {
             "firstChunkMs": 10,
             "firstVisibleOutputMs": 12,
             "streamDurationMs": 90,
+            "ttftMs": 35,
             "attemptCount": 2,
             "failureCategory": "rate_limit",
             "tokenDetails": { "reasoningTokens": 7 },
@@ -1764,6 +1779,7 @@ mod tests {
         assert_eq!(round.model_config_id.as_deref(), Some("model-config-a"));
         assert_eq!(round.effective_model_name.as_deref(), Some("model-a"));
         assert_eq!(round.first_visible_output_ms, Some(12));
+        assert_eq!(round.ttft_ms, Some(35));
         assert_eq!(round.attempt_count, Some(2));
         assert_eq!(round.failure_category.as_deref(), Some("rate_limit"));
 
@@ -1772,6 +1788,16 @@ mod tests {
         assert_eq!(encoded["modelConfigId"], "model-config-a");
         assert_eq!(encoded["effectiveModelName"], "model-a");
         assert_eq!(encoded["firstChunkMs"], 10);
+        assert_eq!(encoded["ttftMs"], 35);
+        let mut snake_case = encoded.clone();
+        snake_case.as_object_mut().unwrap().remove("ttftMs");
+        snake_case["ttft_ms"] = serde_json::json!(0);
+        assert_eq!(
+            serde_json::from_value::<ModelRoundData>(snake_case)
+                .unwrap()
+                .ttft_ms,
+            Some(0)
+        );
 
         let tool_payload = serde_json::json!({
             "id": "tool-1",

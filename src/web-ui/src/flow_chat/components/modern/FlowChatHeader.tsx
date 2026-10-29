@@ -4,7 +4,7 @@
  * standalone FlowChat hosts keep the inline fallback.
  */
 
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, useSyncExternalStore } from 'react';
 import { Keyboard, Square } from 'lucide-react';
 import { subscribeOverlayInteraction, createOverlayPortal, OverflowText, Icon, IconButton, Menu, MenuItem, SearchField, Switch, ToolbarSeparator, Tooltip } from '@openbitfun/ui';
 import { SceneChromeContribution } from '@/app/components/SceneTopBar/SceneChrome';
@@ -13,6 +13,8 @@ import { useTranslation } from 'react-i18next';
 import { SessionFilesBadge } from './SessionFilesBadge';
 import { SessionTreePopover, type SessionTreeSelection } from './SessionTreePopover';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
+import { getActiveSurfaceScope, onSurfaceActivated } from '@/infrastructure/peer-device/deviceSurface';
+import { useReviewPlatformSupport } from '@/infrastructure/peer-device/useReviewPlatformSupport';
 import { gitAPI, reviewPlatformAPI, type ReviewPlatformPullRequest } from '@/infrastructure/api';
 import { getAppearanceOverlayHost } from '@/infrastructure/appearance';
 import { computeFixedPopoverPosition } from '@/shared/utils/fixedPopoverViewport';
@@ -26,7 +28,8 @@ import './FlowChatHeader.scss';
 const PULL_REQUEST_OVERVIEW_LIMIT = 3;
 
 interface PullRequestOverviewState {
-  status: 'idle' | 'loading' | 'loaded' | 'not-git' | 'no-workspace' | 'error';
+  status: 'idle' | 'loading' | 'loaded' | 'not-git' | 'no-workspace' | 'unsupported' | 'error';
+  ownerKey?: string;
   items: ReviewPlatformPullRequest[];
   totalCount: number;
 }
@@ -118,6 +121,9 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
   // object, so a provider re-render cannot restart pull-request loading.
   const currentWorkspaceId = currentWorkspace?.id;
   const currentWorkspaceRootPath = currentWorkspace?.rootPath;
+  const surface = useSyncExternalStore(onSurfaceActivated, getActiveSurfaceScope, getActiveSurfaceScope);
+  const canViewPullRequests = useReviewPlatformSupport();
+  const overviewOwnerKey = surface.key(surface.epoch, currentWorkspaceId, currentWorkspaceRootPath);
   const sceneChrome = useSceneChromeContext();
   const isSceneChromeActive = sceneChrome?.activeSceneId === 'session';
   const [isSessionOverviewOpen, setIsSessionOverviewOpen] = useState(false);
@@ -136,11 +142,16 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
     top: number;
     left: number;
   } | null>(null);
-  const [pullRequestOverview, setPullRequestOverview] = useState<PullRequestOverviewState>({
+  const [storedPullRequestOverview, setPullRequestOverview] = useState<PullRequestOverviewState>({
     status: 'idle',
     items: [],
     totalCount: 0,
   });
+  const pullRequestOverview: PullRequestOverviewState = !canViewPullRequests
+    ? { status: 'unsupported', items: [], totalCount: 0 }
+    : storedPullRequestOverview.ownerKey === overviewOwnerKey
+      ? storedPullRequestOverview
+      : { status: 'idle', items: [], totalCount: 0 };
 
   const hasBackgroundCommands = backgroundCommands.length > 0;
   const backgroundCommandCount = backgroundCommands.length;
@@ -207,19 +218,25 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
     pullRequestOverviewRequestRef.current = requestId;
     const workspaceId = currentWorkspaceId;
     const repositoryPath = currentWorkspaceRootPath;
+    const isCurrent = () => surface.isCurrent() && pullRequestOverviewRequestRef.current === requestId;
+    const update = (next: PullRequestOverviewState) => {
+      if (isCurrent()) setPullRequestOverview({ ...next, ownerKey: overviewOwnerKey });
+    };
+
+    if (!canViewPullRequests || !surface.isCurrent()) return;
 
     if (!workspaceId || !repositoryPath) {
-      setPullRequestOverview({ status: 'no-workspace', items: [], totalCount: 0 });
+      update({ status: 'no-workspace', items: [], totalCount: 0 });
       return;
     }
 
-    setPullRequestOverview({ status: 'loading', items: [], totalCount: 0 });
+    update({ status: 'loading', items: [], totalCount: 0 });
 
     try {
       const isGitRepository = await gitAPI.isGitRepository({ workspaceId });
-      if (pullRequestOverviewRequestRef.current !== requestId) return;
+      if (!isCurrent()) return;
       if (!isGitRepository) {
-        setPullRequestOverview({ status: 'not-git', items: [], totalCount: 0 });
+        update({ status: 'not-git', items: [], totalCount: 0 });
         return;
       }
 
@@ -229,18 +246,17 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
         1,
         PULL_REQUEST_OVERVIEW_LIMIT,
       );
-      if (pullRequestOverviewRequestRef.current !== requestId) return;
+      if (!isCurrent()) return;
 
-      setPullRequestOverview({
+      update({
         status: 'loaded',
         items: snapshot.pullRequests.slice(0, PULL_REQUEST_OVERVIEW_LIMIT),
         totalCount: snapshot.pagination.total ?? snapshot.pullRequests.length,
       });
     } catch {
-      if (pullRequestOverviewRequestRef.current !== requestId) return;
-      setPullRequestOverview({ status: 'error', items: [], totalCount: 0 });
+      update({ status: 'error', items: [], totalCount: 0 });
     }
-  }, [currentWorkspaceId, currentWorkspaceRootPath]);
+  }, [canViewPullRequests, currentWorkspaceId, currentWorkspaceRootPath, overviewOwnerKey, surface]);
 
   useEffect(() => {
     if (!isSessionOverviewOpen) return undefined;
@@ -388,13 +404,13 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
   };
 
   const handleOpenPullRequests = useCallback(() => {
-    if (!currentWorkspaceId) return;
+    if (!currentWorkspaceId || !canViewPullRequests || !surface.isCurrent()) return;
     createReviewPlatformTab(currentWorkspaceId, currentWorkspaceRootPath);
     closeSessionOverview(false);
-  }, [closeSessionOverview, currentWorkspaceId, currentWorkspaceRootPath]);
+  }, [canViewPullRequests, closeSessionOverview, currentWorkspaceId, currentWorkspaceRootPath, surface]);
 
   const handleOpenPullRequest = useCallback((pullRequest: ReviewPlatformPullRequest) => {
-    if (!currentWorkspaceId) return;
+    if (!currentWorkspaceId || !canViewPullRequests || !surface.isCurrent()) return;
     createReviewPlatformPullRequestDetailTab({
       workspaceId: currentWorkspaceId,
       workspacePath: currentWorkspaceRootPath,
@@ -404,7 +420,7 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
       title: `#${pullRequest.number} ${pullRequest.title}`,
     });
     closeSessionOverview(false);
-  }, [closeSessionOverview, currentWorkspaceId, currentWorkspaceRootPath]);
+  }, [canViewPullRequests, closeSessionOverview, currentWorkspaceId, currentWorkspaceRootPath, surface]);
 
   const handleCommandSectionMenuToggle = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
@@ -561,6 +577,9 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
       : t('flowChatHeader.backgroundCommandEmpty');
   let pullRequestOverviewSummary: string;
   switch (pullRequestOverview.status) {
+    case 'unsupported':
+      pullRequestOverviewSummary = t('common:reviewPlatform.messages.hostUnsupported');
+      break;
     case 'loading':
       pullRequestOverviewSummary = t('flowChatHeader.pullRequestLoading');
       break;
@@ -579,7 +598,7 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
         : t('flowChatHeader.pullRequestEmpty');
   }
   const isPullRequestOverviewUnavailable =
-    pullRequestOverview.status === 'not-git' || pullRequestOverview.status === 'no-workspace';
+    pullRequestOverview.status === 'unsupported' || pullRequestOverview.status === 'not-git' || pullRequestOverview.status === 'no-workspace';
   const rightPanelLabel = isRightPanelOpen
     ? t('common:header.collapseRightPanel')
     : t('common:header.expandRightPanel');
@@ -936,7 +955,15 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
                     ) : null}
                   </button>
 
-                  {pullRequestOverview.status === 'loading' || pullRequestOverview.status === 'idle' ? (
+                  {pullRequestOverview.status === 'unsupported' ? (
+                    <div
+                      className="flowchat-header__session-overview-empty-state"
+                      data-openbitfun-state="unavailable"
+                      data-testid="flowchat-header-pull-requests-unavailable"
+                    >
+                      {pullRequestOverviewSummary}
+                    </div>
+                  ) : pullRequestOverview.status === 'loading' || pullRequestOverview.status === 'idle' ? (
                     <div
                       className="flowchat-header__session-overview-empty-state"
                       data-openbitfun-state="loading"

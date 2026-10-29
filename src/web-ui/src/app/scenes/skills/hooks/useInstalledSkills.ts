@@ -12,6 +12,8 @@ import { createLogger } from '@/shared/utils/logger';
 import type { InstalledFilter } from '../skillsSceneStore';
 
 const log = createLogger('SkillsScene:useInstalledSkills');
+const EMPTY_SKILLS: SkillInfo[] = [];
+const EMPTY_DIAGNOSTICS: SkillScanDiagnostic[] = [];
 
 function installedSkillGroup(skill: SkillInfo): InstalledFilter {
   if (skill.isBuiltin) return 'builtin';
@@ -37,9 +39,9 @@ export function useInstalledSkills({
 
   const scope = useSyncExternalStore(onSurfaceActivated, getActiveSurfaceScope, getActiveSurfaceScope);
   const [loadedContextKey, setLoadedContextKey] = useState<string | null>(null);
-  const [skills, setSkills] = useState<SkillInfo[]>([]);
-  const [diagnostics, setDiagnostics] = useState<SkillScanDiagnostic[]>([]);
-  const [diagnosticsAvailable, setDiagnosticsAvailable] = useState(true);
+  const [loadedSkills, setSkills] = useState<SkillInfo[]>([]);
+  const [loadedDiagnostics, setDiagnostics] = useState<SkillScanDiagnostic[]>([]);
+  const [loadedDiagnosticsAvailable, setDiagnosticsAvailable] = useState(true);
   const [globallyDisabledSkillKeys, setGloballyDisabledSkillKeys] = useState<Set<string>>(new Set());
   const [directManagementSupported, setDirectManagementSupported] = useState(false);
   const [savingGlobalSkillKey, setSavingGlobalSkillKey] = useState<string | null>(null);
@@ -418,6 +420,11 @@ export function useInstalledSkills({
     t,
     workspace?.id,
   ]);
+
+  const catalogCurrent = enabled && loadedContextKey === capabilityKey;
+  const skills = catalogCurrent ? loadedSkills : EMPTY_SKILLS;
+  const diagnostics = catalogCurrent ? loadedDiagnostics : EMPTY_DIAGNOSTICS;
+  const diagnosticsAvailable = !catalogCurrent || loadedDiagnosticsAvailable;
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
 

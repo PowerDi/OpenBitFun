@@ -1086,7 +1086,7 @@ pub async fn show_agent_companion_desktop_pet(app: tauri::AppHandle) -> Result<(
     // it there, while `always_on_top` keeps floating it above other applications
     // on X11, where the window manager honors the hint.
     #[cfg(target_os = "linux")]
-    if let Some(main_window) = app.get_webview_window("main") {
+    if let Some(main_window) = app.get_window("main") {
         match main_window.gtk_window() {
             Ok(parent) => builder = builder.transient_for_raw(&parent),
             Err(error) => warn!(
@@ -1171,7 +1171,9 @@ pub async fn hide_agent_companion_desktop_pet(app: tauri::AppHandle) -> Result<(
 #[tauri::command]
 pub async fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
     let total_started_at = Instant::now();
-    if let Some(main_window) = app.get_webview_window("main") {
+    // Embedded browsers add child WebViews, so the main host is no longer a
+    // single-WebView window. Look up the native window independently of its views.
+    if let Some(main_window) = app.get_window("main") {
         main_window
             .unminimize()
             .map_err(|error| error.to_string())?;

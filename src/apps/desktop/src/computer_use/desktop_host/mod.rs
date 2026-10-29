@@ -817,7 +817,7 @@ impl DesktopComputerUseHost {
             let pid = resolve_pid_macos(self, &app).await?;
             let (shortcuts, menu_items_without_shortcut) =
                 crate::computer_use::control_session::spawn_blocking(move || {
-                    macos::catch_objc(|| {
+                    macos::catch_objc_local(|| {
                         crate::computer_use::macos_ax_shortcuts::dump_app_menu_shortcuts(pid)
                     })
                 })
@@ -1402,7 +1402,7 @@ impl ComputerUseHost for DesktopComputerUseHost {
                 // AX tree traversal can throw `NSException` from a misbehaving
                 // frontmost app; the @try/@catch wrapper turns that into a
                 // missing UI-tree text rather than crashing the whole process.
-                macos::catch_objc(|| {
+                macos::catch_objc_local(|| {
                     Ok(
                         crate::computer_use::macos_ax_ui::enumerate_ui_tree_text_for_pid(
                             pid,

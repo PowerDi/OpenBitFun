@@ -66,8 +66,8 @@ import { useConversationViewScope } from '../../contexts/conversationViewScope';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import { flowChatSessionConfigForCurrentWorkspace } from '@/app/utils/projectSessionWorkspace';
 import { createLogger } from '@/shared/utils/logger';
-import { parsePullRequestUrl } from '@/shared/utils/pullRequestLinks';
-import { createBackgroundCommandOutputTab, createReviewPlatformPullRequestDetailTab } from '@/shared/utils/tabUtils';
+import { createBackgroundCommandOutputTab } from '@/shared/utils/tabUtils';
+import { useFlowChatHttpLinkClick } from './useFlowChatHttpLinkClick';
 import { externalAgentSupports } from '../../utils/externalAgentCapabilities';
 import { useExternalAgentCapabilities } from '../../hooks/useExternalAgentCapabilities';
 import {
@@ -705,22 +705,10 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     workspacePath,
     onFileViewRequest,
   });
-  const handleHttpLinkClick = useCallback((url: string, _event: React.MouseEvent<HTMLAnchorElement>) => {
-    const pullRequestTarget = parsePullRequestUrl(url);
-    if (!pullRequestTarget) {
-      return false;
-    }
-
-    if (!activeSession?.workspaceId) return false;
-    createReviewPlatformPullRequestDetailTab({
-      workspaceId: activeSession.workspaceId,
-      workspacePath: activeSession?.workspacePath || workspacePath,
-      pullRequestId: pullRequestTarget.pullRequestId,
-      pullRequestUrl: pullRequestTarget.webUrl,
-      title: `PR #${pullRequestTarget.pullRequestId}`,
-    });
-    return true;
-  }, [activeSession?.workspaceId, activeSession?.workspacePath, workspacePath]);
+  const handleHttpLinkClick = useFlowChatHttpLinkClick(
+    activeSession?.workspaceId,
+    activeSession?.workspacePath || workspacePath,
+  );
   const {
     searchQuery,
     onSearchChange: setSearchQuery,

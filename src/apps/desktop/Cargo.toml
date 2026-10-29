@@ -96,6 +96,8 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# Observe the native navigation delegate retained by the existing Tauri runtime.
+wry = { workspace = true }
 bitflags = { workspace = true }
 core-foundation = { workspace = true }
 core-graphics = { workspace = true }

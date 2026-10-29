@@ -13,6 +13,8 @@ mod linux_control;
 #[cfg(target_os = "linux")]
 mod linux_control_ax;
 #[cfg(target_os = "macos")]
+mod macos_ax_dispatch;
+#[cfg(target_os = "macos")]
 mod macos_ax_dump;
 #[cfg(target_os = "macos")]
 mod macos_ax_shortcuts;

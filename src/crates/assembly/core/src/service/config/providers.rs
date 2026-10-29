@@ -44,6 +44,8 @@ fn ai_validation_error_location(message: &str) -> (String, String) {
         Some(("context_window", "MODEL_CONTEXT_WINDOW_INVALID"))
     } else if message.contains("max_tokens") {
         Some(("max_tokens", "MODEL_MAX_TOKENS_INVALID"))
+    } else if message.contains("max_images_per_request") {
+        Some(("max_images_per_request", "MODEL_MAX_IMAGES_INVALID"))
     } else if message.contains("temperature") {
         Some(("temperature", "MODEL_TEMPERATURE_INVALID"))
     } else if message.contains("top_p") {
@@ -674,6 +676,90 @@ impl ConfigProvider for AppConfigProvider {
     }
 }
 
+/// Media (image generation) service configuration provider.
+pub struct MediaConfigProvider;
+
+#[async_trait]
+impl ConfigProvider for MediaConfigProvider {
+    fn name(&self) -> &str {
+        "media"
+    }
+
+    fn get_default_config(&self) -> serde_json::Value {
+        serialize_default_config("media", MediaConfig::default())
+    }
+
+    async fn validate_config(&self, config: &serde_json::Value) -> OpenBitFunResult<Vec<String>> {
+        let media = match serde_json::from_value::<MediaConfig>(config.clone()) {
+            Ok(media) => media,
+            Err(err) => {
+                return Err(OpenBitFunError::validation(format!(
+                    "Invalid media config format: {}",
+                    err
+                )))
+            }
+        };
+
+        let mut warnings = Vec::new();
+        for (index, service) in media.image_services.iter().enumerate() {
+            if service.id.trim().is_empty() {
+                return Err(OpenBitFunError::validation(format!(
+                    "media.image_services[{index}]: service id is required"
+                )));
+            }
+            if !service.enabled {
+                continue;
+            }
+            // The subscription dialect discovers its model from the account's
+            // catalog, so an empty field there is a supported choice.
+            if service.model_name.trim().is_empty() && !service.dialect.requires_subscription() {
+                warnings.push(format!(
+                    "media.image_services[{index}]: model name is empty"
+                ));
+            }
+            if service.base_url.trim().is_empty()
+                && service.request_url.is_none()
+                && !matches!(service.auth, AuthConfig::Subscription { .. })
+            {
+                warnings.push(format!("media.image_services[{index}]: base url is empty"));
+            }
+            let max_images = service.dialect.max_images_per_request();
+            if let Some(n) = service.params.n {
+                if n == 0 || n > max_images {
+                    warnings.push(format!(
+                        "media.image_services[{index}]: n must be between 1 and {max_images}"
+                    ));
+                }
+            }
+        }
+
+        if let Some(default_id) = media.default_image_service.as_deref() {
+            if media.enabled_image_service(default_id).is_none() {
+                warnings.push(format!(
+                    "media.default_image_service: '{default_id}' is not an enabled image service"
+                ));
+            }
+        }
+
+        Ok(warnings)
+    }
+
+    async fn on_config_changed(
+        &self,
+        _old_config: &serde_json::Value,
+        new_config: &serde_json::Value,
+    ) -> OpenBitFunResult<()> {
+        if let Ok(media) = serde_json::from_value::<MediaConfig>(new_config.clone()) {
+            info!(
+                "Media config changed: image_services={}, default_image_service={:?}",
+                media.image_services.len(),
+                media.default_image_service
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Configuration provider registry.
 pub struct ConfigProviderRegistry {
     providers: HashMap<String, Box<dyn ConfigProvider>>,
@@ -692,6 +778,7 @@ impl ConfigProviderRegistry {
         registry.register(Box::new(TerminalConfigProvider));
         registry.register(Box::new(WorkspaceConfigProvider));
         registry.register(Box::new(AppConfigProvider));
+        registry.register(Box::new(MediaConfigProvider));
 
         registry
     }
@@ -725,7 +812,15 @@ impl ConfigProviderRegistry {
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
 
-        for provider_name in ["ai", "appearance", "editor", "terminal", "workspace", "app"] {
+        for provider_name in [
+            "ai",
+            "appearance",
+            "editor",
+            "terminal",
+            "workspace",
+            "app",
+            "media",
+        ] {
             let Some(provider) = self.get_provider(provider_name) else {
                 continue;
             };
@@ -818,6 +913,7 @@ impl ConfigProviderRegistry {
             "terminal" => Ok(serde_json::to_value(&config.terminal)?),
             "workspace" => Ok(serde_json::to_value(&config.workspace)?),
             "ai" => Ok(serde_json::to_value(&config.ai)?),
+            "media" => Ok(serde_json::to_value(&config.media)?),
             _ => Err(OpenBitFunError::validation(format!(
                 "Unknown config section: {}",
                 section
@@ -947,6 +1043,25 @@ mod tests {
         assert_eq!(result.errors[0].path, "ai.models[0].context_window");
         assert_eq!(result.errors[0].code, "MODEL_CONTEXT_WINDOW_INVALID");
         assert_eq!(result.diagnostics[0].path, "ai.models[0].context_window");
+    }
+
+    #[tokio::test]
+    async fn registry_reports_image_budget_validation_path() {
+        let mut config = GlobalConfig::default();
+        config.ai.models.push(AIModelConfig {
+            id: "limited".into(),
+            name: "Limited vision".into(),
+            provider: "openai".into(),
+            enabled: true,
+            max_images_per_request: Some(0),
+            ..AIModelConfig::default()
+        });
+        let result = ConfigProviderRegistry::new()
+            .validate_config(&config)
+            .await
+            .unwrap();
+        assert_eq!(result.errors[0].path, "ai.models[0].max_images_per_request");
+        assert_eq!(result.errors[0].code, "MODEL_MAX_IMAGES_INVALID");
     }
 
     #[tokio::test]
@@ -1093,5 +1208,120 @@ mod tests {
         assert!(validation.errors[0]
             .message
             .contains("budget_tokens value must be greater than 0"));
+    }
+
+    fn image_service(id: &str, enabled: bool) -> ImageServiceConfig {
+        ImageServiceConfig {
+            id: id.to_string(),
+            name: id.to_string(),
+            dialect: ImageDialect::OpenAiImages,
+            base_url: "https://api.openai.com/v1".to_string(),
+            model_name: "gpt-image-1".to_string(),
+            api_key: "sk-test".to_string(),
+            enabled,
+            ..ImageServiceConfig::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn media_validation_accepts_a_subscription_service_without_a_base_url() {
+        let mut service = image_service("svc-a", true);
+        service.base_url = String::new();
+        service.api_key = String::new();
+        service.auth = AuthConfig::Subscription {
+            provider: SubscriptionProvider::Codex,
+            plan: None,
+            account_id: None,
+        };
+        let mut config = GlobalConfig::default();
+        config.media.image_services.push(service);
+        config.media.default_image_service = Some("svc-a".to_string());
+
+        let validation = ConfigProviderRegistry::new()
+            .validate_config(&config)
+            .await
+            .expect("registry validation result");
+
+        assert!(validation.valid, "{:?}", validation.errors);
+        assert!(validation.warnings.is_empty(), "{:?}", validation.warnings);
+    }
+
+    #[tokio::test]
+    async fn media_validation_accepts_a_clean_section() {
+        let mut config = GlobalConfig::default();
+        config
+            .media
+            .image_services
+            .push(image_service("svc-a", true));
+        config.media.default_image_service = Some("svc-a".to_string());
+
+        let validation = ConfigProviderRegistry::new()
+            .validate_config(&config)
+            .await
+            .expect("registry validation result");
+
+        assert!(validation.valid, "{:?}", validation.errors);
+        assert!(validation.warnings.is_empty(), "{:?}", validation.warnings);
+    }
+
+    #[tokio::test]
+    async fn media_validation_rejects_a_service_without_an_id() {
+        let mut config = GlobalConfig::default();
+        config.media.image_services.push(image_service("", true));
+
+        let validation = ConfigProviderRegistry::new()
+            .validate_config(&config)
+            .await
+            .expect("registry validation result");
+
+        assert!(!validation.valid);
+        assert_eq!(validation.errors[0].path, "media");
+        assert!(validation.errors[0]
+            .message
+            .contains("service id is required"));
+    }
+
+    #[tokio::test]
+    async fn media_validation_warns_on_a_dangling_default_pointer() {
+        let mut config = GlobalConfig::default();
+        config
+            .media
+            .image_services
+            .push(image_service("svc-a", false));
+        config.media.default_image_service = Some("missing".to_string());
+
+        let validation = ConfigProviderRegistry::new()
+            .validate_config(&config)
+            .await
+            .expect("registry validation result");
+
+        assert!(validation.valid, "{:?}", validation.errors);
+        assert!(validation
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("default_image_service")));
+    }
+
+    #[tokio::test]
+    async fn media_validation_warns_on_an_out_of_range_image_count() {
+        let mut config = GlobalConfig::default();
+        config.media.image_services.push(ImageServiceConfig {
+            params: ImageGenerationParams {
+                n: Some(MAX_IMAGES_PER_GENERATION_REQUEST + 1),
+                ..ImageGenerationParams::default()
+            },
+            ..image_service("svc-a", true)
+        });
+
+        let validation = ConfigProviderRegistry::new()
+            .validate_config(&config)
+            .await
+            .expect("registry validation result");
+
+        assert!(validation.valid);
+        assert!(validation
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("n must be between")));
     }
 }

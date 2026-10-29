@@ -35,6 +35,7 @@ export const ALL_NAMESPACES = [
   'settings/hooks',
   'settings/mcp',
   'settings/mcp-tools',
+  'settings/media',
   'settings/memory',
   'settings/models',
   'settings/quick-actions',

@@ -158,6 +158,20 @@ For streaming `exec` retry, context recovery, and final-event contracts:
 cargo test --locked -p openbitfun-cli --test cli_command_contracts exec_cli_contracts::stream_json_
 ```
 
+For scheduled-job bootstrap, persisted tasks, and unattended execution after a
+CLI restart (with a mock model and a real CLI process):
+
+```bash
+cargo test --locked -p openbitfun-cli --bin openbitfun bootstrap_profile_tests::
+cargo test --locked -p openbitfun-cli --test terminal_process_contracts scheduled_jobs_
+cargo test --locked -p openbitfun-cli --test cli_command_contracts scheduled_jobs_
+```
+
+Embedded Interactive/Execution bootstrap wires the existing Core Cron service,
+subscribes to turn lifecycle events, and starts scheduling after host setup.
+Shared TUI must not claim the host-wide scheduling lease: its workspace scope and
+last-controller idle shutdown cannot own all persisted jobs.
+
 For ACP stdio session restore, duplicate-load rejection, history replay and close:
 
 ```bash

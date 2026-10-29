@@ -95,7 +95,9 @@ describe('unified project session creation', () => {
     expect(mainNav).toContain("activateProductAction('surface.todos.open')");
     expect(mainNav).not.toContain("new Set(['sessions'])");
     expect(mainNav).toContain('label={t(\'nav.items.sessions\')}');
-    expect(mainNav).toContain('<WorkspaceListSection variant="all" />');
+    const sessionLists = mainNav.match(/<WorkspaceListSection\b[^>]*\/>/g) ?? [];
+    expect(sessionLists).toHaveLength(1);
+    expect(sessionLists[0]).toMatch(/\svariant\s*=\s*["']all["']/);
     expect(workspaceList).toContain('variant: SessionNavigationScope');
     expect(workspaceList).toContain("variant === 'all'");
     expect(workspaceList).toContain('openedWorkspacesList');

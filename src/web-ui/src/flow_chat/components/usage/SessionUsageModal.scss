@@ -5,6 +5,7 @@
 
 .session-usage-dialog__content {
   display: flex;
+  justify-content: center;
   flex: 1 0 auto;
   min-inline-size: 0;
   container: session-usage / inline-size;

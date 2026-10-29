@@ -17,11 +17,6 @@ vi.mock('@/infrastructure/config/components/common', () => ({
     <section><h2>{label}</h2><p>{description}</p>{children}</section>
   ),
 }));
-vi.mock('@openbitfun/ui', () => ({
-  Button: ({ children, disabled, onClick, 'aria-expanded': expanded }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button disabled={disabled} onClick={onClick} aria-expanded={expanded}>{children}</button>
-  ),
-}));
 
 const accounts: SubscriptionAccount[] = ['zcode', 'zcode_cn'].map(provider => ({
   provider: provider as SubscriptionAccount['provider'], connected: false, display_label: provider,
@@ -43,7 +38,7 @@ describe('ZCode subscription entry', () => {
 
   it('opens the region choice at sign-in and authorizes only the chosen region', () => {
     act(() => root.render(<ZcodeSubscriptionGroup accounts={accounts} busy={false} onLogin={onLogin} renderAccount={renderAccount} />));
-    expect(container.querySelectorAll('h2')).toHaveLength(1);
+    expect(container.querySelectorAll('h3')).toHaveLength(1);
     expect(button('BigModel')).toBeUndefined();
     act(() => button('Sign in').click());
     expect(button('Z.ai')).toBeDefined();

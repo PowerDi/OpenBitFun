@@ -3,6 +3,96 @@
 For development commands, see [AGENTS.md](AGENTS.md) and the repository
 [contribution guide](../../../CONTRIBUTING.md).
 
+## Model selection and smart routing
+
+**Release availability:** smart mode is not available in this release. The GUI
+keeps its entry disabled, and the shared runtime rejects activation, including
+from older clients. Saved smart-mode configuration and history are retained;
+ordinary conversation execution does not invoke the Router or its summaries.
+Configuration files and legacy Router environment variables cannot enable it.
+The implementation details below document the retained experimental path.
+
+Smart mode chooses between the primary model and an independently configured
+economy model for each main conversation step. Switching smart mode on or off
+changes the current conversation or draft, without changing the strategy default
+for future conversations. There is no remember-selection or scope control.
+Before a conversation or draft exists, the host strategy default owns the
+selection. Manual model and pool choices retain their existing session and
+future-default saving rules. Primary/economy role bindings remain shared model
+configuration.
+
+Subagents keep their independent explicit model or pool selection, agent/default
+settings, inheritance and Fork rules. Ordinary fresh subagents retain the fast
+model fallback; enabling smart mode does not replace it with the primary or economy
+model. Existing subagents retain their own binding when resumed. They do not
+participate in Router classification or Router summaries. The legacy
+`ai.model_routing.subagent_model` field remains readable for compatibility but
+does not control subagent selection, and the GUI exposes no smart-subagent setting.
+Choices made in a new conversation draft are applied on its execution host
+before the first message is sent.
+
+In **Settings → AI → Models**, add the Router as an API-key model, then open
+**Router service** to select it. No tokenizer file or remote tokenization endpoint
+is required. OpenBitFun estimates the input locally and uses the service's full
+prompt usage to tighten the budget independently for each execution.
+The Router must support the classifier protocol
+described in [the deployment guide](../../../deploy/model-router/README.md).
+Configure the primary and economy models, then save and test the connections
+before enabling smart mode in the composer. The dialog shows independent
+connection results for the primary model, economy model and Router service;
+the Router check also validates the classifier protocol. Saving configuration
+alone does not prove connectivity. Router
+request failures fall back to the primary model; each response records its
+actual model and fallback status. Smart mode automatically maintains Router
+context summaries with the economy model before input fills the budget. If the
+complete context still fits, pending or failed summaries do not interrupt routing;
+otherwise the current round uses the primary model until complete context is available.
+When an older conversation first enters smart mode, the execution host reads its
+visible persisted turns incrementally and builds a separate Router summary. Each
+accepted chunk saves its source cursor, so interrupted preparation resumes rather
+than losing the prefix. Preparation can continue between turns; the next routing
+boundary adopts the completed history together with new observations. Summary
+requests use the economy model's own lowest supported effort, independently of
+its chat default, and are bounded by that model's input window.
+Billing hints do not establish actual charges.
+
+Older execution hosts without `estimatedTokenBudgetSupported` can continue saving
+Router settings when a tokenizer path is already configured; the GUI preserves
+that path. Without an existing path, the GUI asks you to upgrade the execution
+host and blocks saving those settings. Upgrading only the controller does not
+add this capability to the host.
+
+Persisted conversations carry their independent Router summary into the next
+smart turn. Recovery validates the visible conversation history; reverting or
+forking never imports an abandoned or another conversation's summary. Legacy
+checkpoints without history proof or following a manual turn rebuild from the
+execution host's visible original turn records instead of the main context
+compression summary.
+
+The execution host bounds Router requests per service (two running and up to
+32 waiting by default). Root conversation groups take turns receiving capacity,
+with FIFO ordering within each group; one group can have at most eight
+waiting requests at the default limits. Idle slots can be borrowed. Queue time
+counts toward the routing timeout. Cancellation removes the waiter; overload
+and timeout retain the primary-model fallback. Optional
+background summaries use a separate fair queue, merge pending observations per
+conversation, and do not block model selection. These queues serve eligible main
+conversations; subagents and model-pool conversations do not enter the Router.
+Traces retain root, parent, session, turn and round IDs for isolation.
+A route that would discard images readable by the primary model falls back to
+primary; retries retain the model chosen for that logical round. Host startup
+overrides and persistence details are in the deployment guide linked above.
+
+Peer Device Mode applies configuration on the execution host and requires a host
+advertising smart-routing support. SSH/Docker workspaces also use their owning
+OpenBitFun runtime's Router configuration, not configuration or local files on the
+controller. Mobile and bot model editors explicitly reject changes to smart
+sessions; use the GUI to change the strategy. External agents and approved
+immutable dispatch jobs retain their existing model bindings.
+Local fixture tests do not establish live remote execution or classifier quality.
+Before production evaluation, compare fixed-primary and routed main conversations for
+completion quality, total latency, model/cache usage and auxiliary request cost.
+
 ## Remote Connect
 
 Sign in once with the shared GitHub account. The official Relay and **Same
@@ -579,6 +669,16 @@ main Git checkout's target cache. If absent, curl downloads the version-specific
 archive, supporting HTTP and SOCKS proxies; Cargo handles extraction and linking.
 Explicit `SHERPA_ONNX_LIB_DIR` and `SHERPA_ONNX_ARCHIVE_DIR` overrides are preserved.
 
+Development uses separate data by default. Add `--shared-data` to run alongside
+the installed app and share its data:
+
+```sh
+pnpm run desktop:dev -- --shared-data
+pnpm run desktop:preview:debug -- --shared-data
+```
+
+Use `--isolated-data` for separate development data (the default).
+
 When another worktree uses the default ports, start a separate dev server:
 
 ```sh
@@ -703,6 +803,24 @@ account device, the existing reply includes an explicit notice that proactive
 scheduled-job and desktop-result notifications are unavailable there. Ordinary
 WeChat-initiated requests keep their existing cross-device reply path. This feature
 does not add cross-host Peer Device or Detached Dispatch result delivery.
+
+## Image input limits
+
+For a vision model that accepts only a limited number of images, set **Images
+per request** in its model settings (for example, `3`). Leave it empty to
+keep the existing image-history behavior. The saved model field is
+`max_images_per_request`; it limits input images, including user attachments,
+retained history, and tool results, rather than generated images.
+
+User submissions above the configured limit are rejected before entering the
+conversation. Pools and channel routes use the smallest configured limit among
+their enabled vision models when admitting new attachments, so fallback models
+can accept the same batch. Each model request keeps the newest image-bearing
+messages within that limit and includes an omission notice for pixels left out. The Agent can
+read omitted files again in smaller batches; the original conversation is retained.
+Plain text continuation also applies the limit, including to old tool-image history.
+Each selected model or fallback channel uses its own limit at the executing host;
+older hosts must be upgraded to enforce this optional setting.
 
 ## Model pools
 

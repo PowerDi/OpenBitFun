@@ -141,6 +141,47 @@ fn cli_agent_controls_its_own_isolated_config_through_openbitfun_control() {
 }
 
 #[test]
+fn scheduled_jobs_invalid_store_is_preserved_and_does_not_block_cli_turns() {
+    use serde_json::json;
+    let server = MockOpenAiServer::tool_sequence(vec![
+        ("GetToolSpec".into(), json!({"tool_name":"Cron"})),
+        (
+            "CallDeferredTool".into(),
+            json!({"tool_name":"Cron","args":{"action":"list"}}),
+        ),
+    ]);
+    let environment = CliTestEnvironment::new();
+    environment.configure_tool_loop_mock_model(server.base_url());
+    let path = environment.cron_jobs_path();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let unsupported_store = r#"{"version":999,"jobs":[{"futureField":"keep-me"}]}"#;
+    std::fs::write(&path, unsupported_store).unwrap();
+    let mut command = environment.std_command();
+    command.args([
+        "exec",
+        "List scheduled jobs",
+        "--auto",
+        "--no-verify-final-changes",
+        "--output-format",
+        "json",
+    ]);
+    let output = command_output_with_timeout(&mut command, std::time::Duration::from_secs(60));
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        stderr(&output),
+        stdout(&output)
+    );
+    assert_eq!(std::fs::read_to_string(path).unwrap(), unsupported_store);
+    server.assert_chat_completion_requests(3);
+    let messages = server.chat_completion_request_bodies()[2]["messages"].to_string();
+    assert!(
+        messages.contains("Scheduled jobs are unavailable in this execution host"),
+        "{messages}"
+    );
+}
+
+#[test]
 fn exec_rejects_auto_with_legacy_confirm() {
     let output = run_cli(&["exec", "task", "--auto", "--confirm"]);
     let stderr = stderr(&output);

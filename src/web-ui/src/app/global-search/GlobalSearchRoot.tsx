@@ -10,6 +10,7 @@ import React, {
 import { isImeOwnedKeyboardEvent } from '@/shared/utils/ime';
 import { OverflowText,
   ActionCard,
+  Button,
   TabGroup,
   Icon,
   KeyHint,
@@ -22,6 +23,8 @@ import { OverflowText,
 import { BarChart3, Blocks, CheckSquare2, FileText, Keyboard, MessageSquareText, MessagesSquare, Network, Users } from 'lucide-react';
 import { useShortcut } from '@/infrastructure/hooks/useShortcut';
 import { useI18n } from '@/infrastructure/i18n';
+import { getActiveSurfaceScope, onSurfaceActivated } from '@/infrastructure/peer-device/deviceSurface';
+import { usePeerDeviceModeOptional } from '@/infrastructure/peer-device/peerDeviceContextState';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import { useMyAgentStore } from '@/app/scenes/my-agent/myAgentStore';
 import { useNurseryStore } from '@/app/scenes/profile/nurseryStore';
@@ -157,6 +160,7 @@ export const GlobalSearchContent: React.FC<GlobalSearchContentProps> = ({
 }) => {
   const { t: tCommon } = useI18n('common');
   const { t: tSettings } = useI18n('settings');
+  const { t: tCapabilities } = useI18n('scenes/capabilities');
   const {
     currentWorkspace,
     openedWorkspacesList,
@@ -166,7 +170,17 @@ export const GlobalSearchContent: React.FC<GlobalSearchContentProps> = ({
   const openAssistant = useNurseryStore((state) => state.openAssistant);
   const [query, setQuery] = useState(initialQuery);
   const [scope, setScope] = useState<GlobalSearchScope>('all');
-  const [snapshot, setSnapshot] = useState<GlobalSearchSnapshot>(EMPTY_SNAPSHOT);
+  const surfaceScope = useSyncExternalStore(onSurfaceActivated, getActiveSurfaceScope, getActiveSurfaceScope);
+  const peerDevice = usePeerDeviceModeOptional();
+  const hostLabel = peerDevice?.peerMode.active
+    ? peerDevice.peerMode.deviceName : tCommon('accountLogin.thisDevice');
+  const [snapshotState, setSnapshotState] = useState({ epoch: surfaceScope.epoch, value: EMPTY_SNAPSHOT });
+  const snapshot = snapshotState.epoch === surfaceScope.epoch ? snapshotState.value : EMPTY_SNAPSHOT;
+  const setSnapshot = useCallback((value: GlobalSearchSnapshot) => {
+    if (surfaceScope.isCurrent()) setSnapshotState({ epoch: surfaceScope.epoch, value });
+  }, [surfaceScope]);
+  const [retryRevision, setRetryRevision] = useState(0);
+  const retryRef = useRef<{ context: string; providerId: string; previous: GlobalSearchSnapshot } | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [drilldownGroup, setDrilldownGroup] = useState<GlobalSearchDrilldownGroupId | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -195,15 +209,32 @@ export const GlobalSearchContent: React.FC<GlobalSearchContentProps> = ({
     setActiveId(null);
     setDrilldownGroup(null);
     setSnapshot(EMPTY_SNAPSHOT);
-  }, [active, initialQuery]);
+  }, [active, initialQuery, setSnapshot]);
 
   const parsedQuery = useMemo(() => parseGlobalSearchQuery(query, scope), [query, scope]);
+
+  const searchContext = JSON.stringify([
+    surfaceScope.epoch, query, parsedQuery.scope, currentWorkspace?.id,
+    openedWorkspacesList.map(workspace => [workspace.id, workspace.rootPath, workspace.connectionId]),
+  ]);
+  const retryProvider = (providerId: string) => {
+    if (!surfaceScope.isCurrent() || snapshot.isSearching) return;
+    retryRef.current = { context: searchContext, providerId, previous: snapshot };
+    setRetryRevision(revision => revision + 1);
+  };
 
   useEffect(() => {
     if (!active) return;
     const controller = new AbortController();
+    const abort = () => controller.abort();
+    surfaceScope.signal.addEventListener('abort', abort, { once: true });
+    const requestedRetry = retryRef.current;
+    retryRef.current = null;
+    const retry = requestedRetry?.context === searchContext
+      ? { previous: requestedRetry.previous, providerIds: [requestedRetry.providerId] } : undefined;
     const delay = parsedQuery.query ? SEARCH_DEBOUNCE_MS : 0;
     const timer = window.setTimeout(() => {
+      if (!surfaceScope.isCurrent()) return;
       void runFederatedSearch(
         providers,
         {
@@ -215,18 +246,25 @@ export const GlobalSearchContent: React.FC<GlobalSearchContentProps> = ({
           limitPerGroup: SEARCH_LIMIT_PER_GROUP,
           tCommon,
           tSettings,
+          tCapabilities,
         },
         controller.signal,
-        setSnapshot,
+        value => { if (!controller.signal.aborted) setSnapshot(value); },
+        retry,
       );
     }, delay);
 
     return () => {
       window.clearTimeout(timer);
       controller.abort();
+      surfaceScope.signal.removeEventListener('abort', abort);
     };
   }, [
     active,
+    surfaceScope,
+    searchContext,
+    setSnapshot,
+    retryRevision,
     currentWorkspace,
     openedWorkspacesList,
     parsedQuery.query,
@@ -235,6 +273,7 @@ export const GlobalSearchContent: React.FC<GlobalSearchContentProps> = ({
     query,
     tCommon,
     tSettings,
+    tCapabilities,
   ]);
 
   const items = snapshot.items;
@@ -398,6 +437,7 @@ export const GlobalSearchContent: React.FC<GlobalSearchContentProps> = ({
               aria-label={tCommon('nav.search.inputLabel')}
               role="combobox"
               aria-autocomplete="list"
+              aria-haspopup="grid"
               aria-expanded="true"
               aria-controls={resultsId}
               aria-activedescendant={activeId ? `${instanceId}-option-${activeId}` : undefined}
@@ -428,7 +468,8 @@ export const GlobalSearchContent: React.FC<GlobalSearchContentProps> = ({
           ref={listRef}
           id={resultsId}
           className="global-search__results"
-          role="listbox"
+          role="grid"
+          aria-busy={snapshot.isSearching}
           aria-label={tCommon('nav.search.resultsLabel')}
           data-openbitfun-component="global-search"
           data-openbitfun-part="results"
@@ -436,9 +477,11 @@ export const GlobalSearchContent: React.FC<GlobalSearchContentProps> = ({
           data-search-view={drilldownGroup ?? 'overview'}
         >
           {navigableItems.length === 0 ? (
-            <div className="global-search__empty" role="status">
-              {snapshot.isSearching ? tCommon('nav.search.searching') : emptyLabel}
-            </div>
+            <div role="row"><div role="gridcell">
+              <div className="global-search__empty" role="status">
+                {snapshot.isSearching ? tCommon('nav.search.searching') : emptyLabel}
+              </div>
+            </div></div>
           ) : resultPresentation.groups.map((groupView) => {
             const groupId = groupView.id;
             const groupItems = groupView.items;
@@ -452,7 +495,7 @@ export const GlobalSearchContent: React.FC<GlobalSearchContentProps> = ({
               <section
                 key={groupId}
                 className={`global-search__group global-search__group--${groupId}${groupDetailPage ? ' global-search__group--detail' : ''}`}
-                role="group"
+                role="rowgroup"
                 aria-labelledby={labelId}
                 data-openbitfun-component="global-search"
                 data-openbitfun-part="group"
@@ -461,6 +504,7 @@ export const GlobalSearchContent: React.FC<GlobalSearchContentProps> = ({
                   ? `${testIdPrefix}-group-page-${groupId}`
                   : `${testIdPrefix}-group-${groupId}`}
               >
+                <div role="row"><div role="columnheader">
                 {groupDetailPage ? (
                   <div className="global-search__detail-header">
                     <button
@@ -506,7 +550,8 @@ export const GlobalSearchContent: React.FC<GlobalSearchContentProps> = ({
                     </span>
                   </div>
                 )}
-                <div className="global-search__group-items">
+                </div></div>
+                <div className="global-search__group-items" role="presentation">
                   {groupItems.map((item) => {
                     const itemIcon = iconForItem(item);
                     const selected = item.id === activeId;
@@ -527,14 +572,25 @@ export const GlobalSearchContent: React.FC<GlobalSearchContentProps> = ({
                       </span>
                     );
 
-                    if (itemVariant === 'action') {
-                      return (
-                        <ActionCard
-                          key={item.id}
+                    // Grid cells keep executable buttons in the native accessibility tree.
+                    // Listbox options flatten interactive descendants in WebKit.
+                    const resultRow = (content: React.ReactNode) => (
+                      <div role="row" key={item.id} className="global-search__result-row">
+                        <div
+                          role="gridcell"
                           id={`${instanceId}-option-${item.id}`}
                           data-search-result-id={item.id}
-                          role="option"
                           aria-selected={selected}
+                          aria-label={[item.title, item.subtitle, item.context].filter(Boolean).join('. ')}
+                        >{content}</div>
+                      </div>
+                    );
+
+                    if (itemVariant === 'action') {
+                      return resultRow(
+                        <ActionCard
+                          tabIndex={-1}
+                          aria-label={item.title}
                           className="global-search__action-card"
                           onClick={() => void activateItem(item)}
                           data-openbitfun-state={selected ? 'selected' : undefined}
@@ -558,13 +614,10 @@ export const GlobalSearchContent: React.FC<GlobalSearchContentProps> = ({
                     }
 
                     if (entity) {
-                      return (
+                      return resultRow(
                         <ActionCard
-                          key={item.id}
-                          id={`${instanceId}-option-${item.id}`}
-                          data-search-result-id={item.id}
-                          role="option"
-                          aria-selected={selected}
+                          tabIndex={-1}
+                          aria-label={item.title}
                           className="global-search__action-card"
                           onClick={() => void activateItem(item)}
                           data-openbitfun-state={selected ? 'selected' : undefined}
@@ -581,14 +634,11 @@ export const GlobalSearchContent: React.FC<GlobalSearchContentProps> = ({
                       );
                     }
 
-                    return (
+                    return resultRow(
                       <button data-overflow-trigger
-                        key={item.id}
-                        id={`${instanceId}-option-${item.id}`}
-                        data-search-result-id={item.id}
                         type="button"
-                        role="option"
-                        aria-selected={selected}
+                        tabIndex={-1}
+                        aria-label={item.title}
                         className={`global-search__result global-search__result--${itemVariant}${selected ? ' is-selected' : ''}`}
                         onClick={() => void activateItem(item)}
                         data-openbitfun-component="global-search"
@@ -616,13 +666,27 @@ export const GlobalSearchContent: React.FC<GlobalSearchContentProps> = ({
           || snapshot.diagnostics.length > 0) ? (
         <footer className="global-search__footer" data-openbitfun-component="global-search" data-openbitfun-part="footer">
           {snapshot.diagnostics.length > 0 ? (
-            <OverflowText
-              className="global-search__footer-status"
-              role="status"
-              data-testid={`${testIdPrefix}-partial-status`}
-            >
-              {tCommon('nav.search.partialUnavailable')}
-            </OverflowText>
+            <details className="global-search__diagnostics" data-testid={`${testIdPrefix}-partial-status`}>
+              <summary>{tCommon('nav.search.partialUnavailable')}</summary>
+              <div className="global-search__diagnostic-target">
+                {tCommon('nav.search.diagnosticTarget', { host: hostLabel })}
+              </div>
+              {snapshot.diagnostics.map((diagnostic, index) => (
+                <div className="global-search__diagnostic" key={`${diagnostic.providerId}:${diagnostic.code}:${index}`}>
+                  <strong>{providers.find(provider => provider.id === diagnostic.providerId)?.groups
+                    .map(group => tCommon(`nav.search.groups.${group}`)).join(' / ') ?? diagnostic.providerId}</strong>
+                  {diagnostic.workspaceName ? <div>{diagnostic.workspaceName} · {diagnostic.hostLabel ?? hostLabel}</div> : null}
+                  {diagnostic.workspacePath ? <div className="global-search__diagnostic-path">{diagnostic.workspacePath}</div> : null}
+                  <p>{diagnostic.message}</p>
+                  {diagnostic.retryable !== false ? (
+                    <Button size="sm" variant="outline" disabled={snapshot.isSearching}
+                      onClick={() => retryProvider(diagnostic.providerId)}>
+                      {tCommon('nav.search.retrySource')}
+                    </Button>
+                  ) : null}
+                </div>
+              ))}
+            </details>
           ) : null}
           <span className="global-search__footer-keys" aria-hidden="true">
             <KeyHint>↑↓</KeyHint> {tCommon('nav.search.footer.navigate')}

@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Activity, AlertTriangle, Database, FileText, GitCompare, ShieldCheck, Wrench } from 'lucide-react';
 import { MarkdownRenderer } from '@/infrastructure/markdown';
 import { Checkbox, Button, OverflowText, TabGroup, Tooltip } from '@openbitfun/ui';
-import { snapshotAPI } from '@/infrastructure/api';
+import { snapshotAPI } from '@/infrastructure/api/service-api/SnapshotAPI';
 import type { SessionUsageReport } from '@/infrastructure/api/service-api/SessionAPI';
 import { globalEventBus } from '@/infrastructure/event-bus';
 import { createDiffEditorTab } from '@/shared/utils/tabUtils';
@@ -15,6 +15,7 @@ import {
 import {
   calculateShare,
   buildSessionUsageExportMarkdown,
+  isUnusedSession,
   formatHitRatePercent,
   formatUsageDuration,
   formatUsageNumber,
@@ -39,6 +40,7 @@ import {
   subscribeUsageExportRedactPathsPreference,
   getDisplayTurnIndex,
 } from './usageReportUtils';
+import { SessionUsageEmptyState } from './SessionUsageEmptyState';
 import type { SessionUsagePanelTab } from './sessionUsagePanelTypes';
 import { sessionWorkspaceId } from '../../session-drivers/sessionFileNavigation';
 import './SessionUsagePanel.scss';
@@ -134,6 +136,10 @@ export const SessionUsagePanel: React.FC<SessionUsagePanelProps> = ({
         <MarkdownRenderer content={markdown} />
       </div>
     );
+  }
+
+  if (isUnusedSession(report)) {
+    return <SessionUsageEmptyState />;
   }
 
   const coverageTone = getCoverageTone(report.coverage.level);

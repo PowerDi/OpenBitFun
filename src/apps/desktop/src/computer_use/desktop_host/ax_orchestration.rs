@@ -426,7 +426,7 @@ impl DesktopComputerUseHost {
                         && params.modifier_keys.is_empty();
                     node_coordinates =
                         crate::computer_use::control_session::spawn_blocking(move || {
-                            macos::catch_objc(|| resolve_macos_node_click(pid, idx, semantic))
+                            macos::catch_objc_local(|| resolve_macos_node_click(pid, idx, semantic))
                         })
                         .await
                         .map_err(|error| OpenBitFunError::tool(error.to_string()))??;
@@ -450,7 +450,7 @@ impl DesktopComputerUseHost {
                     )?;
                     image_coordinates = Some((x, y));
                     crate::computer_use::control_session::spawn_blocking(move || {
-                        macos::catch_objc(|| try_macos_point_press(pid, x, y))
+                        macos::catch_objc_local(|| try_macos_point_press(pid, x, y))
                     })
                     .await
                     .map_err(|error| OpenBitFunError::tool(error.to_string()))??
@@ -670,7 +670,7 @@ impl DesktopComputerUseHost {
         if point.is_none() && index.is_none() {
             return Ok(false);
         }
-        crate::computer_use::control_session::spawn_blocking(move || macos::catch_objc(|| {
+        crate::computer_use::control_session::spawn_blocking(move || macos::catch_objc_local(|| {
             let element = if let Some(index) = index {
                 Some(crate::computer_use::macos_ax_dump::retained_cached_target(pid, index)
                     .ok_or_else(|| OpenBitFunError::tool("AX_NODE_STALE: text focus target is no longer in the observed snapshot"))?)
@@ -726,7 +726,7 @@ impl DesktopComputerUseHost {
                         .flatten()
                         .map(|point| (point.x, point.y));
                     if let Some((x, y)) = intended_point {
-                        let mismatch = crate::computer_use::control_session::spawn_blocking(move || macos::catch_objc(||
+                        let mismatch = crate::computer_use::control_session::spawn_blocking(move || macos::catch_objc_local(||
                         crate::computer_use::macos_ax_dump::focused_text_target_mismatch(pid, x, y)
                     )).await.map_err(|error| OpenBitFunError::tool(error.to_string()))??;
                         if mismatch {
@@ -865,7 +865,7 @@ impl DesktopComputerUseHost {
                 None => {
                     let idx = *idx;
                     crate::computer_use::control_session::spawn_blocking(move || {
-                        macos::catch_objc(|| resolve_macos_node_click(pid, idx, false))
+                        macos::catch_objc_local(|| resolve_macos_node_click(pid, idx, false))
                     })
                     .await
                     .map_err(|error| OpenBitFunError::tool(error.to_string()))??

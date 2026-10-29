@@ -43,6 +43,7 @@ import type { WorkspaceConnectionTarget } from '@/features/ssh-remote/types';
 import { openGlobalSearch } from '@/app/global-search/globalSearchStore';
 import { activateProductAction } from '@/app/global-search/productActionActivator';
 import { createProject, type ProjectDraft, type ProjectFolder } from '@/app/services/createProject';
+import { useWorkspaceSessionViewStore } from './workspaceSessionView';
 import { getActiveSurfaceScope } from '@/infrastructure/peer-device/deviceSurface';
 import { useNurseryStore } from '@/app/scenes/profile/nurseryStore';
 import { RetainedMountBoundary } from '@/shared/presence';
@@ -143,20 +144,27 @@ const MainNav: React.FC = () => {
     });
   }, [handleSelectRemoteHost]);
 
-  const handleConfirmProject = useCallback((draft: ProjectDraft) => createProject(draft, async folder => {
-    const remote = sshRemoteRef.current;
-    if (folder.remote?.connectionId !== remote.connectionId) {
-      throw new Error(t('newProject.remoteConnectionChanged'));
-    }
-    if (!(await remote.openWorkspace(folder.path))) {
-      // A cancelled rebind returns to this draft, not the provider's standalone picker.
-      remote.setShowFileBrowser(false);
-      return null;
-    }
-    const workspace = workspaceManager.getState().currentWorkspace;
-    if (!workspace) throw new Error(t('newProject.errorCreateFailed'));
-    return workspace;
-  }), [t]);
+  const handleConfirmProject = useCallback(async (draft: ProjectDraft) => {
+    const scope = getActiveSurfaceScope();
+    const succeeded = await createProject(draft, async folder => {
+      const remote = sshRemoteRef.current;
+      if (folder.remote?.connectionId !== remote.connectionId) {
+        throw new Error(t('newProject.remoteConnectionChanged'));
+      }
+      if (!(await remote.openWorkspace(folder.path))) {
+        // A cancelled rebind returns to this draft, not the provider's standalone picker.
+        remote.setShowFileBrowser(false);
+        return null;
+      }
+      const workspace = workspaceManager.getState().currentWorkspace;
+      if (!workspace) throw new Error(t('newProject.errorCreateFailed'));
+      return workspace;
+    });
+    scope.assertCurrent('reveal created project');
+    // The flat session view has no row for a new project without sessions.
+    if (succeeded) useWorkspaceSessionViewStore.getState().setGrouping('grouped');
+    return succeeded;
+  }, [t]);
 
   const closeWorkspaceDialog = useCallback(() => {
     setWorkspaceDialogOpen(false);
@@ -325,7 +333,7 @@ const MainNav: React.FC = () => {
             />
           </StickySectionHeader>
           <div ref={sessionContentRef} className="openbitfun-nav-panel__items" data-openbitfun-component="nav-panel" data-openbitfun-part="sectionContent">
-            <WorkspaceListSection variant="all" />
+            <WorkspaceListSection variant="all" scrollRootRef={sectionsScrollRef} />
           </div>
         </div>
         </div>

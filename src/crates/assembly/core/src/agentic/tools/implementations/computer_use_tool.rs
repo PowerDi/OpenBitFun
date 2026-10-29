@@ -238,7 +238,7 @@ impl ComputerUseTool {
         let os = Self::host_os_label();
         let keys = Self::key_chord_os_hint();
         format!(
-            "Desktop application control on {}. {} \
+            "Desktop application control on {}. {} For OpenBitFun settings and product operations (including MCP configuration), use OpenBitFunControl discovery and its supported operations first; opening settings is not configuration success. For OpenBitFun MiniApps, prefer MiniAppBrowser and its bridge/DOM/input controls; missing semantic actions alone do not justify desktop fallback. Ordinary web pages use ControlHub when available. \
 Text-only model: observe the selected app through get_app_state or describe_screen and read AX/OCR facts; do not call screenshot or guess unseen pixels. \
 Begin each new user GUI task with start_control once (background by default); keep that session through verification. Use list_apps for application identity and list_windows for window titles and exact {{pid,window_id}} selection. After a missing/wrong window, inspect list_windows across processes (query matches application names, bundle ids and titles) before concluding the task is unavailable; app input results list opened_windows that appeared in any process. Reuse the selector or omit app to follow the bound window. \
 Use app_batch by default for already-decided app_click/app_type_text/app_key_chord/app_scroll steps. Focus and exact Unicode text fit in one app_type_text step. Batch known search input and its submit key, or several observed fields. \
@@ -1594,7 +1594,7 @@ impl Tool for ComputerUseTool {
         let os = Self::host_os_label();
         let keys = Self::key_chord_os_hint();
         Ok(format!(
-            "Desktop application control on {}. {} \
+            "Desktop application control on {}. {} For OpenBitFun settings and product operations (including MCP configuration), use OpenBitFunControl discovery and its supported operations first; opening settings is not configuration success. For OpenBitFun MiniApps, prefer MiniAppBrowser and its bridge/DOM/input controls; missing semantic actions alone do not justify desktop fallback. Ordinary web pages use ControlHub when available. \
 Observe a known app with get_app_state. Use list_apps for application identity and list_windows for exact window titles and {{pid,window_id}}. A helper with no window or a screenshot of the wrong window calls for window discovery (list_windows query matches application names, bundle ids and titles across processes), not a conclusion that the task is closed; app input results list opened_windows that appeared in any process. On app-zoom-v1 hosts, get_app_state zoom re-captures an unclear region of a screenshot at higher detail. Begin each new user GUI task with start_control once (background by default); keep that session through verification. Reuse the selector or omit app to keep the bound window. \
 Use app_batch by default for already-decided app_click/app_type_text/app_key_chord/app_scroll/app_drag steps. Focus and Unicode input fit in one app_type_text step. Batch known search input plus its submit key, or several observed form fields; end the batch when new information is needed. \
 One batch returns ordered receipts and one final observation. Use that result for the next decision, without a duplicate screenshot or routine delay; finish when the requested outcome is verified. \
@@ -1608,7 +1608,7 @@ Use ExecCommand for genuine shell work, never ad hoc GUI capture, clipboard or i
     }
 
     fn short_description(&self) -> String {
-        "Inspect the screen and control desktop input for computer-use tasks.".to_string()
+        "Control native desktop apps and OS dialogs. Prefer OpenBitFunControl for OpenBitFun settings, MiniAppBrowser for MiniApps and ControlHub for web pages.".to_string()
     }
 
     fn default_exposure(&self) -> ToolExposure {
@@ -1668,6 +1668,30 @@ Use ExecCommand for genuine shell work, never ad hoc GUI capture, clipboard or i
             "properties": properties,
             "required": ["action"],
             "additionalProperties": false
+        })
+    }
+
+    fn output_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "success": {"type": "boolean"},
+                "action": {"type": "string"},
+                "status": {"type": "string"},
+                "observation": {"type": "object", "additionalProperties": true},
+                "screenshot": {"type": "object", "additionalProperties": true},
+                "screenshot_meta": {"type": "object", "additionalProperties": true},
+                "screenshot_id": {"type": "string"},
+                "windows": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+                "apps": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+                "steps": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+                "partial": {"type": "boolean"},
+                "warning": {"type": "string"},
+                "error": {"type": "string"},
+                "control_guidance": {"type": "string"},
+                "suggested_next_action": {"type": "object", "additionalProperties": true}
+            },
+            "additionalProperties": true
         })
     }
 

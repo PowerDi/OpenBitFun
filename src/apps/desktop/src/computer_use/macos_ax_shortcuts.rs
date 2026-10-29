@@ -13,6 +13,7 @@
 
 #![allow(dead_code)]
 
+use super::macos_ax_dispatch::copy_attribute_value as AXUIElementCopyAttributeValue;
 use core_foundation::array::{CFArray, CFArrayRef};
 use core_foundation::base::{CFGetTypeID, CFTypeRef, TCFType};
 use core_foundation::boolean::{CFBooleanGetTypeID, CFBooleanRef};
@@ -30,11 +31,6 @@ type AXUIElementRef = *const c_void;
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
-    fn AXUIElementCopyAttributeValue(
-        element: AXUIElementRef,
-        attribute: CFStringRef,
-        value: *mut CFTypeRef,
-    ) -> i32;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]

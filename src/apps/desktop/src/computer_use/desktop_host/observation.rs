@@ -69,12 +69,18 @@ impl DesktopComputerUseHost {
                 return Err(OpenBitFunError::tool("[SHARED_TARGET_ONLY] Accessibility observation requires the shared application"));
             }
             let focus_window_only = focus_window_only || shared.sharing.is_some();
+            debug!(
+                "Computer Use AX observation started: pid={pid}, same_process={}",
+                pid == std::process::id() as i32
+            );
             let mut snap = crate::computer_use::control_session::spawn_blocking(move || {
                 // Wrap in @try/@catch — AX APIs can throw NSException for
                 // sandboxed / partially-loaded / dying processes, and an
                 // unwound foreign exception aborts the whole openbitfun process
                 // (`Rust cannot catch foreign exceptions, aborting`).
-                macos::catch_objc(|| {
+                // Only individual same-process AX messages go to main. The
+                // walk must remain off-main to serve WebKit's synchronous IPC.
+                macos::catch_objc_local(|| {
                     crate::computer_use::macos_ax_dump::dump_app_ax(
                         pid,
                         crate::computer_use::macos_ax_dump::DumpOpts {
@@ -87,6 +93,10 @@ impl DesktopComputerUseHost {
             })
             .await
             .map_err(|e| OpenBitFunError::tool(e.to_string()))??;
+            debug!(
+                "Computer Use AX observation completed: pid={pid}, node_count={}",
+                snap.nodes.len()
+            );
 
             // Auto-attach focused-window screenshot. Failures are non-fatal —
             // worst case the model still has the AX tree.

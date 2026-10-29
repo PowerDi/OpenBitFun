@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { JSDOM } from 'jsdom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
+import { formatDuration } from '@/shared/utils/format';
 import path from 'node:path';
 
 import type { SessionUsageReport } from '@/infrastructure/api/service-api/SessionAPI';
@@ -35,7 +36,7 @@ const tabUtilsMocks = vi.hoisted(() => ({
   createDiffEditorTab: vi.fn(),
 }));
 
-vi.mock('@/infrastructure/api', () => ({
+vi.mock('@/infrastructure/api/service-api/SnapshotAPI', () => ({
   snapshotAPI: {
     getOperationDiff: snapshotApiMocks.getOperationDiff,
   },
@@ -531,6 +532,28 @@ describe('Session usage report UI components', () => {
       root.render(element);
     });
   };
+
+  it.each([undefined, null])('distinguishes a new session from missing telemetry with a %s file count', changedFiles => {
+    const report = usageReport({
+      scope: { kind: 'entire_session', turnCount: 0, includesSubagents: false },
+      tokens: { source: 'unavailable', cacheCoverage: 'unavailable' },
+      models: [{ modelId: 'unknown_model', callCount: 0 }],
+      tools: [], files: { scope: 'unavailable', files: [] },
+      errors: { totalErrors: 0, toolErrors: 0, modelErrors: 0, examples: [] },
+      compression: { compactionCount: 0, manualCompactionCount: 0, automaticCompactionCount: 0 },
+    });
+    // Rust Option serializes as null; legacy payloads may omit the field.
+    Object.assign(report.files, { changedFiles });
+    for (const Component of [SessionUsageReportCard, SessionUsagePanel]) {
+      render(<Component report={report} />);
+      expect(container.querySelector('[data-testid="session-usage-empty"]')).not.toBeNull();
+      expect(container.textContent).not.toContain('Unavailable');
+      render(<Component report={{ ...report, scope: { ...report.scope, turnCount: 1 } }} />);
+      expect(container.querySelector('[data-testid="session-usage-empty"]')).toBeNull();
+      render(<Component report={{ ...report, models: [{ modelId: 'unknown_model', callCount: 1 }] }} />);
+      expect(container.querySelector('[data-testid="session-usage-empty"]')).toBeNull();
+    }
+  });
 
   it('renders localized partial coverage and cache unavailable without showing zero', () => {
     const onOpenDetails = vi.fn();
@@ -1035,7 +1058,7 @@ describe('Session usage report UI components', () => {
     });
 
     expect(container.textContent).toContain('Recorded time');
-    expect(container.textContent).toContain('40s');
+    expect(container.textContent).toContain(formatDuration(40000));
 
     const reportWithoutModelDuration = usageReport({
       models: [
@@ -1662,7 +1685,7 @@ describe('Session usage report UI components', () => {
     // is hard-coded English numbered from zero.
     expect(container.textContent).toContain('Turn 3');
     expect(container.textContent).not.toContain('turn 2');
-    expect(container.textContent).toContain('1m 35s');
+    expect(container.textContent).toContain(formatDuration(95000));
     expect(container.textContent).toContain('Redacted');
     expect(container.textContent).not.toContain('secret shell command');
 
@@ -1727,7 +1750,7 @@ describe('Session usage report UI components', () => {
     expect(container.textContent).toContain('28');
     expect(container.textContent).toContain('Timed out');
     expect(container.textContent).toContain('Execution');
-    expect(container.textContent).toContain('1m 35s');
+    expect(container.textContent).toContain(formatDuration(95000));
     expect(container.textContent).toContain('operation timed out');
 
     const toolLink = container.querySelector<HTMLButtonElement>('.session-usage-panel__turn-link');

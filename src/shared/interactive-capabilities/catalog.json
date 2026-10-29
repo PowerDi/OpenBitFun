@@ -5,6 +5,18 @@
   "origin": "https://playbook.openbitfun.com",
   "searchAcceptance": [
     {
+      "id": "native-image-generation",
+      "query": "generate_image",
+      "expectedFirstCapabilityId": "feature.ai-assistant",
+      "expectedCapabilityIds": [
+        "feature.ai-assistant"
+      ],
+      "expectedItem": {
+        "capabilityId": "feature.ai-assistant",
+        "itemId": "image-generation"
+      }
+    },
+    {
       "id": "companion-pet-mixed",
       "query": "宠物 pet mascot 桌面宠物",
       "expectedFirstCapabilityId": "setting.application.pet",
@@ -138,6 +150,22 @@
         "capabilityId": "setting.tools.execution",
         "itemId": "timeouts"
       }
+    },
+    {
+      "id": "mcp-control-chinese",
+      "query": "MCP 服务器",
+      "expectedFirstCapabilityId": "setting.tools.mcp",
+      "expectedCapabilityIds": [
+        "setting.tools.mcp"
+      ]
+    },
+    {
+      "id": "mcp-control-english",
+      "query": "MCP server configuration",
+      "expectedFirstCapabilityId": "setting.tools.mcp",
+      "expectedCapabilityIds": [
+        "setting.tools.mcp"
+      ]
     }
   ],
   "categories": {
@@ -235,11 +263,13 @@
       "touch_session_activity"
     ],
     "hostBridges": [
+      "mark_miniapp_web_surface_ready",
       "mark_openbitfun_control_surface_ready",
       "mark_openbitfun_control_surface_unready",
-    "miniapp_shell_call",
+      "miniapp_shell_call",
       "peer_host_invoke_complete",
       "product_control_invoke",
+      "report_miniapp_web_result",
       "report_openbitfun_control_result",
       "report_ide_control_result",
       "webdriver_bridge_result"
@@ -260,6 +290,7 @@
     ],
     "htmlPreview": [
       "html_preview_create",
+      "html_preview_read_resource",
       "html_preview_release"
     ],
     "githubDeviceRouting": [
@@ -416,6 +447,31 @@
             "command:confirm_frontend_update",
             "command:rollback_frontend_update",
             "command:frontend_update_candidate_failed"
+          ]
+        },
+        {
+          "id": "image-generation",
+          "titleZh": "通过已配置的默认图像模型生成图片",
+          "titleEn": "Generate images with the configured default image model",
+          "control": {
+            "kind": "delegate",
+            "tools": [
+              "generate_image"
+            ],
+            "workflowZh": [
+              "使用 generate_image 按用户描述生成图片，默认省略 service_id 以使用已配置的默认图像模型",
+              "按需指定数量和尺寸，通过返回的文件路径交付图片；远程工作区文件通过当前工作区数据面读写",
+              "缺少配置、认证失败或额度不足时明确报告，不自动切换到其他服务"
+            ],
+            "workflowEn": [
+              "Use generate_image to create images from the user's description; omit service_id to use the configured default image model",
+              "Specify count and size when needed and deliver the returned file paths; access remote workspace files through the active workspace data plane",
+              "Report missing configuration, authentication failures, or quota limits explicitly without automatically switching services"
+            ]
+          },
+          "evidence": [
+            "source:src/crates/assembly/core/src/agentic/tools/implementations/generate_image_tool.rs#generate_image",
+            "source:src/crates/assembly/core/builtin_skills/generate-image/SKILL.md#generate_image"
           ]
         },
         {
@@ -3141,7 +3197,7 @@
             "command:miniapp_host_call",
             "command:miniapp_worker_call",
             "command:miniapp_runtime_status",
-        "command:miniapp_presentation",
+            "command:miniapp_presentation",
             "command:miniapp_worker_list_running",
             "command:miniapp_worker_stop",
             "command:miniapp_draft_host_call",
@@ -3275,6 +3331,29 @@
           "evidence": [
             "source:src/crates/assembly/core/src/agentic/tools/implementations/miniapp_publish_tool.rs#PublishMiniApp",
             "command:miniapp_market_submit_installed"
+          ]
+        },
+        {
+          "id": "agent-operate-app",
+          "titleZh": "由智能体结合源码控制 Mini App",
+          "titleEn": "Let an agent control a Mini App using its source and live interface",
+          "control": {
+            "kind": "delegate",
+            "tools": [
+              "MiniAppBrowser"
+            ],
+            "workflowZh": [
+              "先用 OpenBitFunControl 的 get 查询 feature.miniapps，并按 schema 用 inspect-app 读取源码，理解业务函数、动作参数和状态；源码更新属于应用改造，不是日常操作的前置步骤",
+              "用 MiniAppBrowser 的 open 连接当前实例，优先 observe_bridge 读取业务状态、act_bridge 执行语义动作并核对结果，保留用户草稿，不改源码、不重载、不切换呈现。旧应用缺少接口时使用可用的 DOM/输入或说明限制；自动活动信息不能代替业务状态"
+            ],
+            "workflowEn": [
+              "Use OpenBitFunControl get for feature.miniapps, then inspect-app source to understand business functions, action parameters, and state. Source updates are app enhancements, not prerequisites for routine operation",
+              "Open the current instance with MiniAppBrowser; prefer observe_bridge for business state and act_bridge for semantic operations and result verification. Preserve drafts without editing source, reloading, or changing presentation. For legacy apps use available DOM/input controls or report the gap; activity is not business state"
+            ]
+          },
+          "evidence": [
+            "source:src/crates/assembly/core/src/agentic/tools/implementations/miniapp_browser/mod.rs#MiniAppBrowser",
+            "source:src/crates/contracts/product-domains/src/miniapp/web_surface.rs#MiniAppWebLocator"
           ]
         },
         {
@@ -3917,14 +3996,14 @@
       ],
       "highlightsZh": [
         "按已识别与更多应用浏览；可发现表示支持查找，分类状态表示当前结果",
-        "自动发现只控制列表更新；关闭后保留结果，仍可手动刷新，已接入的功能照常运行",
+        "自动发现控制列表更新；关闭后立即隐藏对应来源的跟随会话，已分叉副本继续保留",
         "审阅并导入受支持的 Skill、MCP 与 Hook；Command、Tool、子智能体暂无副本导入",
         "已导入表示副本已保存；在对应管理页确认启用与连接",
         "Codex、Zcode 会话按工作区自动发现；打开来源时刷新历史，首次发送创建独立分支，可移除和重新添加来源"
       ],
       "highlightsEn": [
         "Browse identified and more apps; discovery coverage and current category results are separate",
-        "Automatic discovery controls list updates; pausing retains results and allows manual refresh without changing active integrations",
+        "Automatic discovery controls list updates; disabling immediately hides source-following sessions while retaining local forks",
         "Review and import supported Skills, MCP and Hooks; command, tool and subagent copy import is unavailable",
         "Imported means a copy was saved; confirm activation and connection in the relevant settings",
         "Discover Codex and Zcode sessions by workspace, refresh history on open, continue in a new branch on first send, and remove or restore source views"
@@ -4116,14 +4195,14 @@
       ],
       "stepsZh": [
         "打开“外部导入”并选择应用",
-        "在左侧导航搜索框上方切换自动发现，悬停查看说明；关闭后保留结果，也可手动刷新",
+        "在左侧导航搜索框上方切换自动发现，悬停查看说明；关闭后立即隐藏对应来源的跟随会话，已分叉副本继续保留",
         "查看分类状态，打开分类弹窗浏览、搜索并选择内容",
         "审阅可导入项目并确认创建副本；Command、Tool、子智能体按已有兼容功能使用",
         "前往对应管理页确认副本启用或连接；当前页不将“已导入”视为可用"
       ],
       "stepsEn": [
         "Open External Import and choose an app",
-        "Toggle automatic discovery above the sidebar search and hover for details; pausing retains results and manual refresh remains available",
+        "Toggle automatic discovery above the sidebar search and hover for details; disabling immediately hides source-following sessions while local forks remain visible",
         "Inspect category status, then open a category dialog to browse, search, and select content",
         "Review importable items and confirm copies; use commands, tools and subagents through existing compatibility features",
         "Confirm copy activation or connection in the relevant settings; Imported does not mean available"
@@ -5319,13 +5398,14 @@
       "items": [
         {
           "id": "agent-cards",
-          "titleZh": "按需求或在任务过程中创建倒计时、清单、便签、进度、指标、定时任务和自定义卡片，可定时从 HTTP 接口或本机命令刷新数据",
-          "titleEn": "Create countdown, checklist, note, progress, metrics, scheduled-job, and custom cards on request or during a task, optionally refreshed from an HTTP endpoint or a local command",
+          "titleZh": "按需求或在任务过程中创建倒计时、清单、便签、进度、指标、图表、定时任务和自定义卡片，可定时从 HTTP 接口或本机命令刷新数据",
+          "titleEn": "Create countdown, checklist, note, progress, metrics, chart, scheduled-job, and custom cards on request or during a task, optionally refreshed from an HTTP endpoint or a local command",
           "control": {
             "kind": "delegate"
           },
           "evidence": [
-            "source:src/crates/assembly/core/src/agentic/tools/implementations/desktop_card_tool.rs#\"countdown-reminder\""
+            "source:src/crates/assembly/core/src/agentic/tools/implementations/desktop_card_tool.rs#\"countdown-reminder\"",
+            "source:src/crates/assembly/core/src/agentic/tools/implementations/desktop_card_tool.rs#\"usage-breakdown\""
           ]
         },
         {
@@ -6935,18 +7015,36 @@
           ]
         },
         {
-          "id": "connection-test",
-          "titleZh": "保存前测试供应商或模型连接并刷新运行时客户端",
-          "titleEn": "Test provider or model connectivity before saving and refresh the runtime client",
+          "id": "smart-routing",
+          "titleZh": "查看智能模式可用状态（暂未开放）",
+          "titleEn": "View smart-mode availability (not released)",
           "control": {
             "kind": "open",
             "reasonCode": "unstructuredInteraction",
-            "reasonZh": "“保存前测试供应商或模型连接并刷新运行时客户端”由多个实时状态相关步骤组成，目前没有一个能确定完成整个流程的单一结构化 Command；智能体会打开精确入口，并把后续交互保留在用户可见界面。",
-            "reasonEn": "“Test provider or model connectivity before saving and refresh the runtime client” spans multiple live-state-dependent steps and currently has no single structured Command that can deterministically complete the whole workflow; the Agent opens the exact entry and keeps the remaining interaction visible to the user."
+            "reasonZh": "“查看智能模式可用状态（暂未开放）”在模型设置页展示执行宿主的发布可用性；当前版本不提供智能模式配置或开启操作",
+            "reasonEn": "\"View smart-mode availability (not released)\" opens model settings to inspect execution-host availability. This release disables smart-mode configuration and activation."
+          },
+          "evidence": [
+            "command:get_model_routing_status",
+            "source:src/web-ui/src/infrastructure/config/components/ModelRouterSettings.tsx#ModelRouterSettings",
+            "source:src/web-ui/src/flow_chat/components/NativeModelSelectionPanel.tsx#onRoutingSettings",
+            "source:src/web-ui/src/app/scenes/settings/pages/ai/ModelSettingsPage.tsx#settings-smart-mode-configure"
+          ]
+        },
+        {
+          "id": "connection-test",
+          "titleZh": "测试模型连接或图像生成，并刷新运行时客户端",
+          "titleEn": "Test model connections or image generation and refresh the runtime client",
+          "control": {
+            "kind": "open",
+            "reasonCode": "unstructuredInteraction",
+            "reasonZh": "“测试模型连接或图像生成，并刷新运行时客户端”需要用户在配置表单中选择服务并主动发起；图像服务测试会实际生成图片并可能消耗额度，智能体只能打开对应设置入口。",
+            "reasonEn": "“Test model connections or image generation and refresh the runtime client” requires the user to select a configuration and start the test from its form; image-service tests generate an actual image and may consume quota, so the Agent can only open the settings entry."
           },
           "evidence": [
             "command:test_ai_connection",
             "command:test_ai_config_connection",
+            "command:test_image_generation_service",
             "command:refresh_model_client"
           ]
         },
@@ -7747,13 +7845,15 @@
       "categoryId": "assistant",
       "titleZh": "执行与权限控制",
       "titleEn": "Execution & permissions",
-      "summaryZh": "管理智能体工具权限、并行度、超时、延迟加载、Computer Use 与浏览器控制。",
-      "summaryEn": "Manage agent tool permissions, concurrency, timeouts, deferred loading, Computer Use, and browser control.",
+      "summaryZh": "管理智能体工具权限、呈现模式、并行度、超时、延迟加载、Computer Use 与浏览器控制。",
+      "summaryEn": "Manage agent tool permissions, presentation mode, concurrency, timeouts, deferred loading, Computer Use, and browser control.",
       "keywordsZh": [
         "执行控制",
         "工具权限",
         "工具调用超时",
         "延迟加载工具",
+        "工具呈现模式",
+        "PTC",
         "审批",
         "并行",
         "超时",
@@ -7765,6 +7865,8 @@
         "execution control",
         "tool permissions",
         "deferred tool loading",
+        "tool presentation",
+        "PTC",
         "approval",
         "parallel",
         "timeout",
@@ -7888,6 +7990,28 @@
           },
           "evidence": [
             "source:src/web-ui/src/locales/zh-CN/settings/runtime.json#deferredToolLoading.sectionTitle"
+          ]
+        },
+        {
+          "id": "tool-presentation",
+          "titleZh": "选择模型使用原生模式还是 PTC TypeScript 模式",
+          "titleEn": "Choose native mode or PTC TypeScript mode for the model",
+          "destination": {
+            "kind": "settings",
+            "pageId": "tools.execution",
+            "viewId": "advanced"
+          },
+          "control": {
+            "kind": "direct",
+            "operations": [],
+            "options": [
+              {
+                "id": "tool-presentation-mode"
+              }
+            ]
+          },
+          "evidence": [
+            "source:src/web-ui/src/locales/zh-CN/settings/runtime.json#toolPresentation.mode"
           ]
         },
         {
@@ -8087,6 +8211,13 @@
           "titleEn": "Deferred tool loading",
           "descriptionZh": "按需加载大型工具定义，减少智能体初始上下文。",
           "descriptionEn": "Load large tool definitions on demand to reduce initial agent context."
+        },
+        {
+          "id": "tool-presentation-mode",
+          "titleZh": "工具呈现模式",
+          "titleEn": "Tool presentation mode",
+          "descriptionZh": "选择模型直接调用原生工具，或通过 PTC TypeScript 调用工具。",
+          "descriptionEn": "Choose whether the model calls native tools directly or uses PTC TypeScript."
         },
         {
           "id": "subagent-batch-policy",
@@ -8817,13 +8948,15 @@
       "items": [
         {
           "id": "json-config",
-          "titleZh": "用表单或 JSON 查看和保存全部 MCP 服务器配置",
-          "titleEn": "View and save all MCP server configuration through forms or JSON",
+          "titleZh": "查看服务器状态并按服务器保存非秘密配置",
+          "titleEn": "Inspect server state and save non-secret configuration per server",
           "control": {
-            "kind": "open",
-            "reasonCode": "unstructuredInteraction",
-            "reasonZh": "“用表单或 JSON 查看和保存全部 MCP 服务器配置”由多个实时状态相关步骤组成，目前没有一个能确定完成整个流程的单一结构化 Command；智能体会打开精确入口，并把后续交互保留在用户可见界面。",
-            "reasonEn": "“View and save all MCP server configuration through forms or JSON” spans multiple live-state-dependent steps and currently has no single structured Command that can deterministically complete the whole workflow; the Agent opens the exact entry and keeps the remaining interaction visible to the user."
+            "kind": "direct",
+            "operations": [
+              "list-servers",
+              "configure-server"
+            ],
+            "options": []
           },
           "evidence": [
             "command:load_mcp_json_config",
@@ -8835,10 +8968,12 @@
           "titleZh": "添加本地进程、远程 HTTP/SSE 或容器 MCP 服务器",
           "titleEn": "Add local-process, remote HTTP/SSE, or container MCP servers",
           "control": {
-            "kind": "open",
-            "reasonCode": "unstructuredInteraction",
-            "reasonZh": "“添加本地进程、远程 HTTP/SSE 或容器 MCP 服务器”由多个实时状态相关步骤组成，目前没有一个能确定完成整个流程的单一结构化 Command；智能体会打开精确入口，并把后续交互保留在用户可见界面。",
-            "reasonEn": "“Add local-process, remote HTTP/SSE, or container MCP servers” spans multiple live-state-dependent steps and currently has no single structured Command that can deterministically complete the whole workflow; the Agent opens the exact entry and keeps the remaining interaction visible to the user."
+            "kind": "direct",
+            "operations": [
+              "list-servers",
+              "configure-server"
+            ],
+            "options": []
           },
           "evidence": [
             "source:src/web-ui/src/locales/zh-CN/settings/mcp.json#server.typeLocal",
@@ -8850,10 +8985,15 @@
           "titleZh": "启动、停止、重启和删除单个 MCP 服务器",
           "titleEn": "Start, stop, restart, and delete individual MCP servers",
           "control": {
-            "kind": "open",
-            "reasonCode": "unstructuredInteraction",
-            "reasonZh": "“启动、停止、重启和删除单个 MCP 服务器”由多个实时状态相关步骤组成，目前没有一个能确定完成整个流程的单一结构化 Command；智能体会打开精确入口，并把后续交互保留在用户可见界面。",
-            "reasonEn": "“Start, stop, restart, and delete individual MCP servers” spans multiple live-state-dependent steps and currently has no single structured Command that can deterministically complete the whole workflow; the Agent opens the exact entry and keeps the remaining interaction visible to the user."
+            "kind": "direct",
+            "operations": [
+              "list-servers",
+              "start-server",
+              "stop-server",
+              "restart-server",
+              "delete-server"
+            ],
+            "options": []
           },
           "evidence": [
             "command:start_mcp_server",
@@ -8867,10 +9007,11 @@
           "titleZh": "查看初始化、连接、健康、重连、鉴权和失败状态",
           "titleEn": "Inspect initialization, connection, health, reconnecting, authentication, and failure states",
           "control": {
-            "kind": "open",
-            "reasonCode": "unstructuredInteraction",
-            "reasonZh": "“查看初始化、连接、健康、重连、鉴权和失败状态”由多个实时状态相关步骤组成，目前没有一个能确定完成整个流程的单一结构化 Command；智能体会打开精确入口，并把后续交互保留在用户可见界面。",
-            "reasonEn": "“Inspect initialization, connection, health, reconnecting, authentication, and failure states” spans multiple live-state-dependent steps and currently has no single structured Command that can deterministically complete the whole workflow; the Agent opens the exact entry and keeps the remaining interaction visible to the user."
+            "kind": "direct",
+            "operations": [
+              "list-servers"
+            ],
+            "options": []
           },
           "evidence": [
             "command:get_mcp_server_status",
@@ -8919,11 +9060,11 @@
               "GetMCPPrompt"
             ],
             "workflowZh": [
-              "先对明确的 server_id 调用 ListMCPPrompts；不知道服务器时先打开 MCP 设置查看已连接项",
+              "先通过 list-servers 取得用户服务器 ID，再对明确的 server_id 调用 ListMCPPrompts",
               "取得名称和参数模式后用 GetMCPPrompt 渲染指定 Prompt；连接或权限失败必须原样返回"
             ],
             "workflowEn": [
-              "Call ListMCPPrompts for an explicit server_id; if the server is unknown, open MCP settings to inspect connected servers first",
+              "Resolve a user server ID with list-servers, then call ListMCPPrompts for that explicit server_id",
               "After obtaining the name and argument shape, render it with GetMCPPrompt and preserve connection or permission failures"
             ]
           },
@@ -9000,17 +9141,64 @@
       ],
       "agentExamplesZh": [
         "打开 MCP 设置",
-        "带我管理 MCP 服务器"
+        "带我管理 MCP 服务器",
+        "帮我配置 MCP 服务器",
+        "重启指定 MCP 服务器"
       ],
       "agentExamplesEn": [
         "Open MCP settings",
-        "Take me to MCP server management"
+        "Take me to MCP server management",
+        "Configure an MCP server for me",
+        "Restart a specific MCP server"
       ],
       "destination": {
         "kind": "settings",
         "pageId": "tools.mcp"
       },
-      "operations": [],
+      "operations": [
+        {
+          "id": "list-servers",
+          "titleZh": "列出服务器与状态",
+          "titleEn": "List servers and state",
+          "descriptionZh": "返回当前产品宿主用户级服务器 ID、连接状态和配置版本，不返回已有凭据、命令参数或 URL。",
+          "descriptionEn": "Return user server IDs, connection state, and the configuration fingerprint on the executing product host without exposing stored credentials, command arguments, or URLs."
+        },
+        {
+          "id": "configure-server",
+          "titleZh": "添加或修改服务器",
+          "titleEn": "Add or update a server",
+          "descriptionZh": "先列出服务器取得 expectedFingerprint，再按 serverId 增量保存非秘密配置；保留其他服务器、未提供字段和已有凭据。保存后检查 runtimeReconciled 和连接状态，不能把写入成功当作连接成功。",
+          "descriptionEn": "List servers for expectedFingerprint, then patch non-secret configuration by serverId. Preserve other servers, omitted fields, and stored credentials. Check runtimeReconciled and connection state after saving; persistence is not proof of connectivity."
+        },
+        {
+          "id": "start-server",
+          "titleZh": "启动服务器",
+          "titleEn": "Start a server",
+          "descriptionZh": "按返回的用户服务器 ID 启动服务并回读状态；需要 OAuth 时保留用户授权流程。",
+          "descriptionEn": "Start a returned user server ID and read back state; preserve the user authorization flow when OAuth is required."
+        },
+        {
+          "id": "stop-server",
+          "titleZh": "停止服务器",
+          "titleEn": "Stop a server",
+          "descriptionZh": "停止指定用户服务器并保留配置。",
+          "descriptionEn": "Stop the selected user server while preserving its configuration."
+        },
+        {
+          "id": "restart-server",
+          "titleZh": "重启服务器",
+          "titleEn": "Restart a server",
+          "descriptionZh": "重启指定用户服务器并回读状态，不重新写入配置。",
+          "descriptionEn": "Restart the selected user server and read back state without rewriting configuration."
+        },
+        {
+          "id": "delete-server",
+          "titleZh": "删除服务器",
+          "titleEn": "Delete a server",
+          "descriptionZh": "仅在用户要求时，使用最新 expectedFingerprint 删除指定用户服务器并清理对应运行时。",
+          "descriptionEn": "Only when requested, use the latest expectedFingerprint to remove the selected user server and reconcile its runtime."
+        }
+      ],
       "options": []
     },
     {
@@ -9787,6 +9975,9 @@
       "capabilityId": "setting.application.general"
     },
     "miniapp_market": {
+      "capabilityId": "feature.miniapps"
+    },
+    "miniapp_web_host": {
       "capabilityId": "feature.miniapps"
     },
     "market_image": {

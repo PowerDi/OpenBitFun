@@ -1,22 +1,28 @@
-/** Brand logos for external agent clients, keyed by ACP client id. */
-const EXTERNAL_AGENT_ICON_SOURCES: Record<string, string> = {
-  'claude-native': '/assets/ecosystem-compatibility/claude-code.svg',
-  'codex-native': '/assets/ecosystem-compatibility/codex-mark.svg',
-  'pi-native': '/assets/ecosystem-compatibility/pi-mark.svg',
-  'claude-code': '/assets/ecosystem-compatibility/claude-code.svg',
-  codex: '/assets/ecosystem-compatibility/codex-mark.svg',
-  dsh: '/assets/ecosystem-compatibility/deepseek-harness.svg',
-  opencode: '/assets/ecosystem-compatibility/opencode.svg',
+import { ProductBrandIcon } from '@/shared/ui/ProductBrandIcon';
+import { getProductBrandIcon } from '@/shared/ui/productBrandIcons';
+
+/** ACP client id -> shared product icon id. Native drivers reuse their product's mark. */
+const EXTERNAL_AGENT_PRODUCT_IDS: Record<string, string> = {
+  'claude-native': 'claude-code',
+  'codex-native': 'codex',
+  'claude-code': 'claude-code',
+  codex: 'codex',
+  dsh: 'dsh',
+  opencode: 'opencode',
 };
 
-/** Single-color marks drawn in the surrounding text color through a mask. */
-const MONOCHROME_SOURCES = new Set([
-  '/assets/ecosystem-compatibility/codex-mark.svg',
-  '/assets/ecosystem-compatibility/pi-mark.svg',
-]);
+/**
+ * The shared catalog's Pi asset is the dark app tile; session rows use the
+ * tile-free glyph so the mark follows the interface theme like the Codex symbol.
+ */
+const PI_MARK_SOURCE = '/assets/ecosystem-compatibility/pi-mark.svg';
+const PI_CLIENT_IDS = new Set(['pi-native']);
 
 export function externalAgentIconSource(clientId: string | null | undefined): string | null {
-  return clientId ? EXTERNAL_AGENT_ICON_SOURCES[clientId] ?? null : null;
+  if (!clientId) return null;
+  if (PI_CLIENT_IDS.has(clientId)) return PI_MARK_SOURCE;
+  const productId = EXTERNAL_AGENT_PRODUCT_IDS[clientId];
+  return productId ? getProductBrandIcon(productId)?.src ?? null : null;
 }
 
 export function ExternalAgentIcon({ clientId, size = 14, className }: {
@@ -24,9 +30,7 @@ export function ExternalAgentIcon({ clientId, size = 14, className }: {
   size?: number;
   className?: string;
 }) {
-  const source = externalAgentIconSource(clientId);
-  if (!source) return null;
-  if (MONOCHROME_SOURCES.has(source)) return (
+  if (PI_CLIENT_IDS.has(clientId)) return (
     <span
       className={className}
       aria-hidden="true"
@@ -36,23 +40,23 @@ export function ExternalAgentIcon({ clientId, size = 14, className }: {
         width: size,
         height: size,
         backgroundColor: 'currentColor',
-        maskImage: `url("${source}")`,
+        maskImage: `url("${PI_MARK_SOURCE}")`,
         maskSize: 'contain',
         maskPosition: 'center',
         maskRepeat: 'no-repeat',
       }}
     />
   );
+  const productId = EXTERNAL_AGENT_PRODUCT_IDS[clientId];
+  if (!productId || !getProductBrandIcon(productId)) return null;
   return (
-    <img
+    <span
       className={className}
-      src={source}
-      alt=""
       aria-hidden="true"
-      width={size}
-      height={size}
-      draggable={false}
       data-external-agent={clientId}
-    />
+      style={{ display: 'inline-flex', width: size, height: size }}
+    >
+      <ProductBrandIcon productId={productId} size={size} />
+    </span>
   );
 }

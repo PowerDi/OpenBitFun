@@ -12,7 +12,7 @@ import {
   activateSurface,
   isSurfaceChangedError,
 } from '@/infrastructure/peer-device/deviceSurface';
-import type { FlowChatState, Session } from '../types/flow-chat';
+import type { FlowChatState, ModelRound, Session } from '../types/flow-chat';
 import { startupTrace } from '@/shared/utils/startupTrace';
 import { projectEffectiveToolItem } from '../utils/toolInvocationIdentity';
 import { dispatchJobStore } from '@/features/dispatch/dispatchJobStore';
@@ -7103,6 +7103,32 @@ describe('FlowChatStore historical session hydration state', () => {
     });
     expect(apiMocks.loadSessionTurnWindow).toHaveBeenCalledTimes(1);
   });
+
+  it.each([{}, { firstChunkMs: 20, firstVisibleOutputMs: 200, streamDurationMs: 1_200, ttftMs: 350 }])(
+    'hydrates optional timing from peer history without local clock estimates: %j', async timing => {
+      peerModeFlagMock.active = true;
+      const turn = createPersistedTurn(0);
+      apiMocks.restoreSessionView.mockResolvedValueOnce({
+        session: { sessionId: 'history-1', sessionName: 'History 1', agentType: 'Standard', state: 'Idle', turnCount: 1, createdAt: 1 },
+        turns: [{ ...turn, modelRounds: [{
+          id: 'round-1', turnId: turn.turnId, roundIndex: 0, timestamp: 1, startTime: 1, endTime: 2,
+          status: 'completed', textItems: [{ id: 'text-1', content: 'Done', timestamp: 1, isStreaming: false }],
+          toolItems: [], thinkingItems: [], ...timing,
+        }] }],
+        contextRestoreState: 'ready',
+      });
+      flowChatStore.setState(() => ({
+        sessions: new Map([['history-1', createSession({ sessionId: 'history-1', isHistorical: true, historyState: 'metadata-only' })]]),
+        activeSessionId: 'history-1',
+      }));
+      await flowChatStore.loadSessionHistory('history-1');
+      const restored = flowChatStore.getState().sessions.get('history-1')?.dialogTurns[0].modelRounds[0];
+      expect(restored).toBeDefined();
+      for (const key of ['firstChunkMs', 'firstVisibleOutputMs', 'streamDurationMs', 'ttftMs'] as const) {
+        expect(restored?.[key]).toBe((timing as Partial<ModelRound>)[key]);
+      }
+    },
+  );
 
   it.each([
     [{ inputTokens: 100, outputTokens: 20, totalTokens: 120, cachedTokens: 75 }, 75],

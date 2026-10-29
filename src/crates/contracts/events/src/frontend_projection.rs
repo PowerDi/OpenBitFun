@@ -128,6 +128,7 @@ pub fn project_agentic_frontend_event(event: AgenticEvent) -> Option<AgenticFron
             round_index,
             model_config_id,
             effective_model_name,
+            routing,
         } => Some(AgenticFrontendEvent::new(
             "agentic://model-round-started",
             json!({
@@ -138,6 +139,7 @@ pub fn project_agentic_frontend_event(event: AgenticEvent) -> Option<AgenticFron
                 "roundIndex": round_index,
                 "modelConfigId": model_config_id,
                 "effectiveModelName": effective_model_name,
+                "routing": routing,
             }),
         )),
         AgenticEvent::TextChunk {
@@ -479,6 +481,7 @@ pub fn project_agentic_frontend_event(event: AgenticEvent) -> Option<AgenticFron
             first_chunk_ms,
             first_visible_output_ms,
             stream_duration_ms,
+            ttft_ms,
             attempt_count,
             failure_category,
             token_details,
@@ -496,6 +499,7 @@ pub fn project_agentic_frontend_event(event: AgenticEvent) -> Option<AgenticFron
                 "firstChunkMs": first_chunk_ms,
                 "firstVisibleOutputMs": first_visible_output_ms,
                 "streamDurationMs": stream_duration_ms,
+                "ttftMs": ttft_ms,
                 "attemptCount": attempt_count,
                 "failureCategory": failure_category,
                 "tokenDetails": token_details,
@@ -758,6 +762,7 @@ mod tests {
             round_index: 0,
             model_config_id: "model-config".to_string(),
             effective_model_name: "provider-model".to_string(),
+            routing: None,
         })
         .expect("projected");
 
@@ -779,6 +784,7 @@ mod tests {
             first_chunk_ms: None,
             first_visible_output_ms: None,
             stream_duration_ms: None,
+            ttft_ms: Some(35),
             attempt_count: Some(1),
             failure_category: Some("invalid_tool_arguments".to_string()),
             token_details: None,
@@ -787,6 +793,7 @@ mod tests {
 
         assert_eq!(projected.event_name, "agentic://model-round-completed");
         assert_eq!(projected.payload["attemptCount"], 1);
+        assert_eq!(projected.payload["ttftMs"], 35);
     }
 
     #[test]

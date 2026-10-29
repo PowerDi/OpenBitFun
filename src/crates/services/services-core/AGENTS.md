@@ -87,6 +87,7 @@ target. Representative stable entry points are:
 
 ```bash
 cargo check -p openbitfun-services-core --no-default-features
+cargo test --locked -p openbitfun-services-core --no-default-features --features system-proxy --lib system_proxy::tests
 cargo test -p openbitfun-services-core --no-default-features --features pet-packages --lib pet_packages
 cargo test -p openbitfun-services-core --no-default-features --features asar --lib asar
 cargo test -p openbitfun-services-core --no-default-features --features process-runtime --lib system::info::tests

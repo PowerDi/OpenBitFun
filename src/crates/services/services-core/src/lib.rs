@@ -86,6 +86,8 @@ pub mod session_usage;
 pub mod storage_cleanup;
 #[cfg(feature = "process-runtime")]
 pub mod system;
+#[cfg(feature = "system-proxy")]
+pub mod system_proxy;
 #[cfg(feature = "tls-provider")]
 pub mod tls_provider;
 #[cfg(feature = "local-storage")]

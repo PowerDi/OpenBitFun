@@ -8,6 +8,7 @@ import type { SessionUsageReport } from '@/infrastructure/api/service-api/Sessio
 import { copyTextToClipboard } from '@/shared/utils/textSelection';
 import {
   buildSessionUsageExportMarkdown,
+  isUnusedSession,
   formatHitRateSuffix,
   formatUsageDuration,
   formatUsageNumber,
@@ -30,6 +31,7 @@ import {
   setUsageExportRedactPathsPreference,
   subscribeUsageExportRedactPathsPreference,
 } from './usageReportUtils';
+import { SessionUsageEmptyState } from './SessionUsageEmptyState';
 import type { SessionUsagePanelTab } from './sessionUsagePanelTypes';
 import './SessionUsageReportCard.scss';
 
@@ -158,6 +160,10 @@ export const SessionUsageReportCard: React.FC<SessionUsageReportCardProps> = ({
         <MarkdownRenderer content={markdown} />
       </div>
     );
+  }
+
+  if (isUnusedSession(report)) {
+    return <SessionUsageEmptyState />;
   }
 
   const coverageTone = getCoverageTone(report.coverage.level);

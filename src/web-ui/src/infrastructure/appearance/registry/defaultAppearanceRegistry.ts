@@ -58,6 +58,7 @@ import { contextMenuAppearanceDescriptor } from '@/shared/context-menu-system/ap
 import { contextListAppearanceDescriptor } from '@/shared/context-system/appearance';
 import { notificationAppearanceDescriptor } from '@/shared/notification-system/appearance';
 import { imageLightboxAppearanceDescriptor } from '@/shared/ui/ImageLightbox.appearance';
+import { productBrandIconAppearanceDescriptor } from '@/shared/ui/ProductBrandIcon.appearance';
 import { canvasToolAppearanceDescriptor } from '@/tools/openbitfun-canvas/appearance';
 import { generativeWidgetAppearanceDescriptor } from '@/tools/generative-widget/appearance';
 import { editorToolAppearanceDescriptor } from '@/tools/editor/appearance';
@@ -171,6 +172,8 @@ import { generativeWidgetToolCardAppearanceDescriptor } from '@/flow_chat/tool-c
 import { snapshotFullscreenDiffViewerAppearanceDescriptor } from '@/flow_chat/tool-cards/SnapshotFullscreenDiffViewer.appearance';
 import { mermaidBlockAppearanceDescriptor } from '@/infrastructure/markdown/MermaidBlock.appearance';
 import { defaultModelConfigAppearanceDescriptor } from '@/infrastructure/config/components/DefaultModelConfig.appearance';
+import { modelBillingAppearanceDescriptor } from '@/infrastructure/config/components/ModelBilling.appearance';
+import { modelRouterSettingsAppearanceDescriptor } from '@/infrastructure/config/components/ModelRouterSettings.appearance';
 import { globalPermissionRulesDialogAppearanceDescriptor } from '@/infrastructure/config/components/GlobalPermissionRulesDialog.appearance';
 import { mcpResourceBrowserAppearanceDescriptor } from '@/infrastructure/config/components/MCPResourceBrowser.appearance';
 import { editorStatusBarAppearanceDescriptor } from '@/tools/editor/components/EditorStatusBar.appearance';
@@ -190,7 +193,6 @@ import { browserPreviewAppearanceDescriptor } from '@/app/scenes/browser/Browser
 import { nurseryGalleryAppearanceDescriptor } from '@/app/scenes/profile/views/NurseryGallery.appearance';
 import { gitGraphViewAppearanceDescriptor } from '@/app/scenes/git/views/GraphView.appearance';
 import { navBarAppearanceDescriptor } from '@/app/components/NavBar/NavBar.appearance';
-import { programmersDayEggAppearanceDescriptor } from '@/app/components/ProgrammersDayEgg/ProgrammersDayEgg.appearance';
 import { splashScreenAppearanceDescriptor } from '@/app/components/SplashScreen/SplashScreen.appearance';
 import { chatPaneAppearanceDescriptor } from '@/app/scenes/session/ChatPane.appearance';
 import { auxPaneAppearanceDescriptor } from '@/app/scenes/session/AuxPane.appearance';
@@ -326,6 +328,7 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(contextListAppearanceDescriptor)
     .registerComponent(notificationAppearanceDescriptor)
     .registerComponent(imageLightboxAppearanceDescriptor)
+    .registerComponent(productBrandIconAppearanceDescriptor)
     .registerComponent(canvasToolAppearanceDescriptor)
     .registerComponent(generativeWidgetAppearanceDescriptor)
     .registerComponent(editorToolAppearanceDescriptor)
@@ -335,7 +338,6 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(workspaceToolAppearanceDescriptor)
     .registerComponent(gitGraphViewAppearanceDescriptor)
     .registerComponent(navBarAppearanceDescriptor)
-    .registerComponent(programmersDayEggAppearanceDescriptor)
     .registerComponent(splashScreenAppearanceDescriptor)
     .registerComponent(chatPaneAppearanceDescriptor)
     .registerComponent(auxPaneAppearanceDescriptor)
@@ -440,6 +442,8 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(snapshotFullscreenDiffViewerAppearanceDescriptor)
     .registerComponent(mermaidBlockAppearanceDescriptor)
     .registerComponent(defaultModelConfigAppearanceDescriptor)
+    .registerComponent(modelBillingAppearanceDescriptor)
+    .registerComponent(modelRouterSettingsAppearanceDescriptor)
     .registerComponent(globalPermissionRulesDialogAppearanceDescriptor)
     .registerComponent(mcpResourceBrowserAppearanceDescriptor)
     .registerComponent(editorStatusBarAppearanceDescriptor)

@@ -722,7 +722,7 @@ export default function ExternalAgentContent({ scopeKey, actionsRef, onActionSta
         </> : null}
       </Dialog>
       <Dialog className="ecosystem-compatibility__batch-dialog" open={batchUndo !== null} onOpenChange={(open) => { if (!open && !busy) { setBatchUndo(null); setNotice(null); } }} size="lg" closeOnPointerOutside={!busy}>
-        <DialogHeader><DialogHeading><DialogTitle>{t(batchUndoResults ? busy ? 'content.batchUndoing' : 'content.batchUndoResults' : 'content.batchUndoTitle')}</DialogTitle></DialogHeading>{!busy ? <DialogClose /> : null}</DialogHeader>
+        <DialogHeader><DialogHeading><DialogTitle>{t(batchUndoResults ? busy ? 'content.batchUndoing' : 'content.batchUndoResults' : 'content.batchUndoTitle')}</DialogTitle></DialogHeading><DialogHeaderActions>{!busy ? <DialogClose /> : null}</DialogHeaderActions></DialogHeader>
         <EcosystemBatchLayout entries={batchUndo ?? []} getKind={(entry) => entry.review.kind} busy={busy} processed={batchUndoResults?.length}
           summary={batchUndoResults ? t('content.batchUndoSummary', {
             removed: formatNumber(batchUndoResults.filter((result) => result.status === 'removed').length),
@@ -744,7 +744,7 @@ export default function ExternalAgentContent({ scopeKey, actionsRef, onActionSta
         </DialogFooter>
       </Dialog>
       <Dialog className="ecosystem-compatibility__batch-dialog" open={batch !== null} onOpenChange={(open) => { if (!open && !busy) { setBatch(null); setNotice(null); } }} size="lg" closeOnPointerOutside={!busy}>
-        <DialogHeader><DialogHeading><DialogTitle>{t(batchResults ? busy ? 'content.batchImporting' : 'content.batchResults' : 'content.batchTitle')}</DialogTitle></DialogHeading>{!busy ? <DialogClose /> : null}</DialogHeader>
+        <DialogHeader><DialogHeading><DialogTitle>{t(batchResults ? busy ? 'content.batchImporting' : 'content.batchResults' : 'content.batchTitle')}</DialogTitle></DialogHeading><DialogHeaderActions>{!busy ? <DialogClose /> : null}</DialogHeaderActions></DialogHeader>
         <EcosystemBatchLayout entries={batch ?? []} getKind={(entry) => entry.kind} busy={busy} processed={batchResults?.length}
           summary={batchResults ? t('content.batchResultSummary', {
             imported: formatNumber(batchResults.filter((result) => result.status === 'imported').length),
@@ -772,7 +772,7 @@ export default function ExternalAgentContent({ scopeKey, actionsRef, onActionSta
         </DialogFooter>
       </Dialog>
       <Dialog open={undo !== null} onOpenChange={(open) => { if (!open && !busy) { setUndo(null); setNotice(null); } }} size="md" closeOnPointerOutside={!busy}>
-        <DialogHeader><DialogHeading><DialogTitle>{t('content.undoTitle')}</DialogTitle></DialogHeading>{!busy ? <DialogClose /> : null}</DialogHeader>
+        <DialogHeader><DialogHeading><DialogTitle>{t('content.undoTitle')}</DialogTitle></DialogHeading><DialogHeaderActions>{!busy ? <DialogClose /> : null}</DialogHeaderActions></DialogHeader>
         <DialogBody>
           {undo ? <div className="ecosystem-compatibility__content-detail">
             <strong className="ecosystem-compatibility__detail-name">{undo.item.name}</strong><p className="ecosystem-compatibility__feedback">{t('content.undoWarning')}</p>
@@ -786,7 +786,7 @@ export default function ExternalAgentContent({ scopeKey, actionsRef, onActionSta
         </DialogFooter>
       </Dialog>
       <Dialog open={viewed !== null} onOpenChange={(open) => { if (!open && !busy) { reviewSequence.current += 1; setReview(null); setDetail(null); setNotice(null); } }} size="lg" closeOnPointerOutside={!busy}>
-        <DialogHeader><DialogHeading><DialogTitle>{review ? t('content.confirmTitle') : viewed?.name}</DialogTitle></DialogHeading>{!busy ? <DialogClose /> : null}</DialogHeader>
+        <DialogHeader><DialogHeading><DialogTitle>{review ? t('content.confirmTitle') : viewed?.name}</DialogTitle></DialogHeading><DialogHeaderActions>{!busy ? <DialogClose /> : null}</DialogHeaderActions></DialogHeader>
         <DialogBody>
           {viewed ? <div className="ecosystem-compatibility__content-detail">
             <div className="ecosystem-compatibility__detail-heading"><strong className="ecosystem-compatibility__detail-name">{viewed.name}</strong><StatusPill tone="neutral">{runtime.spec.name} · {t(`capabilities.${viewed.kind}`)}</StatusPill></div>

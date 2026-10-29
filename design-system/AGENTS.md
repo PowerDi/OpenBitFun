@@ -56,3 +56,12 @@ For SplitView geometry, drag cancellation, and cached resize bounds:
 pnpm --dir design-system run build:ui && node --test design-system/packages/ui/tests/split-view.test.mjs
 pnpm --dir src/web-ui exec vitest run src/shared/ui/SplitView.test.tsx
 ```
+
+For Select presentation, compact/expanded labels, native form participation and keyboard selection:
+
+```bash
+pnpm --dir design-system run build:ui && node --test design-system/packages/ui/tests/select.test.mjs design-system/packages/ui/tests/registry.test.mjs
+pnpm --dir src/web-ui exec vitest run src/shared/ui/Select.test.tsx
+```
+
+These package and DOM checks do not establish native rendering or live remote behavior.

@@ -95,6 +95,7 @@ import {
 import { classNames } from "../../internal/classNames";
 import { Galaxy } from './galaxy';
 import { LayersPlus } from './layersPlus';
+import { PlayingCardsFan } from './playingCardsFan';
 import gitUrl from "./assets/git.svg";
 import thinkingUrl from "./assets/thinking.svg";
 import creativeUrl from "./assets/creative.svg";
@@ -176,6 +177,7 @@ export const iconNames = [
   "palette",
   "panels-top-left",
   "pin",
+  "playing-cards-fan",
   "plus",
   "plug",
   "progress-25",
@@ -307,6 +309,7 @@ const lineGlyphs = {
   "palette": Palette,
   "panels-top-left": PanelsTopLeft,
   "pin": Pin,
+  "playing-cards-fan": PlayingCardsFan,
   "plus": Plus,
   "plug": Plug,
   "progress-25": LoaderCircle,

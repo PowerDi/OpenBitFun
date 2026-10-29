@@ -38,6 +38,57 @@ current catalog. For these paths, use:
 cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib -- deferred_tool listing_baseline untracked_previous unchanged_tracked prepended_deferred
 ```
 
+For per-round Router input preparation, isolation from main context compression,
+background summaries, and routing protocol behavior, use:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib round_model_routing
+```
+
+Smart mode is currently closed by the feature owner's fixed release policy in
+`round_model_routing::configuration`. Public status reports unavailable, explicit
+activation is rejected, and neither saved settings nor legacy environment values
+enable Router or auxiliary-summary execution. Existing records remain readable.
+For release-gate, old-record, manual-selection and no-provider-IO checks, run:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,subscription-auth --lib smart_release_gate
+```
+
+For routed execution models, prepared account/channel identity, and overflow re-entry:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,subscription-auth --lib smart_slot
+```
+
+These loopback fixtures verify actual provider requests and slot-owned account,
+channel, replay and retry state. They do not establish live OAuth, SSH, Peer or
+detached-dispatch behavior.
+
+Router context state/budgets live in `openbitfun-agent-runtime::router_context`;
+Core only observes messages, invokes the configured auxiliary model and stores its
+separate sidecar. Portable summary admission lives in
+`openbitfun-agent-runtime::router_summary_queue`; Core supplies snapshots and
+provider futures. Session continuity must validate the complete visible turn
+lineage and fence recovered execution generations before writing. Legacy per-turn
+sidecars without lineage proof are retained but cannot establish continuity. Never feed Router summaries back into the main transcript or
+use the main compactor's summary/model/config as Router state.
+
+Router summary text is admitted against a conservative token estimate separately
+from the provider's combined reasoning/output limit. Live updates and history
+bootstrap share one bounded generation path: an oversized complete response gets
+one tighter rewrite from the same full source under the original deadline and
+queue permit. If it still exceeds the budget or fails, retain the previous
+summary and all pending observations. Never clip a candidate or advance coverage
+for a rejected response. Older oversized sidecars remain readable until a valid
+rewrite replaces them. Attempt traces retain known usage even if a rewrite times
+out; estimated text counts are not provider billing tokens.
+
+Router HTTP transport and classifier wire parsing live in
+`openbitfun-ai-adapters::round_router`. Keep the existing Core router facade and
+error categories; thresholds, execution-model slots, traces and fallback stay
+owned here. Core Agent Runtime must not enable a direct Reqwest dependency.
+
 For model retry admission and recovery, use:
 
 ```bash
@@ -70,7 +121,7 @@ For cross-provider channels, run the real factory/round mock and replay-binding
 checks with the same minimal features:
 
 ```bash
-cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,subscription-auth --lib multi_channel_pool
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,subscription-auth --lib -- multi_channel_pool manual_model_switch_
 cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,subscription-auth --lib infrastructure::ai::channel_client_source::tests
 ```
 
@@ -99,9 +150,12 @@ signed reasoning text or opaque replay; text, tool calls and results stay).
 Every account or channel switch other than same-account authentication recovery
 uses portable history. Session records keep the originals. Anthropic requests
 whose last assistant tool turn lacks a signed thinking block run without
-thinking (adapter-owned). Fixed accounts and unrouted models keep the original
-replay binding and its `recovery_constraint` diagnostics; configuration/storage
-errors remain strict.
+thinking (adapter-owned). Fixed accounts and unrouted models select the configured
+destination without pinning it to historical account provenance. Before every
+send, project incompatible or unproven signed/opaque state per message against
+the actual channel fingerprint and account, then validate remaining replay state.
+Compatible state and durable history remain intact; legacy account-only provenance
+can still replay to its proven seat. Configuration/storage errors remain strict.
 
 
 Native turn initialization and manual compression scaffold preparation resolve
@@ -293,6 +347,16 @@ and coordinate metadata through the provider wire converters:
 cargo test -p openbitfun-core --no-default-features --features agent-runtime,git,tools-computer-use --lib computer_use_pixels_and_geometry_reach_real_provider_wire
 ```
 
+For configured image limits, legacy tool-image history, plain continuation after
+a provider rejection, and user attachment admission:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib -- configured_image_limit input_image_count
+```
+
+These fixtures use an isolated loopback model and temporary session state. They
+do not exercise live providers, SSH, relay, peer, or detached dispatch transports.
+
 ## Background result delivery
 
 Portable decisions are owned by `openbitfun-agent-runtime::scheduler::result_delivery`;
@@ -308,3 +372,12 @@ This filter covers semantic-response validation, legacy job-policy round trips,
 run identity, disk completion/checkpoint/recovery, and Weixin result consumption.
 The `git` feature supports the existing Core unit-test fixtures. It does not
 prove a live model or remote-host execution.
+
+For request TTFT versus effective-output streaming duration:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib model_round_timing_separates_request_ttft_from_output_stream
+```
+
+This delayed loopback HTTP fixture separates response headers, metadata and model
+output. It does not exercise a real provider or remote host.

@@ -29,6 +29,7 @@ Notes:
 | `Read` | Direct | None | - |
 | `view_image` | Direct | None | - |
 | `analyze_image` | Direct | None | - |
+| `generate_image` | Direct | None | - |
 | `Glob` | Direct | None | - |
 | `Grep` | Direct | None | - |
 | `Write` | Direct | None | - |

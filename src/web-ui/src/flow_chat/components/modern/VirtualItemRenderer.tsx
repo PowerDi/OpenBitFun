@@ -101,6 +101,7 @@ export const VirtualItemRenderer = React.memo<VirtualItemRendererProps>(
               turnEndedAt={item.turnEndedAt}
               turnDurationMs={item.turnDurationMs}
               turnOutputDurationMs={item.turnOutputDurationMs}
+              turnTtftMs={item.turnTtftMs}
               turnTokenUsage={item.turnTokenUsage}
               canvasArtifactItems={item.canvasArtifactItems}
               expandedThinkingItemIds={item.layoutHints?.expandedThinkingItemIds ?? []}

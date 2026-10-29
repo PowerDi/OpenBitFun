@@ -13,12 +13,14 @@ pub(crate) mod model_exchange_trace;
 pub mod model_pool;
 mod prompt_suggestion;
 pub mod round_executor;
+pub mod round_model_routing;
 pub mod stream_processor;
 pub mod types;
 pub mod write_content_sanitizer;
 
 pub use execution_engine::*;
 pub use round_executor::*;
+pub use round_model_routing::*;
 pub use stream_processor::*;
 pub use types::{ExecutionContext, ExecutionResult, FinishReason, RoundContext, RoundResult};
 

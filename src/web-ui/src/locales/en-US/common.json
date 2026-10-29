@@ -72,10 +72,6 @@
     "forward": "Forward",
     "backShortcut": "Back (Alt+←)",
     "forwardShortcut": "Forward (Alt+→)",
-    "programmersDay": {
-      "tooltip": "2¹⁰ = 1024 · Happy Programmer's Day! May your code ship with zero bugs today",
-      "ariaLabel": "Happy Programmer's Day (1024)"
-    },
     "items": {
       "personalOverview": "Home",
       "sessions": "Sessions",
@@ -196,7 +192,9 @@
         "activationFailed": "Could not open that result",
         "remoteFileSearchUnavailable": "File search is unavailable for remote project {{workspace}}",
         "sessionUnavailable": "This session is no longer available"
-      }
+      },
+      "diagnosticTarget": "Search device: {{host}}",
+      "retrySource": "Retry this source"
     },
     "displayModes": {
       "pro": "Expert Mode",
@@ -495,6 +493,9 @@
       "allSourceAgents": "All agents",
       "sourceAgentLabel": "Imported from {{name}}",
       "discoveryPartial": "Some external sessions could not be discovered. Existing sessions remain available.",
+      "discoveryWarningTitle": "External session discovery",
+      "discoveryReadFailed": "Some {{source}} session records could not be read. Existing sessions remain available.",
+      "discoveryWorkspaceUnresolved": "Some {{source}} sessions could not be matched to a workspace. Existing sessions remain available.",
       "discoveringExternal": "Discovering external sessions…"
     },
     "scheduledJobs": {
@@ -802,7 +803,8 @@
     "hostDiscoveryFailed": "Could not load hosts. Try again.",
     "existingHostRequired": "Choose an existing SSH host.",
     "sshHost": "SSH host",
-    "sourceUnsupported": "This host does not support this environment."
+    "sourceUnsupported": "This host does not support this environment.",
+    "checkingWsl": "Checking WSL availability on this host…"
   },
   "newProject": {
     "title": "Create project",
@@ -832,6 +834,7 @@
     "emptyProjectHint": "Save on the current device:",
     "invalidDirectoryName": "Use a single folder name without slashes, . or ..",
     "sameHostRequired": "Project folders must be on the same host.",
+    "assistantFolderUnavailable": "This folder belongs to an assistant workspace and cannot be added as a project. Select a different folder, or remove it and enter a name to create a new project.",
     "remoteUnavailable": "Remote folder selection is unavailable here.",
     "remoteConnectionChanged": "The remote connection changed. Select the project folders again.",
     "defaultDirectoryUnavailable": "The target device did not provide its home directory. Update or reconnect to the device and try again.",
@@ -1298,7 +1301,7 @@
     "latestVersion": "Latest",
     "releaseNotes": "Release notes",
     "later": "Later",
-    "skipVersion": "Skip this version",
+    "skipVersion": "Skip",
     "cancel": "Cancel",
     "install": "Download and install",
     "backgroundInstall": "Download in background",
@@ -1332,7 +1335,7 @@
       "installMetadata": "The downloaded package is saved. Connect to the internet and retry installation."
     },
     "availableVersion": "Version {{version}} is available",
-    "downloadUpdate": "Download update",
+    "downloadUpdate": "Update",
     "releaseTitle": "{{name}} v{{version}}",
     "openReleaseNotes": "{{title}} — release notes",
     "noticeReady": "Update downloaded",
@@ -1684,6 +1687,7 @@
     "panelView": "Panel View"
   },
   "sceneBar": {
+    "recentSessions": "Recently opened sessions",
     "tabsLabel": "Scene tabs",
     "scrollPrevious": "Scroll tabs left",
     "scrollNext": "Scroll tabs right",
@@ -2067,6 +2071,7 @@
       "targetIsPullRequest": "This item is a pull request. Open it as a pull request instead of an issue."
     },
     "messages": {
+      "hostUnsupported": "The pull request viewer is unavailable on this device. Open pull request links in the system browser.",
       "noWorkspace": "No active workspace is available.",
       "unsupportedLink": "This link is not a supported pull request URL.",
       "detailsFailed": "Failed to load pull request details.",

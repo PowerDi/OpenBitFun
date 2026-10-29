@@ -53,22 +53,11 @@ where
     }
 }
 
-/// Run a closure on the main dispatch queue under an Objective-C
-/// `@try/@catch`. This is the correct wrapper for calls that may reach
-/// AppKit / HIToolbox / Accessibility code paths from a background
-/// (`tokio::spawn_blocking`) worker thread.
-///
-/// Two failure modes are defended against simultaneously:
-///
-///   1. `NSException` thrown by the framework (caught and converted into
-///      `OpenBitFunError`).
-///   2. AppKit's `__assert_rtn` "Must only be used from the main thread"
-///      `SIGTRAP` which fires when AX cross-process callbacks (e.g.
-///      `AXUIElementCopyActionNames` → `_NSThemeWidgetCell.accessibility…`
-///      → `_WMWindow performUpdatesUsingBlock:`) are evaluated off the
-///      main thread. `objc2::exception::catch` cannot intercept this
-///      trap; the only fix is to actually run the closure on the main
-///      thread, which is what this helper does.
+/// Run AppKit / HIToolbox input work on main under an Objective-C catch.
+/// Never wrap AX traversal or cached-node actions here: a same-process tree
+/// also contains WebKit subprocess elements whose IPC needs main to stay free.
+/// Use `catch_objc_local` for AX work; `macos_ax_dispatch` sends each individual
+/// same-process message to main to preserve AppKit's thread requirement.
 ///
 /// If we're already on the main thread we run inline (avoids
 /// `dispatch_sync(main)` deadlock).
@@ -89,10 +78,8 @@ where
 }
 
 /// Run a closure under an Objective-C `@try/@catch` **on the current
-/// thread** (no main-queue dispatch). Use this for closures that borrow
-/// non-`Send` data and that are guaranteed not to reach AppKit's
-/// main-thread-only AX callbacks (e.g. Vision OCR on an in-memory
-/// screenshot buffer).
+/// thread** (no main-queue dispatch). AX work routes individual messages through
+/// `macos_ax_dispatch`; Vision OCR can also run here with borrowed image data.
 pub(super) fn catch_objc_local<F, T>(f: F) -> OpenBitFunResult<T>
 where
     F: FnOnce() -> OpenBitFunResult<T>,
@@ -166,7 +153,8 @@ pub(super) fn request_screen_capture() -> bool {
 /// owns the explicit request and the OS owns its outcome.
 pub(super) fn require_ax_trust_for(retry_hint: &str) -> OpenBitFunResult<()> {
     if ax_trusted() {
-        return Ok(());
+        return crate::computer_use::macos_ax_dispatch::require_process_routing()
+            .map_err(OpenBitFunError::tool);
     }
     Err(OpenBitFunError::tool(format!(
         "[PERMISSION_DENIED] macOS Accessibility permission not granted to OpenBitFun. \

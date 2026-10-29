@@ -2,7 +2,7 @@
  * NavBar — navigation controls and the current left-panel title.
  *
  * Sits at the top of the left column on the shared 45px workbench chrome row.
- * Layout: [panel][←][→] [scene title / drag region] [10.24 egg]
+ * Layout: [panel][←][→] [scene title / drag region]
  *
  * - Back/Forward buttons mirror IDE navigation history.
  * - The title follows left-panel navigation, independently of the right scene.
@@ -18,7 +18,6 @@ import { getWorkspaceDisplayName, useWorkspaceContext } from '@/infrastructure/c
 import { getActiveSurfaceScope, onSurfaceActivated } from '@/infrastructure/peer-device/deviceSurface';
 import { createLogger } from '@/shared/utils/logger';
 import { isMacOSDesktopRuntime, startNativeWindowDragging, supportsNativeWindowDragging } from '@/infrastructure/runtime';
-import { ProgrammersDayEgg } from '../ProgrammersDayEgg';
 import './NavBar.scss';
 import { Icon, OverflowText, Tooltip } from '@openbitfun/ui';
 
@@ -161,8 +160,6 @@ const NavBar: React.FC<NavBarProps> = ({
           {title}
         </OverflowText>
       )}
-
-      <ProgrammersDayEgg />
     </div>
   );
 };

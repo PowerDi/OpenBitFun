@@ -164,12 +164,16 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function requiresMiniAppAgentContextFilesV1(params: unknown): boolean {
+  return hasMiniAppAgentPayload(params, ['contextFiles', 'context_files']);
+}
+
+function hasMiniAppAgentPayload(params: unknown, keys: string[]): boolean {
   const outer = asRecord(params);
   if (!outer) {
     return false;
   }
   const request = asRecord(outer.request) ?? outer;
-  for (const key of ['contextFiles', 'context_files']) {
+  for (const key of keys) {
     if (!Object.prototype.hasOwnProperty.call(request, key)) {
       continue;
     }
@@ -293,8 +297,11 @@ export interface PeerDeviceTransportHooks {
   supportsTokenUsageStatistics?: boolean;
   /** Enables MiniApp Agent runs with immutable virtual context files. */
   supportsMiniAppAgentContextFilesV1?: boolean;
+  /** Enables MiniApp Agent turns carrying inline image attachments. */
+  supportsMiniAppAgentImagesV1?: boolean;
   supportsWslWorkspacesV1?: boolean;
   supportsWholeSessionCopyV1?: boolean;
+  supportsModelRoutingV1?: boolean;
   supportsModelPoolSelectionV1?: boolean;
   supportsBtwModelPoolSelectionV1?: boolean;
   supportsComputerUseSharingV1?: boolean;
@@ -432,8 +439,10 @@ export class PeerDeviceTransportAdapter implements ITransportAdapter {
       | 'supportsTargetedSessionRollback'
       | 'supportsTokenUsageStatistics'
       | 'supportsMiniAppAgentContextFilesV1'
+      | 'supportsMiniAppAgentImagesV1'
       | 'supportsWslWorkspacesV1'
       | 'supportsWholeSessionCopyV1'
+      | 'supportsModelRoutingV1'
       | 'supportsModelPoolSelectionV1'
       | 'supportsBtwModelPoolSelectionV1'
       | 'supportsComputerUseSharingV1'
@@ -500,6 +509,11 @@ export class PeerDeviceTransportAdapter implements ITransportAdapter {
 
     this.assertRenderedTransport(action);
 
+    if ((action === 'get_model_routing_status' || (action === 'update_session_model' && params?.request?.routingMode !== undefined))
+      && this.hooks.supportsModelRoutingV1 !== true) {
+      throw new PeerProductCommandError('model_routing_v1_unsupported: The connected Peer host does not support smart routing');
+    }
+
     if (['retry_model_pool_member', 'get_model_pools', 'save_model_pool', 'delete_model_pool', 'get_model_pool_status',
       'get_session_model_target', 'update_session_model_target'].includes(action)
       && this.hooks.supportsModelPoolSelectionV1 !== true) {
@@ -548,6 +562,16 @@ export class PeerDeviceTransportAdapter implements ITransportAdapter {
     ) {
       throw new PeerProductCommandError(
         'wsl_workspaces_v1_unsupported: The connected Peer host does not support native WSL workspaces',
+      );
+    }
+
+    if (
+      action === 'miniapp_agent_run' &&
+      hasMiniAppAgentPayload(params, ['imageContexts', 'image_contexts']) &&
+      this.hooks.supportsMiniAppAgentImagesV1 !== true
+    ) {
+      throw new PeerProductCommandError(
+        'miniapp_agent_images_v1_unsupported: The connected Peer host does not support MiniApp image attachments; update the executing Desktop host',
       );
     }
 

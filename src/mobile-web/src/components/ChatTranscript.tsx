@@ -24,11 +24,6 @@ import ChatToolApprovalActions, { isToolAwaitingApproval } from './ChatToolAppro
 
 type ToolApprovalHandler = (toolId: string, updatedInput?: Record<string, unknown>) => Promise<void>;
 
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
 function getEnglishPluralSuffix(language: string, count: number): string {
   return language === 'en-US' && count !== 1 ? 's' : '';
 }
@@ -250,7 +245,7 @@ export const TaskToolCard: React.FC<{
   onApproveTool?: ToolApprovalHandler;
   onRejectTool?: ToolApprovalHandler;
 }> = ({ tool, now, subItems = [], onCancelTool, onApproveTool, onRejectTool }) => {
-  const { t, language } = useI18n();
+  const { t, language, formatDuration } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [stepsExpanded, setStepsExpanded] = useState(false);
   const isRunning = tool.status === 'running';
@@ -449,7 +444,7 @@ const ToolCard: React.FC<{
   onApproveTool?: ToolApprovalHandler;
   onRejectTool?: ToolApprovalHandler;
 }> = ({ tool, now, onCancelTool, onApproveTool, onRejectTool }) => {
-  const { t } = useI18n();
+  const { t, formatDuration } = useI18n();
   const toolKey = tool.name.toLowerCase().replace(/[\s-]/g, '_');
   const typeLabelKey = TOOL_TYPE_MAP[toolKey] || TOOL_TYPE_MAP[tool.name];
   const typeLabel = typeLabelKey ? t(typeLabelKey) : '';

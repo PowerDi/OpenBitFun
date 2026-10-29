@@ -20,7 +20,7 @@ const AppearanceSettingsPage: React.FC = () => {
       data-openbitfun-component="appearance-settings"
       data-openbitfun-part="root"
     >
-      <ConfigPageHeader title={t('title')} subtitle={t('subtitle')} />
+      <ConfigPageHeader title={t('title')} />
       <ConfigPageContent
         className="openbitfun-appearance-settings__content"
         data-openbitfun-component="appearance-settings"

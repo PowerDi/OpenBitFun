@@ -29,6 +29,7 @@ import { notificationService } from '@/shared/notification-system/services/Notif
 import { createLogger } from '@/shared/utils/logger';
 import { i18nService } from '@/infrastructure/i18n';
 import { resolveSessionTitle } from '@/flow_chat/utils/sessionTitle';
+import { agentName } from '@/shared/agents/identity';
 import { WorkspaceKind } from '@/shared/types';
 import {
   ASSISTANT_WORKSPACE_AGENT_TYPE,
@@ -113,6 +114,7 @@ function formatJobMetaSummary(
   t: (key: string, params?: Record<string, unknown>) => string,
   options?: {
     resolveSessionLabel: (sessionId: string) => string | undefined;
+    resolveAgentLabel: (agentType: string) => string;
   },
 ): string {
   const scheduleSummary = formatScheduleSummary(job.schedule, formatDate, t);
@@ -121,7 +123,7 @@ function formatJobMetaSummary(
     return `${sessionLabel} · ${scheduleSummary}`;
   }
   if (job.target.kind === 'workspace') {
-    return `${job.target.launch.agentType} · ${scheduleSummary}`;
+    return `${options?.resolveAgentLabel(job.target.launch.agentType) ?? agentName({ id: job.target.launch.agentType, name: job.target.launch.agentType }, t)} · ${scheduleSummary}`;
   }
   return scheduleSummary;
 }
@@ -145,13 +147,14 @@ function buildWorkspaceAgentOptions(
   modes: ModeInfo[],
   currentAgentType: string,
   defaultAgentType: string,
+  t: (key: string) => string,
   workspaceKind?: WorkspaceKind,
 ) {
   if (workspaceKind === WorkspaceKind.Assistant) {
     return [
       {
         value: defaultAgentType,
-        label: defaultAgentType,
+        label: agentName({ id: defaultAgentType, name: defaultAgentType }, t),
         description: undefined,
       },
     ];
@@ -161,7 +164,7 @@ function buildWorkspaceAgentOptions(
     .filter(mode => mode.id !== ASSISTANT_WORKSPACE_AGENT_TYPE)
     .map(mode => ({
       value: mode.id,
-      label: mode.name?.trim() || mode.id,
+      label: agentName(mode, t),
       description: mode.description?.trim() || undefined,
     }));
 
@@ -173,7 +176,7 @@ function buildWorkspaceAgentOptions(
     if (!options.some(option => option.value === agentType)) {
       options.push({
         value: agentType,
-        label: agentType,
+        label: agentName({ id: agentType, name: agentType }, t),
         description: undefined,
       });
     }
@@ -544,9 +547,10 @@ const ScheduledJobsView: React.FC<ScheduledJobsViewProps> = ({
       availableModes,
       draft.agentType,
       defaultAgentType,
+      t,
       workspaceKind,
     ),
-    [availableModes, defaultAgentType, draft.agentType, workspaceKind],
+    [availableModes, defaultAgentType, draft.agentType, workspaceKind, t],
   );
 
   const canSave = assistantWorkspaceMode
@@ -670,6 +674,10 @@ const ScheduledJobsView: React.FC<ScheduledJobsViewProps> = ({
                     <div className="asv__item-meta-row" data-openbitfun-component="scheduled-jobs-view" data-openbitfun-part="jobMeta">
                       <div className="asv__item-meta"><OverflowText>
                         {formatJobMetaSummary(job, formatDate, t, {
+                          resolveAgentLabel: id => {
+                            const mode = availableModes.find(mode => mode.id === id);
+                            return agentName(mode ?? { id, name: id }, t);
+                          },
                           resolveSessionLabel: sessionId => sessionLabelById.get(sessionId),
                         })}
                       </OverflowText></div>

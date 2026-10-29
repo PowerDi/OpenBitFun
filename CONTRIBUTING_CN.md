@@ -60,6 +60,7 @@ Tauri 生成的 `gen/` 目录以及本地实施过程记录不进入 Git。
 ```bash
 # Desktop（日常开发推荐）
 pnpm run desktop:dev                # 完整热更新：Vite HMR + Rust 自动重编译并重启
+pnpm run desktop:dev -- --shared-data # 与安装版同时运行，并共享数据
 pnpm run prepare:dsh-profile        # 可选：编译 DeepSeek Harness 桥，供本地会话使用
 
 # Desktop（轻量预览，无 Rust 自动重编译）

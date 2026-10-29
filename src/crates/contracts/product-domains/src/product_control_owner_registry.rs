@@ -175,6 +175,49 @@ fn empty_input() -> Value {
     json!({ "type": "object", "additionalProperties": false })
 }
 
+fn mcp_input(action: &str) -> Value {
+    if action == "list" {
+        return empty_input();
+    }
+    let mut properties = serde_json::Map::new();
+    let mut required = vec!["serverId"];
+    properties.insert("serverId".into(), json!({ "type": "string", "minLength": 1,
+        "description": "Exact user server ID from list-servers, or a new ID when adding a server. These settings belong to the executing OpenBitFun product host, not the workspace host." }));
+    if matches!(action, "configure" | "delete") {
+        required.push("expectedFingerprint");
+        properties.insert("expectedFingerprint".into(), json!({ "type": "string", "minLength": 1,
+            "description": "Copy the fingerprint returned by list-servers. Reload after a conflict; never overwrite a concurrent edit." }));
+    }
+    if action == "configure" {
+        required.push("config");
+        let mut fields = serde_json::Map::new();
+        for field in ["name", "command", "url", "type", "source", "transport"] {
+            fields.insert(
+                field.into(),
+                json!({ "anyOf": [{ "type": "string" }, { "type": "null" }] }),
+            );
+        }
+        fields.insert(
+            "args".into(),
+            json!({ "type": "array", "items": { "type": "string" } }),
+        );
+        for field in [
+            "enabled",
+            "autoStart",
+            "inheritParentEnvironment",
+            "oauthEnabled",
+        ] {
+            fields.insert(field.into(), json!({ "type": "boolean" }));
+        }
+        properties.insert("config".into(), json!({ "type": "object", "additionalProperties": false,
+            "properties": fields,
+            "description": "Patch non-secret fields of one server; omitted fields and existing credentials are preserved. New stdio servers require command; HTTP/SSE servers require url. Use null to remove an obsolete string field when switching transport. Credentials, environment and headers are entered through the protected MCP settings flow, never by reading existing secrets or putting secrets in command/args/url. Saving reconciles runtime state; autoStart defaults to true. Inspect the returned status instead of assuming connection succeeded." }));
+        properties.insert("workingDirectory".into(), json!({ "type": "string", "minLength": 1,
+            "description": "Optional directory on the OpenBitFun product host for a local process; never a remote workspace path." }));
+    }
+    json!({ "type": "object", "additionalProperties": false, "properties": properties, "required": required })
+}
+
 fn miniapp_input(action: &str) -> Value {
     let mut properties = serde_json::Map::new();
     let mut required = Vec::new();
@@ -246,6 +289,54 @@ pub fn owner_definitions() -> Vec<ProductControlOwnerDefinition> {
     use ProductControlRisk::{Destructive, Read, Ui, Write};
 
     vec![
+        operation(
+            "setting.tools.mcp",
+            "list-servers",
+            Read,
+            mcp_input("list"),
+            &[],
+            operation_provider("mcp", "list"),
+        ),
+        operation(
+            "setting.tools.mcp",
+            "configure-server",
+            Write,
+            mcp_input("configure"),
+            &[("workingDirectory", ProductHostLocal)],
+            operation_provider("mcp", "configure"),
+        ),
+        operation(
+            "setting.tools.mcp",
+            "delete-server",
+            Destructive,
+            mcp_input("delete"),
+            &[],
+            operation_provider("mcp", "delete"),
+        ),
+        operation(
+            "setting.tools.mcp",
+            "start-server",
+            Write,
+            mcp_input("start"),
+            &[],
+            operation_provider("mcp", "start"),
+        ),
+        operation(
+            "setting.tools.mcp",
+            "stop-server",
+            Write,
+            mcp_input("stop"),
+            &[],
+            operation_provider("mcp", "stop"),
+        ),
+        operation(
+            "setting.tools.mcp",
+            "restart-server",
+            Write,
+            mcp_input("restart"),
+            &[],
+            operation_provider("mcp", "restart"),
+        ),
         operation(
             "feature.miniapps",
             "list-apps",
@@ -742,6 +833,12 @@ pub fn owner_definitions() -> Vec<ProductControlOwnerDefinition> {
             "deferred-tool-loading",
             boolean(),
             config("ai.enable_deferred_tool_loading"),
+        ),
+        option(
+            "setting.tools.execution",
+            "tool-presentation-mode",
+            string_enum(&["native", "ptc"]),
+            config("ai.tool_presentation_mode"),
         ),
         option(
             "setting.tools.execution",

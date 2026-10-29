@@ -184,6 +184,18 @@ Background report decisions and clean empty completion contracts:
 cargo test --locked -p openbitfun-agent-runtime --no-default-features --features agent-runtime --lib scheduler::result_delivery
 ```
 
+Router-only incremental context, budgeting, and summary fencing:
+
+```bash
+cargo test --locked -p openbitfun-agent-runtime --no-default-features --features agent-runtime --lib router_context
+```
+
+Router summary admission, per-session coalescing, cancellation and fairness:
+
+```bash
+cargo test --locked -p openbitfun-agent-runtime --no-default-features --features agent-runtime --lib router_summary_queue
+```
+
 Use the focused contract form by default. Run the package-wide form only when a
 change crosses several runtime targets:
 

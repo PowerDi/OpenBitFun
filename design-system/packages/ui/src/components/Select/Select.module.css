@@ -85,6 +85,18 @@
       box-shadow var(--openbitfun-motion-duration-fast) var(--openbitfun-motion-easing-standard);
   }
 
+  .root[data-variant="pill"] > .trigger {
+    gap: var(--openbitfun-control-status-pill-gap);
+    padding-inline: var(--openbitfun-control-status-pill-padding-inline);
+    border-radius: var(--openbitfun-control-status-pill-radius);
+    background: var(--openbitfun-color-action-neutral-surface);
+    font-family: var(--openbitfun-type-meta-font-family);
+    font-size: var(--openbitfun-type-meta-font-size);
+    font-weight: var(--openbitfun-type-meta-font-weight);
+    line-height: var(--openbitfun-type-status-pill-line-height);
+    letter-spacing: var(--openbitfun-type-meta-letter-spacing);
+  }
+
   .trigger:is(:hover, [data-openbitfun-preview-state="hover"]):not(:disabled) {
     border-color: var(--openbitfun-color-field-border-hover);
     background: var(--openbitfun-color-field-background-hover);
@@ -293,6 +305,7 @@
 
   @media (forced-colors: active) {
     .trigger,
+    .root[data-variant="pill"] > .trigger,
     .popover,
     .root[data-invalid="true"] .trigger {
       border-color: ButtonText;
@@ -303,7 +316,8 @@
       border: 0;
     }
 
-    .trigger:focus-visible {
+    .trigger:focus-visible,
+    .root[data-variant="pill"] > .trigger:focus-visible {
       border-color: Highlight;
       box-shadow: 0 0 0 var(--openbitfun-focus-width) Highlight;
     }

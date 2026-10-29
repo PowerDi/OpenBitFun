@@ -10,7 +10,7 @@ export type MockToolScope = 'all' | ToolGroup;
 // Only grouping is Lab-owned. Names and component bindings come from production.
 const groupForTool = {
   get_goal: 'collaboration', create_goal: 'collaboration', update_goal: 'collaboration', AgentList: 'collaboration',
-  SessionHistory: 'collaboration', analyze_image: 'files', GetTime: 'execution',
+  SessionHistory: 'collaboration', analyze_image: 'files', generate_image: 'files', GetTime: 'execution',
   ListMCPResources: 'execution', ReadMCPResource: 'execution', ListMCPPrompts: 'execution', GetMCPPrompt: 'execution',
   Worktree: 'files', PortForward: 'execution', ReviewPlatform: 'collaboration', FrontendWorkbench: 'web',
   FinalizeMiniApp: 'web', PublishMiniApp: 'web', PublishAppearance: 'web', Playbook: 'execution',

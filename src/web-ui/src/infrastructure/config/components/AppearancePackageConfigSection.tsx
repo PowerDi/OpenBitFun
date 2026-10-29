@@ -409,7 +409,6 @@ export function AppearancePackageConfigSection() {
     <ConfigPageSection
       className="appearance-package-config"
       title={t('package.title')}
-      description={t('package.description')}
       bodySurface={false}
       fieldSurface="ambient"
       extra={hasPackageActions ? (

@@ -2,6 +2,13 @@
 //!
 //! Coordinates match CoreGraphics global space used by [`crate::computer_use::DesktopComputerUseHost`].
 
+use super::macos_ax_dispatch::{
+    copy_action_names as AXUIElementCopyActionNames,
+    copy_attribute_value as AXUIElementCopyAttributeValue,
+    copy_element_at_position as AXUIElementCopyElementAtPosition,
+    perform_action as AXUIElementPerformAction,
+    set_input_attribute_value as AXUIElementSetAttributeValue,
+};
 use crate::computer_use::ui_locate_common;
 use core_foundation::array::{CFArray, CFArrayRef};
 use core_foundation::base::{CFGetTypeID, CFTypeRef, TCFType};
@@ -22,25 +29,7 @@ unsafe extern "C" {
     fn AXUIElementCreateSystemWide() -> AXUIElementRef;
     fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
     fn AXUIElementGetPid(element: AXUIElementRef, pid: *mut i32) -> i32;
-    fn AXUIElementCopyAttributeValue(
-        element: AXUIElementRef,
-        attribute: CFStringRef,
-        value: *mut CFTypeRef,
-    ) -> i32;
-    fn AXUIElementCopyActionNames(element: AXUIElementRef, names: *mut CFArrayRef) -> i32;
-    fn AXUIElementPerformAction(element: AXUIElementRef, action: CFStringRef) -> i32;
-    fn AXUIElementSetAttributeValue(
-        element: AXUIElementRef,
-        attribute: CFStringRef,
-        value: CFTypeRef,
-    ) -> i32;
     fn AXUIElementSetMessagingTimeout(element: AXUIElementRef, timeout: f32) -> i32;
-    fn AXUIElementCopyElementAtPosition(
-        element: AXUIElementRef,
-        x: f32,
-        y: f32,
-        out_elem: *mut AXUIElementRef,
-    ) -> i32;
     fn AXValueGetType(value: AXValueRef) -> u32;
     fn AXValueGetValue(value: AXValueRef, the_type: u32, ptr: *mut c_void) -> bool;
 }
@@ -1161,22 +1150,7 @@ pub(super) fn window_bounds_global_for_pid(pid: i32) -> OpenBitFunResult<(i32, i
 /// private lookup is optional: if unavailable, return no match rather than
 /// substituting another same-app window with similar bounds or title.
 pub(super) unsafe fn ax_window_id(element: AXUIElementRef) -> Option<u32> {
-    type GetWindow = unsafe extern "C" fn(AXUIElementRef, *mut u32) -> i32;
-    static LOOKUP: std::sync::OnceLock<Option<GetWindow>> = std::sync::OnceLock::new();
-    let lookup = (*LOOKUP.get_or_init(|| {
-        let symbol = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"_AXUIElementGetWindow".as_ptr()) };
-        if symbol.is_null() {
-            None
-        } else {
-            Some(unsafe { std::mem::transmute::<*mut c_void, GetWindow>(symbol) })
-        }
-    }))?;
-    let mut window_id = 0;
-    if unsafe { lookup(element, &mut window_id) } == 0 {
-        Some(window_id)
-    } else {
-        None
-    }
+    unsafe { super::macos_ax_dispatch::window_id(element) }
 }
 
 pub(super) unsafe fn try_window_element_by_id(
@@ -1349,7 +1323,7 @@ pub(super) fn minimize_window_for_fixture(pid: i32, window: u32) -> Result<(), S
         ax_release(app);
         let element = element.ok_or("fixture window is unavailable")?;
         let attribute = CFString::new("AXMinimized");
-        let status = AXUIElementSetAttributeValue(
+        let status = super::macos_ax_dispatch::set_attribute_value(
             element,
             attribute.as_concrete_TypeRef(),
             core_foundation::boolean::CFBoolean::true_value().as_CFTypeRef(),

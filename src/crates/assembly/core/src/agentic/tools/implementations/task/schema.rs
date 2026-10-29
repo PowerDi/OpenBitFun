@@ -90,7 +90,7 @@ Two modes for action='spawn':
 The two modes are mutually exclusive: do not provide `subagent_type` when `fork_context=true`.
 1. With an explicit `subagent_type` (default)
   - Provide `agent_id`, `subagent_type`, and `prompt`.
-  - Available types are listed in the <available_agents> section. Each type has specific capabilities and tools.
+  - Available types and names are listed in the <available_agents> section. Users reference agents by name; match their requested name to this catalog and pass the corresponding internal type. If a name is ambiguous, ask which agent they mean instead of choosing one. Refer to agents by name when talking to the user; do not ask users to provide internal types. Each type has specific capabilities and tools.
   - In this mode, the subagent does not share your context. Include all necessary background information in the prompt.
 2. By forking the current context
   - Set `fork_context=true`, and provide `agent_id` and `prompt`. Do not provide `subagent_type`.
@@ -162,7 +162,7 @@ impl AgentSpawnTool {
     pub(super) fn render_agent_spawn_description(&self) -> String {
         r#"Launch a new agent to work independently in the background.
 
-Choose an `agent_type` permitted by the current system prompt. Each type has its own role and tool set.
+Choose an `agent_type` permitted by the current system prompt. The <available_agents> catalog includes each agent's name and internal type. Users reference agents by name; match their requested name to this catalog and pass the corresponding internal type as `agent_type`. If a name matches multiple agents, ask for clarification instead of choosing one. Refer to agents by name when talking to the user; do not ask users to provide internal types. Each type has its own role and tool set.
 
 Choose a meaningful `agent_id` for this agent. It must be unique among agents launched by you and match `[a-z][a-z0-9_-]{0,31}`.
 

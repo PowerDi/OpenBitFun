@@ -616,6 +616,19 @@ impl BootstrapProfile {
         matches!(self, Self::Interactive | Self::Execution)
     }
 
+    const fn starts_scheduled_jobs(
+        self,
+        deployment: openbitfun_services_core::runtime_ownership::RuntimeDeployment,
+    ) -> bool {
+        // Shared TUI owns one workspace and exits after the last controller
+        // disconnects. It cannot own the host-wide durable scheduler lease.
+        matches!(self, Self::Interactive | Self::Execution)
+            && matches!(
+                deployment,
+                openbitfun_services_core::runtime_ownership::RuntimeDeployment::Embedded
+            )
+    }
+
     const fn starts_plugin_host(self) -> bool {
         matches!(
             PLUGIN_HOST_LAUNCH_POLICY,
@@ -960,6 +973,19 @@ async fn initialize_core_services_for_deployment(
     tracing::info!("Agentic system initialized");
 
     let workspace = create_cli_local_workspace(workspace_root).await?;
+    let scheduled_jobs = if bootstrap_profile.starts_scheduled_jobs(deployment) {
+        match runtime::initialize_scheduled_jobs(&agentic_system).await {
+            Ok(service) => Some(service),
+            Err(error) => {
+                tracing::warn!(
+                    "Scheduled jobs are unavailable; persisted jobs were preserved: {error:#}"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
     let runtime = std::sync::Arc::new(runtime::CliRuntimeContext::build(
         agentic_system,
         workspace,
@@ -996,6 +1022,11 @@ async fn initialize_core_services_for_deployment(
         if let Some(config_service) = config_service {
             ensure_cli_mcp_service(config_service);
         }
+    }
+
+    if let Some(scheduled_jobs) = scheduled_jobs {
+        scheduled_jobs.start();
+        tracing::info!("CLI scheduled-job service started");
     }
 
     Ok(runtime)
@@ -1973,6 +2004,12 @@ mod bootstrap_profile_tests {
             );
             assert_eq!(profile.starts_mcp(), starts_mcp);
             assert_eq!(profile.starts_plugin_host(), starts_plugin_host);
+            use openbitfun_services_core::runtime_ownership::RuntimeDeployment;
+            assert_eq!(
+                profile.starts_scheduled_jobs(RuntimeDeployment::Embedded),
+                starts_mcp
+            );
+            assert!(!profile.starts_scheduled_jobs(RuntimeDeployment::Shared));
         }
     }
 

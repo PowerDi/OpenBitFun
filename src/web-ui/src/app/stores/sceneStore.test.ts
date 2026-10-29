@@ -32,6 +32,45 @@ describe('sceneStore transition snapshots', () => {
     expect(state.navCursor).toBe(-1);
   });
 
+  it('keeps the five most recently opened sessions per workspace, moving repeats to the front', () => {
+    const scenes = useSceneStore.getState();
+    for (let index = 1; index <= 7; index++) {
+      scenes.openSessionScene({ ...sessionTarget, sessionId: String(index) });
+    }
+    scenes.openSessionScene({ ...sessionTarget, sessionId: '4' });
+    expect(useSceneStore.getState().openTabs).toHaveLength(1);
+    expect(useSceneStore.getState().openTabs[0].sessionHistory).toEqual(['4', '7', '6', '5', '3']);
+    scenes.openSessionScene({ ...sessionTarget, workspaceKey: 'other', sessionId: 'elsewhere' });
+    expect(useSceneStore.getState().openTabs.map(tab => tab.sessionHistory))
+      .toEqual([['4', '7', '6', '5', '3'], ['elsewhere']]);
+  });
+
+  it('accepts legacy tabs without history and records background session changes without stealing focus', () => {
+    const scenes = useSceneStore.getState();
+    scenes.openSessionScene(sessionTarget);
+    useSceneStore.setState(state => ({ openTabs: state.openTabs.map(({ sessionHistory: _history, ...tab }) => tab) }));
+    scenes.openScene('git');
+    scenes.updateSessionScene({ ...sessionTarget, sessionId: 'next' });
+    expect(useSceneStore.getState().activeTabId).toBe('git');
+    expect(useSceneStore.getState().openTabs[0].sessionHistory).toEqual(['next', 'current']);
+    scenes.resetForPeerSwitch();
+    expect(useSceneStore.getState().openTabs).toEqual([]);
+  });
+
+  it('does not add a failed session activation to the recent list', async () => {
+    useSceneStore.getState().openSessionScene(sessionTarget);
+    const stop = registerSessionSceneNavigation({
+      current: () => sessionTarget,
+      isActive: target => target.sessionId === sessionTarget.sessionId,
+      activate: async () => false,
+    });
+    try {
+      useSceneStore.getState().openSessionScene({ ...sessionTarget, sessionId: 'failed' });
+      await vi.waitFor(() => expect(useSceneStore.getState().pendingTabId).toBeNull());
+      expect(useSceneStore.getState().openTabs[0].sessionHistory).toEqual(['current']);
+    } finally { stop(); }
+  });
+
   it('only activates an existing session reference without creating or replacing its workspace tab', () => {
     const onActivated = vi.fn();
     useSceneStore.getState().activateSessionScene(sessionTarget, { onActivated });

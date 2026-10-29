@@ -819,6 +819,7 @@ impl ClaudeTurnProjector {
             round_index: self.round_index,
             model_config_id: CLAUDE_NATIVE_MODEL_CONFIG_ID.to_string(),
             effective_model_name: self.model_name.clone(),
+            routing: None,
         });
         self.round_index += 1;
         self.total_rounds += 1;
@@ -848,6 +849,7 @@ impl ClaudeTurnProjector {
             first_chunk_ms: None,
             first_visible_output_ms: None,
             stream_duration_ms: None,
+            ttft_ms: None,
             attempt_count: None,
             failure_category: None,
             token_details: None,

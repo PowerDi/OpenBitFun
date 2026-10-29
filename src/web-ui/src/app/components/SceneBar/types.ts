@@ -77,6 +77,8 @@ export interface SceneTab {
   /** Legacy tabs without a location open in the primary pane. */
   pane?: 'primary' | 'secondary';
   session?: SessionSceneTarget;
+  /** Recently opened sessions in this workspace, newest first (including current). */
+  sessionHistory?: string[];
   /** Reference to content state; the tab never owns an editor buffer. */
   contentId?: string;
   /** User ordering preference; independent of closability. */

@@ -90,16 +90,9 @@ impl Request {
     }
 
     fn abandon(&self, reason: &str) -> String {
-        let previous = self
-            .state
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
-                Some(if state == INPUT_SUBMITTED || state == INPUT_UNKNOWN {
-                    INPUT_UNKNOWN
-                } else {
-                    ABANDONED
-                })
-            })
-            .unwrap();
+        // The abandonment bit maps READING to ABANDONED and INPUT_SUBMITTED
+        // to INPUT_UNKNOWN, preserving both terminal states on repeated calls.
+        let previous = self.state.fetch_or(ABANDONED, Ordering::AcqRel);
         self.failure_message(
             reason,
             previous == INPUT_SUBMITTED || previous == INPUT_UNKNOWN,

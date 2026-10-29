@@ -4892,11 +4892,15 @@ impl SSHConnectionManager {
                     let command = container_signal_command(&pid_file, signal);
                     Box::pin(async move { super::wsl::signal(&config, &command).await })
                 });
-            return crate::remote_ssh::WorkspaceStdio::spawn_local_process_with_signal_hook(
+            let stdio = crate::remote_ssh::WorkspaceStdio::spawn_local_process_with_signal_hook(
                 super::wsl::EXECUTABLE,
                 &super::wsl::exec_args(&wsl, &supervised_command),
                 Some(signal_hook),
-            );
+            )?;
+            // wsl.exe interleaves Windows-host messages into the command's
+            // stderr, so the stdio stream needs the same line-wise filtering
+            // the captured command paths apply.
+            return Ok(stdio.map_stderr(super::wsl::streamed_stderr));
         }
         if config.uses_docker_exec() {
             let container = config

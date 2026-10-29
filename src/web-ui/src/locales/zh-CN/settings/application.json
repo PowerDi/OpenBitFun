@@ -10,6 +10,8 @@
     "description": "原生会话默认立即向当前任务补充指令；选择排队则等待当前轮次结束。ACP 会话仍需等待当前轮次结束，远程派发会话保持向目标任务追加消息。",
     "immediate": "立即发送（默认）",
     "queue": "排队发送",
+    "immediateDescription": "原生会话中，新消息会立即补充到当前任务。",
+    "queueDescription": "原生会话中，新消息会在本轮结束后自动发送。",
     "loading": "正在加载消息发送偏好…",
     "loadFailed": "加载消息发送偏好失败",
     "saveFailed": "保存消息发送偏好失败"
@@ -136,7 +138,7 @@
       "hint": "OpenBitFun 运行时的电脑睡眠行为"
     },
     "toggleLabel": "阻止电脑睡眠",
-    "toggleDescription": "OpenBitFun 运行期间保持电脑唤醒，即使没有任务。显示器仍可关闭；手动睡眠和合盖行为由系统决定",
+    "toggleDescription": "运行时阻止自动睡眠，不影响熄屏、手动睡眠和合盖。",
     "messages": {
       "loading": "加载中…",
       "loadFailed": "无法读取阻止睡眠设置",

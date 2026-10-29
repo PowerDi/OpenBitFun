@@ -35,6 +35,7 @@ mod macos_window_chrome;
 #[cfg(target_os = "macos")]
 mod macos_window_close;
 mod miniapp_desktop;
+mod miniapp_web_host;
 
 // Keep one macro expansion: on macOS it emits a process-wide Info.plist symbol.
 fn desktop_context() -> tauri::Context<tauri::Wry> {
@@ -238,7 +239,7 @@ async fn hide_main_window_on_macos(
 fn show_main_window_on_macos(app: &tauri::AppHandle, reason: &str) {
     cancel_main_window_close_request_on_macos(app);
 
-    let Some(main_window) = app.get_webview_window("main") else {
+    let Some(main_window) = app.get_window("main") else {
         handle_secondary_launch(app);
         return;
     };
@@ -283,7 +284,7 @@ fn show_main_window_for_secondary_launch(
     app: &tauri::AppHandle,
     attempt: &str,
 ) -> Result<(), String> {
-    if app.get_webview_window("main").is_none() {
+    if app.get_window("main").is_none() {
         #[cfg(target_os = "macos")]
         let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
         let trace = app.state::<DesktopStartupTrace>();
@@ -298,7 +299,7 @@ fn show_main_window_for_secondary_launch(
             ),
         );
     }
-    let Some(main_window) = app.get_webview_window("main") else {
+    let Some(main_window) = app.get_window("main") else {
         return Err("main window not found".to_string());
     };
 
@@ -474,14 +475,16 @@ pub async fn run() {
         Ok(None) => {}
     }
     let miniapp_background = std::env::args_os().any(|arg| arg == "--miniapp-background");
-    let _miniapp_host_owner = match miniapp_desktop::claim_host(miniapp_background).await {
-        Ok(Some(owner)) => owner,
-        Ok(None) => return,
-        Err(error) => {
-            show_fatal_startup_error(&error);
-            return;
-        }
-    };
+    let miniapp_host_channel = miniapp_desktop::host_channel();
+    let _miniapp_host_owner =
+        match miniapp_desktop::claim_host(miniapp_background, miniapp_host_channel).await {
+            Ok(Some(owner)) => owner,
+            Ok(None) => return,
+            Err(error) => {
+                show_fatal_startup_error(&error);
+                return;
+            }
+        };
     let startup_started = Instant::now();
     let startup_trace_id = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -764,6 +767,7 @@ pub async fn run() {
         // group would make the E2E child exit before WebDriver can attach.
         if !logging::is_embedded_webdriver_mode()
             && std::env::var_os("OPENBITFUN_USER_ROOT").is_none()
+            && miniapp_host_channel.is_default()
         {
             builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
                 log::info!(
@@ -798,7 +802,7 @@ pub async fn run() {
         // window-state: its exit hook can overwrite repairs with stale cached data.
         .manage(window_state_support::MainWindowState::default())
         .manage(app_state)
-        .manage(miniapp_desktop::DesktopMiniApps::default())
+        .manage(miniapp_desktop::DesktopMiniApps::new(miniapp_host_channel))
         .manage(sleep_prevention::SleepPreventionState::default())
         .manage(desktop_runtime)
         .manage(coordinator_state)
@@ -819,7 +823,7 @@ pub async fn run() {
                     tauri::webview::PageLoadEvent::Finished => "finished",
                 };
                 let url = payload.url().to_string();
-                api::browser_api::update_browser_target_url(label, &url);
+                api::browser_api::update_browser_target_page_load(label, event, &url);
                 openbitfun_core::agentic::tools::browser_control::builtin_browser::publish_builtin_browser_page_load(
                     label,
                     event,
@@ -1133,6 +1137,7 @@ pub async fn run() {
             openbitfun_webdriver::maybe_start(app_handle.clone());
             builtin_browser_host::install(app_handle.clone());
             openbitfun_control_host::install(app_handle.clone());
+            miniapp_web_host::install(app_handle.clone());
             if !miniapp_background {
                 if let Err(error) = desktop_cards::install(&app_handle) {
                     log::warn!("Desktop cards unavailable: {}", error);
@@ -1371,6 +1376,7 @@ pub async fn run() {
             api::agentic_api::create_session,
             api::agentic_api::update_session_mode,
             api::agentic_api::update_session_model,
+            api::agentic_api::get_model_routing_status,
             api::model_pool_api::get_model_pools,
             api::model_pool_api::retry_model_pool_member,
             api::model_pool_api::save_model_pool,
@@ -1489,10 +1495,13 @@ pub async fn run() {
             openbitfun_control_host::mark_openbitfun_control_surface_unready,
             openbitfun_control_host::product_control_invoke,
             openbitfun_control_host::report_openbitfun_control_result,
+            miniapp_web_host::mark_miniapp_web_surface_ready,
+            miniapp_web_host::report_miniapp_web_result,
             get_health_status,
             get_statistics,
             test_ai_connection,
             test_ai_config_connection,
+            test_image_generation_service,
             list_ai_models_by_config,
             list_subscription_accounts,
             list_subscription_account_instances,
@@ -2003,6 +2012,7 @@ pub async fn run() {
             api::browser_api::browser_webview_set_agent_target_state,
             api::browser_api::browser_get_url,
             api::html_preview_api::html_preview_create,
+            api::html_preview_api::html_preview_read_resource,
             api::html_preview_api::html_preview_release,
             // Browser Control API (CDP-based user browser control)
             api::browser_control_api::browser_control_list_browsers,
@@ -2088,7 +2098,7 @@ pub async fn run() {
             app.run(|app_handle, event| match event {
                 tauri::RunEvent::ExitRequested { api, code, .. } => {
                     if code.is_none()
-                        && (app_handle.get_webview_window("main").is_none()
+                        && (app_handle.get_window("main").is_none()
                             || app_handle
                                 .state::<miniapp_desktop::DesktopMiniApps>()
                                 .instances
@@ -2194,13 +2204,14 @@ async fn init_agentic_system() -> anyhow::Result<(
 
     let execution_config = execution::execution_engine_config_from_global_config().await;
 
-    let execution_engine = Arc::new(execution::ExecutionEngine::new(
+    let execution_engine = execution::ExecutionEngine::new(
         round_executor,
         event_queue.clone(),
         session_manager.clone(),
         context_compressor,
         execution_config,
-    ));
+    );
+    let execution_engine = Arc::new(execution_engine);
 
     let runtime_ownership = Arc::new(
         openbitfun_core::runtime_ownership::CoreRuntimeOwnership::embedded(
@@ -2355,16 +2366,6 @@ fn setup_panic_hook() {
             thread_id,
         );
 
-        // Known wry bug: WKWebView.URL() returns nil after navigating to an
-        // invalid address, causing url_from_webview to panic on unwrap().
-        // This is non-fatal — the webview is still alive — so we log and
-        // continue instead of killing the process.
-        // See: https://github.com/tauri-apps/wry/pull/1554
-        if location.contains("wry") && location.contains("wkwebview") {
-            log::warn!("Suppressed non-fatal wry/wkwebview panic, application continues");
-            return;
-        }
-
         if message.contains("WSAStartup") || message.contains("10093") || message.contains("hyper")
         {
             log::error!("Network-related crash detected, possible solutions:");
@@ -2373,16 +2374,11 @@ fn setup_panic_hook() {
             log::error!("  3) Run as administrator");
         }
 
-        // ── Recovery strategy ──────────────────────────────────────────
-        // Main-thread panics are unrecoverable — the event loop is gone.
-        // Spawned-thread panics only kill that thread; the rest of the
-        // application can continue.  We log a clear message and skip the
-        // hard exit so the user isn't forced to restart.
+        // Returning from a panic hook does not catch the panic. Leave worker
+        // panics to the runtime and any caller-owned unwind boundary; main-thread
+        // panics follow the application's fatal cleanup and exit path.
         if !is_main_thread {
-            log::warn!(
-                "Non-main thread panicked — application will continue. \
-                 The affected feature may be degraded until the next restart."
-            );
+            log::warn!("Non-main-thread panic recorded; deferring to the panic runtime");
             return;
         }
 

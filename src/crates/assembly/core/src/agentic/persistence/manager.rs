@@ -2787,6 +2787,10 @@ impl PersistenceManager {
             serde_json::to_value(&session.config.model_id)?,
         );
         config.insert(
+            "model_routing".into(),
+            serde_json::to_value(&session.config.model_routing)?,
+        );
+        config.insert(
             "reasoning_preset".into(),
             serde_json::to_value(&session.config.reasoning_preset)?,
         );
@@ -3311,6 +3315,7 @@ impl PersistenceManager {
             .unwrap_or(StoredSessionStateFile {
                 schema_version: SESSION_STORAGE_SCHEMA_VERSION,
                 config: SessionConfig {
+                    tool_presentation_mode: Default::default(),
                     workspace_path: None,
                     ..Default::default()
                 },
@@ -5501,6 +5506,7 @@ mod tests {
             "Model summary".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 model_id: Some("fast".to_string()),
                 reasoning_preset: Some("high".to_string()),
@@ -5533,6 +5539,7 @@ mod tests {
         );
         let session_id = format!("concurrent-session-{}", Uuid::new_v4());
         let config = SessionConfig {
+            tool_presentation_mode: Default::default(),
             workspace_path: Some(workspace.path().to_string_lossy().to_string()),
             ..Default::default()
         };
@@ -6056,6 +6063,7 @@ mod tests {
             "Load once".to_string(),
             "agent".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -6173,6 +6181,7 @@ mod tests {
             "Observer history".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -6292,9 +6301,11 @@ mod tests {
             provider_id: None,
             model_config_id: None,
             effective_model_name: None,
+            routing: None,
             first_chunk_ms: None,
             first_visible_output_ms: None,
             stream_duration_ms: None,
+            ttft_ms: None,
             attempt_count: None,
             attempt_diagnostics: vec![],
             failure_category: None,
@@ -6385,6 +6396,7 @@ mod tests {
             "Catalog persistence".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -6465,6 +6477,7 @@ mod tests {
             "Catalog restore".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -6556,6 +6569,7 @@ mod tests {
             "Legacy catalog window".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -6646,6 +6660,7 @@ mod tests {
             "Catalog missing file".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -6701,6 +6716,7 @@ mod tests {
             "Incremental catalog repair".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -6810,6 +6826,7 @@ mod tests {
             "Catalog rebuild fallback".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -6894,6 +6911,7 @@ mod tests {
             "History benchmark".into(),
             "Standard".into(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().into()),
                 ..Default::default()
             },
@@ -7000,6 +7018,7 @@ mod tests {
             "Paged".into(),
             "Standard".into(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().into()),
                 ..Default::default()
             },
@@ -7056,6 +7075,7 @@ mod tests {
             "Catalog staged revert".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -7162,6 +7182,7 @@ mod tests {
             "Turn window".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -7317,6 +7338,7 @@ mod tests {
             "Compression transcripts".to_string(),
             "agent".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -7458,6 +7480,7 @@ mod tests {
             "Concurrent metadata".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -7533,6 +7556,7 @@ mod tests {
             "Incremental metadata".to_string(),
             "agent".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -7610,6 +7634,7 @@ mod tests {
             "Transactional deletion".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -7682,6 +7707,7 @@ mod tests {
             "Transactional session deletion".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -7728,6 +7754,7 @@ mod tests {
             "Canonical metadata lock".to_string(),
             "Standard".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -7761,6 +7788,7 @@ mod tests {
             "Finished timestamp metadata".to_string(),
             "agent".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -7809,6 +7837,7 @@ mod tests {
             "Concurrent metadata".to_string(),
             "agent".to_string(),
             SessionConfig {
+                tool_presentation_mode: Default::default(),
                 workspace_path: Some(workspace.path().to_string_lossy().to_string()),
                 ..Default::default()
             },
@@ -8813,6 +8842,7 @@ mod tests {
             .context_for_remote_workspace("dev-host", &remote_path)
             .sessions_dir;
         let config = SessionConfig {
+            tool_presentation_mode: Default::default(),
             workspace_id: Some(remote_workspace.id.clone()),
             workspace_path: Some(remote_path.clone()),
             remote_connection_id: Some("ssh-1".to_string()),

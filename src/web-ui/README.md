@@ -209,6 +209,58 @@ VITE_BUILD_TARGET=web pnpm --dir src/web-ui run build
 # output: dist/
 ```
 
+## Model selection and smart mode
+
+Smart mode is not released in the current build. Its existing entry stays
+disabled, and configuration, probes and activation require an execution host
+that explicitly reports release availability. Older hosts without that field
+remain unavailable. Saved selections are retained, while the effective mode is
+manual; neither configuration files nor environment variables unlock routing.
+The details below describe the retained implementation for future release.
+
+The compact chat model picker keeps the context limit, reasoning effort and
+selected model together. Its model list retains search, provider filters and the
+primary/fast, pool and smart shortcuts. Manual model choices use the existing
+session and future-default saving rules. Delegated subagents keep their original
+explicit, default, inherited and Fork model configuration.
+
+Smart mode adds primary/economy bindings and Router status as items
+inside that mode. Before configuration, it shows a centered **Configure smart
+mode** action, matching the model-pool empty state. Its configuration dialog
+contains the primary/economy bindings in one row and the Router service.
+**Save and test connection** checks the primary model, economy model and Router
+independently, with a separate result for each. Ordinary models use the same
+connection test as model settings; the Router also validates its classifier
+protocol. Changing a selection clears previous results.
+Smart mode automatically maintains Router history summaries with the economy
+model. Pending summaries do not prevent routing while complete history fits;
+only an input that cannot fit completely falls back to the primary model.
+Older conversations prepare Router history from the execution host's original
+visible turns in bounded chunks. Accepted progress is stored per conversation;
+once ready, routing resumes automatically without replacing the main transcript.
+Auxiliary requests choose the economy model's independent lowest supported effort.
+No tokenizer file is required: the execution host estimates
+input locally and tightens its budget using complete Router prompt usage.
+Legacy tokenizer paths remain optional overrides. Older hosts without
+`estimatedTokenBudgetSupported` may retain an already configured path; without
+one, saving is blocked with an execution-host upgrade message.
+Pricing, economy threshold and timeout
+controls are no longer exposed; existing saved values remain intact. The default-models
+section has no separate Router or billing entry. Settings → Models → Smart mode
+opens the same configuration dialog. Once configured, a centered switch
+controls activation. Opening smart mode only shows this switch and configuration
+action until enabled; primary/economy and Router items appear after the
+host confirms activation. Turning it off hides those items and keeps the switch
+available. Select a role to search text models within the same popover; Back or
+Escape returns to the smart items. Editing roles leaves the session model unchanged.
+
+A ready host activates smart routing for the current session or draft through
+its existing API, without changing the strategy default or subagent policy.
+Before a session or draft exists, the host strategy default owns the selection.
+There is no additional remember-selection control. Older hosts show an explicit
+unsupported state. Model pools use the named pools advertised by the execution
+host. Remote surfaces read and save the selected host's models and configuration.
+
 ## Subscription models
 
 In **Settings → Models → Subscription accounts**, sign in, choose **Use**, and
@@ -297,6 +349,15 @@ documents runtime discovery, activation and cleanup. These extensions require
 the visible local Desktop; they are unavailable on remote/Peer/headless surfaces.
 MiniApp source operations use the installed product's lifecycle owner and
 preserve omitted source fields and existing app storage when updating.
+
+Agents operate MiniApps through `MiniAppBrowser` first: connect the current
+instance, use its declared state/actions when available, then its DOM/input
+controls. A missing semantic bridge does not by itself require desktop control.
+Readable frames advertising `element-position-click-v1` also accept clicks at
+normalized positions inside an observed element, including SVG/Canvas surfaces;
+older hosts retain ordinary element clicks. ComputerUse remains a fallback for
+a specific unsupported operation on the authorized host. Ordinary web pages use
+ControlHub, while native apps and OS dialogs use ComputerUse.
 
 1. **Don’t call Tauri APIs directly** in UI components; use the adapter layer.
 2. **Keep Web compatibility** in mind (some capabilities may not exist in browsers).

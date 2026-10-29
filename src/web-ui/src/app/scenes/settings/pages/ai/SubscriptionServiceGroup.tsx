@@ -1,17 +1,21 @@
 import styles from './SubscriptionServiceGroup.module.scss';
 import type { ManagedSubscriptionAccount } from './subscriptionServices';
 import type { ReactNode } from 'react';
-import { Button } from '@openbitfun/ui';
-import { ConfigPageRow } from '@/infrastructure/config/components/common';
+import { CardHeader } from '@openbitfun/ui';
 
 /** One product heading followed by independent account rows. */
-export function SubscriptionServiceGroup({ title, description, action, busy, onAdd, children }: {
-  title: string; description?: string; action?: string; busy: boolean; onAdd?: () => void; children: ReactNode;
+export function SubscriptionServiceGroup({ title, description, actions, children, testId = 'settings-subscription-service' }: {
+  title: string; description?: string; actions?: ReactNode; children: ReactNode; testId?: string;
 }) {
-  return <div className={styles.group} data-testid="settings-subscription-service" data-openbitfun-component="model-settings" data-openbitfun-part="subscriptionService">
-    <ConfigPageRow label={title} description={description} className="openbitfun-model-settings__cli-account" align="center">
-      {action && onAdd && <Button size="sm" variant="outline" disabled={busy} onClick={onAdd}>{action}</Button>}
-    </ConfigPageRow>
+  return <div className={styles.group} data-testid={testId} data-openbitfun-component="model-settings" data-openbitfun-part="subscriptionService">
+    <CardHeader
+      className={styles.header}
+      align="center"
+      padding="md"
+      title={<h3 className={styles.title}>{title}</h3>}
+      description={description}
+      actions={actions}
+    />
     {children}
   </div>;
 }

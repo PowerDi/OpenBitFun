@@ -52,12 +52,19 @@ export interface SessionMetadataPage {
   /** Absent on older hosts; never interpret absence as an empty snapshot. */
   activities?: SessionActivitySummary[];
   discoveryWarnings?: string[];
+  /** Structured host diagnostics for clients that can localize each issue. */
+  discoveryDiagnostics?: SessionDiscoveryDiagnostic[];
   discoveryPending?: boolean;
   /** Present only when the host applied this complete query before paging. */
   catalogQuery?: SessionCatalogQuery;
   catalogRevision?: string;
   /** The cursor belonged to another query/version; this page restarts at zero. */
   catalogReset?: boolean;
+}
+
+export interface SessionDiscoveryDiagnostic {
+  ecosystemId: string;
+  code: string;
 }
 
 export interface SessionLineageRequest {

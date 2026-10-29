@@ -189,6 +189,16 @@ $chevron-box-slack: 5px;
     margin-top: 8px;
   }
 
+  &__result-row {
+    min-width: 0;
+  }
+
+  &__result-row > [role='gridcell'],
+  &__result-row .global-search__action-card {
+    width: 100%;
+    height: 100%;
+  }
+
   &__result {
     display: flex;
     align-items: center;
@@ -878,3 +888,19 @@ $chevron-box-slack: 5px;
     }
   }
 }
+
+.global-search__diagnostics {
+  min-width: 0;
+  flex: 1;
+  max-height: 200px;
+  overflow: auto;
+  summary { cursor: pointer; }
+}
+.global-search__diagnostic-target { margin-block: 8px; }
+.global-search__diagnostic {
+  padding-block: 8px;
+  border-top: 1px solid var(--openbitfun-color-border-subtle);
+  overflow-wrap: anywhere;
+  p { margin-block: 4px 8px; }
+}
+.global-search__diagnostic-path { color: var(--openbitfun-color-content-muted); }

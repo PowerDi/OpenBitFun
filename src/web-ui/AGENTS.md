@@ -86,6 +86,9 @@ For icon changes, also run `pnpm --dir src/web-ui run icons:check` and the focus
 form decorations are generated from Lucide by `pnpm --dir src/web-ui run icons:generate`.
 General-purpose icons use Lucide; the four harness modes, Git branch, brand logos,
 mascots, and device overview artwork retain their authored assets.
+External-product identities reuse `src/shared/ui/ProductBrandIcon.tsx` and its
+`productBrandIcons.ts` asset catalog across import, sign-in, and account views;
+keep product assets and light/dark rendering out of page-local mappings.
 
 Choose the smallest matching check:
 
@@ -107,6 +110,15 @@ an intent-review inventory, not a pass/fail gate; do not mechanically replace
 deliberate layout transitions or animate virtualized content. Rely on CI for
 full lint, build, and broad test coverage unless the local change specifically
 needs it.
+
+For Agent creation, hidden internal IDs, editing, and surface-switch draft fences:
+
+```bash
+pnpm --dir src/web-ui run test:run src/app/scenes/agents/components/CreateAgentDialog.test.tsx src/app/scenes/agents/components/suggestAgentId.test.ts src/app/scenes/agents/components/CreateAgentPage.presentation.test.ts src/app/scenes/agents/AgentsScene.test.tsx src/app/scenes/personal-overview/PersonalOverviewScene.actions.test.tsx
+```
+
+These DOM fixtures cover local forms and simulated Peer surface switches;
+they do not establish native rendering or live remote behavior.
 
 For navigation-divider dragging, elastic feedback, cancellation, and keyboard resizing:
 
@@ -149,6 +161,15 @@ pnpm --dir src/web-ui run test:run src/flow_chat/selection/FlowChatSelectionBar.
 
 These DOM fixtures do not establish native WebView rendering or live remote behavior.
 
+For Hi-to-MiniApp image preparation, SDK inheritance, admission and peer compatibility:
+
+```bash
+pnpm --dir src/web-ui run test:run src/app/scenes/miniapps/miniAppComposerMessages.test.ts src/app/scenes/miniapps/miniAppBridgeImages.test.ts src/app/scenes/miniapps/hooks/useMiniAppBridge.test.tsx src/infrastructure/api/service-api/MiniAppAPI.test.ts src/flow_chat/utils/imagePayload.test.ts src/infrastructure/api/adapters/peer-device-adapter.test.ts
+```
+
+These tests exercise production JS with host/transport fixtures; they do not establish
+live model, SSH workspace, Remote Control, Peer Device or Detached Dispatch behavior.
+
 For Appearance descriptor changes, also exercise production registration; its ID
 and property validation goes beyond the static DOM audit:
 
@@ -162,6 +183,24 @@ also run the focused state contracts:
 ```bash
 pnpm --dir src/web-ui run test:run src/app/services/sessionSceneLifecycle.test.ts src/flow_chat/services/sessionActivation.test.ts src/flow_chat/services/storeSync.test.ts src/app/stores/sceneStore.test.ts
 ```
+
+For top workspace tab recent-session disclosure, selection and reconciliation:
+
+```bash
+pnpm --dir src/web-ui run test:run src/app/components/SceneBar/SceneBar.test.tsx src/app/stores/sceneStore.test.ts src/app/services/sessionSceneLifecycle.test.ts src/app/hooks/useSessionTabLabels.test.tsx src/shared/ui/MenuPopover.test.tsx src/shared/ui/MenuComposition.contract.test.ts
+```
+
+These local DOM/store fixtures cover bounded history, legacy tabs and simulated
+SSH/Peer identities; they do not establish native rendering or live remote behavior.
+
+For composer mode restoration, passive synchronization, or explicit mode selection:
+
+```bash
+pnpm --dir src/web-ui run test:run src/flow_chat/hooks/useChatInputModeSync.test.tsx src/flow_chat/hooks/useSessionModeSelection.test.tsx src/flow_chat/utils/chatInputMode.test.ts
+```
+
+These state/hook fixtures cover delayed session loading and selected peer-surface
+replacement; they do not establish native rendering or live remote behavior.
 
 For cross-device undo/redo/rollback history invalidation and settled-Turn fences,
 run `pnpm --dir src/web-ui run test:run src/flow_chat/services/flow-chat-manager/EventHandlerModule.test.ts`.
@@ -200,6 +239,26 @@ pnpm --dir src/web-ui run test:run src/app/components/NavPanel/components/Worksp
 
 These DOM and store fixtures do not establish native rendering or live remote behavior.
 
+For assistant history disclosure and default-session selection:
+
+```bash
+pnpm --dir src/web-ui run test:run src/app/components/NavPanel/sections/workspaces/WorkspaceListSectionLayout.test.ts src/app/components/NavPanel/sections/workspaces/AssistantSessionHistory.test.tsx src/app/components/NavPanel/sections/workspaces/assistantSessionPreferences.test.ts
+```
+
+These local fixtures cover inline disclosure and legacy-host preference gating;
+they do not establish native rendering or live remote behavior.
+
+For session grouping/list motion, scroll anchoring, interruption and retained project disclosure:
+
+```bash
+pnpm --dir src/web-ui run test:run src/app/components/NavPanel/sections/workspaces/SessionViewTransition.test.tsx src/app/components/NavPanel/sections/workspaces/WorkspaceListSection.test.tsx src/app/components/NavPanel/sections/workspaces/WorkspaceListSectionLayout.test.ts src/app/components/NavPanel/components/WorkspaceSessionGroupingToggle.test.tsx
+pnpm run motion:audit
+```
+
+These DOM fixtures use measured-layout and animation stubs, including simulated
+Peer surface switches; they do not establish native animation fidelity or live
+SSH, Remote Control, Peer Device or Detached Dispatch behavior.
+
 For application update discovery, skip persistence, notification timing, and
 download/install transitions, run the focused behavior tests (these do not
 establish visual fidelity):
@@ -220,3 +279,33 @@ establish visual or remote transport behavior):
 ```bash
 pnpm --dir src/web-ui run test:run src/shared/ui/OverlayStack.test.tsx src/shared/ui/OverlayOwnership.contract.test.ts src/shared/ui/Dialog.test.tsx src/shared/ui/MenuPopover.test.tsx src/infrastructure/appearance/runtime/AppearanceOverlayHost.test.ts src/shared/notification-system/components/NotificationContainer.test.tsx src/shared/context-menu-system/components/ui/ContextMenu.test.tsx
 ```
+
+For the compact model picker, smart-mode items, session/default selection,
+and host capability negotiation:
+
+```bash
+pnpm --dir src/web-ui run test:run src/flow_chat/components/ModelSelectorProviderLevels.test.tsx src/flow_chat/components/ModelSelectorExternal.test.tsx src/flow_chat/components/ModelSelectorAcpMode.test.tsx src/flow_chat/hooks/useModelRouting.test.tsx src/infrastructure/api/adapters/peer-device-adapter.test.ts
+```
+
+These DOM and transport fixtures cover local and simulated Peer surfaces,
+including old-host gating and stale-device completions. They do not establish
+live SSH, relay remote control or detached-dispatch behavior.
+
+For Markdown Mermaid rendering states and supported syntax:
+
+```bash
+pnpm --dir src/web-ui run test:run src/infrastructure/markdown/MermaidBlock.test.tsx src/tools/mermaid-editor/services/MermaidService.test.ts
+```
+
+The service tests use the real Mermaid parser; native SVG rendering still needs UI verification.
+
+For chat PR/MR link routing, peer capability negotiation, and controller browser fallback:
+
+```bash
+pnpm --dir src/web-ui run test:run src/infrastructure/markdown/MarkdownRenderer.test.tsx src/infrastructure/peer-device/PeerConnectionManager.test.ts src/infrastructure/peer-device/peerCapabilityResolution.test.ts src/infrastructure/api/service-api/SystemAPI.test.ts src/flow_chat/components/modern/FlowChatHeader.test.tsx src/flow_chat/tool-cards/BuiltinToolCard.test.tsx src/app/components/panels/review-platform/ReviewPlatformPanel.test.tsx
+```
+
+These DOM and handshake fixtures cover local, legacy Desktop, CLI and unknown peers,
+device changes, per-device remote preferences and legacy local migration, stale
+review launches, overview/tool-card gates, restored panels, and the controller-owned
+URL opener. They do not establish live macOS-to-Linux Peer Device or native browser behavior.

@@ -13,6 +13,7 @@ use reqwest::{
     header::{HeaderMap, RETRY_AFTER},
     StatusCode,
 };
+use std::borrow::Cow;
 use std::error::Error as StdError;
 use std::future::Future;
 use std::pin::Pin;
@@ -366,8 +367,60 @@ where
     ) -> HandlerFuture,
     HandlerFuture: Future<Output = ()> + Send + 'static,
 {
+    execute_sse_request_with_http_fallback(
+        account_client,
+        label,
+        url,
+        request_body,
+        max_tries,
+        ttft_timeout,
+        trace,
+        build_request,
+        build_handler,
+        |_, _, _| None,
+    )
+    .await
+}
+
+/// Allow one provider-owned request adaptation after an HTTP rejection, before
+/// a stream is exposed. It gets one extra send even when the runtime owns the
+/// retry budget (`max_tries == 1`); ordinary retries retain the adapted body.
+/// Every send still goes through admission, authorization and attempt tracing.
+pub(crate) async fn execute_sse_request_with_http_fallback<
+    BuildRequest,
+    BuildHandler,
+    HandlerFuture,
+    HttpFallback,
+>(
+    account_client: Option<&crate::client::AIClient>,
+    label: &str,
+    url: &str,
+    request_body: &serde_json::Value,
+    mut max_tries: usize,
+    ttft_timeout: Option<Duration>,
+    trace: Option<ModelExchangeTraceConfig>,
+    build_request: BuildRequest,
+    build_handler: BuildHandler,
+    http_fallback: HttpFallback,
+) -> Result<StreamResponse>
+where
+    BuildRequest: Fn() -> reqwest::RequestBuilder,
+    BuildHandler: Fn(
+        reqwest::Response,
+        mpsc::UnboundedSender<Result<UnifiedResponse>>,
+        Option<mpsc::UnboundedSender<String>>,
+        Option<Duration>,
+    ) -> HandlerFuture,
+    HandlerFuture: Future<Output = ()> + Send + 'static,
+    HttpFallback: Fn(StatusCode, &str, &serde_json::Value) -> Option<serde_json::Value>,
+{
     let mut last_error = None;
-    for attempt in 0..max_tries {
+    let mut request_body = Cow::Borrowed(request_body);
+    let mut fallback_used = false;
+    let mut attempts = 0;
+    while attempts < max_tries {
+        let attempt = attempts;
+        attempts += 1;
         let request = build_request();
         let capacity = RequestCapacity::for_request(&request)?;
         // Queuing is cancellable by dropping this future and must not consume
@@ -403,7 +456,9 @@ where
                 .sink
                 .request_attempt_started(&ModelExchangeRequestAttempt {
                     request_url: url.to_string(),
-                    request_body: trace.capture_request_body.then(|| request_body.clone()),
+                    request_body: trace
+                        .capture_request_body
+                        .then(|| request_body.as_ref().clone()),
                     attempt_number: attempt + 1,
                     round_attempt: trace.round_attempt().cloned(),
                 })
@@ -412,7 +467,7 @@ where
             None
         };
         let request_start_time = std::time::Instant::now();
-        let send_outcome = send_stream_request(request, request_body, ttft_timeout).await;
+        let send_outcome = send_stream_request(request, &request_body, ttft_timeout).await;
 
         let response = match send_outcome {
             StreamSendOutcome::Response(resp) => {
@@ -509,6 +564,21 @@ where
                                     .unwrap_or_else(|| "unknown error".to_string()),
                             )
                             .await;
+                    }
+
+                    if !fallback_used && !error_body_timed_out {
+                        if let Some(adapted_body) =
+                            http_fallback(status, &error_text, &request_body)
+                        {
+                            request_body = Cow::Owned(adapted_body);
+                            fallback_used = true;
+                            max_tries = max_tries.saturating_add(1);
+                            warn!(
+                                "{} retrying with provider compatibility fallback after HTTP {}",
+                                label, status
+                            );
+                            continue;
+                        }
                     }
 
                     if attempt < max_tries - 1 {
@@ -1422,6 +1492,7 @@ mod tests {
                 format: "openai".into(),
                 context_window: 4096,
                 max_tokens: None,
+                max_images_per_request: None,
                 temperature: None,
                 top_p: None,
                 inline_think_in_text: false,

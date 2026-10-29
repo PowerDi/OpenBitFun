@@ -282,9 +282,11 @@ async function hydrateHistoricalSession(
     log.error('Failed to load session history', { sessionId, error });
     if (notifyOnError) {
       const sourceHistory = context.flowChatStore.getState().sessions.get(sessionId)?.externalHistory;
-      const message = sourceHistory?.sourceStatus === 'unavailable' && !sourceHistory.contentVersion
-        ? i18nService.t('flow-chat:externalHistory.unavailableWithoutCache')
-        : 'Failed to load session history, showing empty session';
+      const message = sourceHistory?.sourceStatus === 'unsupported'
+        ? i18nService.t('flow-chat:externalHistory.unsupported')
+        : sourceHistory?.sourceStatus === 'unavailable' && !sourceHistory.contentVersion
+          ? i18nService.t('flow-chat:externalHistory.unavailableWithoutCache')
+          : 'Failed to load session history, showing empty session';
       notificationService.warning(message, {
         duration: 3000
       });

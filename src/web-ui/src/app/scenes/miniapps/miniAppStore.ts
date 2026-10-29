@@ -5,6 +5,8 @@ import { create } from 'zustand';
 import { getActiveSurfaceId } from '@/infrastructure/peer-device/deviceSurface';
 import type { MiniAppMeta } from '@/infrastructure/api/service-api/MiniAppAPI';
 import type { InstalledMarketOrigin } from '@/infrastructure/api/service-api/MiniAppMarketAPI';
+import type { ImageContextData } from '@/infrastructure/api/service-api/ImageContextTypes';
+import type { ContextItem } from '@/shared/types/context';
 
 /**
  * Window event dispatched after the shared ChatInput routes a submission to a
@@ -22,7 +24,9 @@ export interface MiniAppComposerMessageDetail {
   source?: 'composer' | 'realtime_voice';
   text: string;
   displayText?: string;
-  contexts?: unknown[];
+  contexts?: ContextItem[];
+  /** Host-prepared inline pixels, forwarded to app.agent.run without filesystem authority. */
+  imageContexts?: ImageContextData[];
   composerPresentation?: unknown;
   sessionId?: string;
   workspacePath?: string;

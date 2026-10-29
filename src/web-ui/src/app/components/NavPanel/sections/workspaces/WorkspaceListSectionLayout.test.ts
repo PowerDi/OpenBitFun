@@ -291,7 +291,7 @@ describe('WorkspaceListSection layout styles', () => {
       .toContain('opacity: 1;');
   });
 
-  it('keeps assistant history in a dialog without inline disclosure or a resource shortcut', () => {
+  it('expands assistant history below its row with a collapse icon and no resource shortcut', () => {
     const source = readWorkspaceItemSource();
     const start = source.indexOf('if (workspace.workspaceKind === WorkspaceKind.Assistant)');
     const assistant = source.slice(start, source.indexOf('\n  return (', start));
@@ -308,7 +308,14 @@ describe('WorkspaceListSection layout styles', () => {
     expect(source).toContain('useNurseryStore.getState().openAssistant(workspace.id)');
     expect(source).toContain("useSceneStore.getState().openScene('assistant')");
     expect(assistant).toContain('{assistantHistoryOpen && (');
-    expect(assistant).toContain('onClose={() => setAssistantHistoryOpen(false)}');
+    expect(assistant).toContain('data-testid="nav-assistant-session-region"');
+    expect(assistant).toContain('hidden={!assistantHistoryOpen}');
+    expect(assistant).toContain('aria-expanded={assistantHistoryOpen}');
+    expect(assistant).toContain('aria-controls={assistantHistoryId}');
+    expect(assistant).toContain('setAssistantHistoryOpen(open => !open)');
+    expect(assistant).toContain('glyph={assistantHistoryOpen ? ChevronUp : History}');
+    expect(assistant).not.toContain('aria-haspopup="dialog"');
+    expect(assistant).not.toContain('AssistantSessionHistoryDialog');
     expect(assistant).toContain('handleOpenLatestAssistantSession');
   });
 });

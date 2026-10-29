@@ -5,34 +5,28 @@
 //!   1. Resolve `(pid, idx)` to a live `AxRef` via `macos_ax_dump::cached_ref`.
 //!   2. Try the AX path here without activating the target. The target owns
 //!      the semantic action's effects; dispatch alone does not verify them.
-//!   3. On failure (`Err(AxWriteUnavailable)`): the dispatch layer falls back
-//!      to `macos_bg_input` (background `CGEvent` injection to the pid).
+//!   3. Only preflight/unsupported outcomes may select `macos_bg_input`.
+//!      An attempted mutation with an unknown outcome must never be replayed.
 //!
 //! Target applications decide which semantic operations they accept.
 
 #![allow(dead_code)]
 
+use super::macos_ax_dispatch::{
+    is_attribute_settable as AXUIElementIsAttributeSettable,
+    perform_action as AXUIElementPerformAction,
+    set_input_attribute_value as AXUIElementSetAttributeValue,
+};
 use crate::computer_use::macos_ax_dump::AxRef;
 use core_foundation::base::{CFTypeRef, TCFType};
 use core_foundation::boolean::CFBoolean;
-use core_foundation::string::{CFString, CFStringRef};
+use core_foundation::string::CFString;
 
 type AXUIElementRef = *const std::ffi::c_void;
 
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn AXUIElementGetPid(element: AXUIElementRef, pid: *mut i32) -> i32;
-    fn AXUIElementIsAttributeSettable(
-        element: AXUIElementRef,
-        attribute: CFStringRef,
-        settable: *mut u8,
-    ) -> i32;
-    fn AXUIElementPerformAction(element: AXUIElementRef, action: CFStringRef) -> i32;
-    fn AXUIElementSetAttributeValue(
-        element: AXUIElementRef,
-        attribute: CFStringRef,
-        value: CFTypeRef,
-    ) -> i32;
 }
 
 /// Result of an AX-first attempt.
@@ -40,8 +34,8 @@ unsafe extern "C" {
 pub(super) enum AxWriteOutcome {
     /// The AX call succeeded — no fallback needed.
     Ok,
-    /// AX rejected the call (status non-zero or unsupported). Caller should
-    /// fall through to event injection.
+    /// AX rejected the call. Only an explicitly unsupported operation permits
+    /// event injection; other failures may have an unknown mutation outcome.
     Unavailable(i32),
 }
 
@@ -124,6 +118,25 @@ pub(super) fn insert_selected_text(
         return Err(OpenBitFunError::tool(
             "[CONTROL_TARGET_CHANGED] Text target is outside the active capture",
         ));
+    }
+    // Cross-process accessibility proxies (notably WebKit content) can report
+    // AXSelectedText as settable while its implementation is a no-op. Do not
+    // submit that write and then retry: choose directed keyboard input during
+    // preflight. Native controls keep the selection-preserving AX fast path.
+    let mut presenter = 0;
+    let status = unsafe { AXUIElementGetPid(target.0, &mut presenter) };
+    if status != 0 {
+        return Err(OpenBitFunError::tool(format!(
+            "[AX_TEXT_PREFLIGHT_FAILED] Cannot resolve the text target process (status={status}); no text was submitted"
+        )));
+    }
+    let serving = unsafe { super::macos_ax_dispatch::actual_pid(target.0) }.map_err(|status| {
+        OpenBitFunError::tool(format!(
+            "[AX_TEXT_PREFLIGHT_FAILED] Cannot resolve the text provider process (status={status}); no text was submitted"
+        ))
+    })?;
+    if serving != presenter {
+        return Ok(false);
     }
     let attr = CFString::new("AXSelectedText");
     let mut settable = 0u8;

@@ -10,6 +10,7 @@ const request: GlobalSearchRequest = {
   currentWorkspace: null,
   limitPerGroup: 2,
   tCommon: (key) => key,
+  tCapabilities: key => key,
   tSettings: (key) => key,
 };
 
@@ -45,6 +46,24 @@ describe('runFederatedSearch', () => {
       expect.objectContaining({ providerId: 'broken', code: 'provider_unavailable' }),
     ]);
     expect(updates).toHaveBeenCalled();
+  });
+
+  it('retries only the failed source while keeping successful results throughout', async () => {
+    const healthy = provider('healthy', vi.fn(() => ({ items: [{
+      id: 'healthy-result', providerId: 'healthy', group: 'actions', title: 'Healthy result', score: 80,
+      target: { kind: 'action', actionId: 'settings.open' },
+    }] })));
+    const failed = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ items: [] });
+    const sources = [healthy, provider('broken', failed)];
+    const previous = await runFederatedSearch(sources, request, new AbortController().signal, () => {});
+    const updates = vi.fn();
+    const result = await runFederatedSearch(sources, request, new AbortController().signal, updates,
+      { previous, providerIds: ['broken'] });
+    expect(healthy.search).toHaveBeenCalledOnce();
+    expect(failed).toHaveBeenCalledTimes(2);
+    expect(updates.mock.calls.every(([value]) => value.items.some((item: { id: string }) => item.id === 'healthy-result'))).toBe(true);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.isSearching).toBe(false);
   });
 
   it('sorts deterministically, deduplicates by stable id, and enforces group budgets', async () => {

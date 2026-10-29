@@ -11,6 +11,7 @@ import {
 import { classNames } from "../../internal/classNames";
 import { OverflowText } from "../../primitives/OverflowText";
 import { Icon } from "../Icon";
+import { inertProps, type InertProps } from "../../internal/inert";
 import styles from "./Disclosure.module.css";
 
 type DisclosureTriggerProps = Pick<ButtonHTMLAttributes<HTMLButtonElement>,
@@ -46,7 +47,7 @@ interface NativeDisclosureProps
 
 export type DisclosureProps = CustomDisclosureProps | NativeDisclosureProps;
 
-type InertContentAttributes = HTMLAttributes<HTMLDivElement> & { inert?: "" };
+type InertContentAttributes = HTMLAttributes<HTMLDivElement> & InertProps;
 
 const CustomDisclosure = forwardRef<HTMLElement, CustomDisclosureProps>(
   function Disclosure({
@@ -73,7 +74,7 @@ const CustomDisclosure = forwardRef<HTMLElement, CustomDisclosureProps>(
     const contentId = `openbitfun-disclosure-${generatedId}-content`;
     const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
     const resolvedOpen = open ?? uncontrolledOpen;
-    const inertContentAttributes: InertContentAttributes = resolvedOpen ? {} : { inert: "" };
+    const inertContentAttributes: InertContentAttributes = inertProps(!resolvedOpen);
 
     const [retained, setRetained] = useState(resolvedOpen);
     useEffect(() => {

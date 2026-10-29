@@ -64,6 +64,7 @@ and local implementation-process notes out of Git.
 ```bash
 # Desktop (recommended for daily development)
 pnpm run desktop:dev                # full hot-reload: Vite HMR + Rust auto-rebuild & restart
+pnpm run desktop:dev -- --shared-data # run alongside the installed app and share data
 pnpm run prepare:dsh-profile        # optional: compile the DeepSeek Harness bridge for local sessions
 
 # Desktop (lightweight preview, no Rust auto-rebuild)

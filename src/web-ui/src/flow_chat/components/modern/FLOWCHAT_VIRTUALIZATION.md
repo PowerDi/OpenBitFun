@@ -94,10 +94,19 @@ retain their measured space and keyboard access; the typewriter reveal gate
 still takes precedence. Latest-turn identity comes from the session catalog,
 not the last visible virtual row or the end of a history window.
 The cache ring uses reported cache-read tokens divided by input tokens; if any
-call lacks cache telemetry, the turn's ratio stays unknown. The speed levels
-use output tokens divided by the whole turn duration (including tools/waits),
-with thresholds at 15, 40 and 80 tokens/s, disclosed in the Tooltip. This is not
-provider streaming throughput. Total usage and the cache ring form one unit,
+call lacks cache telemetry, the turn's ratio stays unknown. TTFT has a separate capsule showing request-to-first-effective-output latency
+for the first model call (the accepted attempt after a retry). Text, thinking and
+tool output count as effective output; metadata-only packets do not. The host
+reports this optional duration, so controller clock skew and event delivery
+latency do not affect it. The speed levels use output tokens divided by the sum
+of each call's first-effective-output-to-stream-end time, with thresholds at 15,
+40 and 80 tokens/s disclosed in the Tooltip. HTTP setup, TTFT, tool execution and
+post-stream usage persistence are excluded. Missing or inconsistent timing in
+any model call, or retries whose earlier attempt timing is unavailable, omit speed
+rather than substituting turn wall time. Negative-index controller setup/audit
+rows are presentation only and do not participate in either metric.
+Legacy records omit unknown TTFT;
+reported zero remains valid. Timing survives the normal history save/load path. Total usage and the cache ring form one unit,
 hidden only when both values are missing. If usage is known but the cache ratio
 is unknown, a neutral dashed ring remains; cache-only data adds no total placeholder.
 Other unavailable metrics and detail rows are omitted; reported zero remains visible.

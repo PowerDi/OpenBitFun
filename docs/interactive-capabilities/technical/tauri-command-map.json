@@ -1,13 +1,13 @@
 {
   "schemaVersion": 2,
   "generatedFrom": "src/shared/interactive-capabilities/catalog.json",
-  "catalogDigest": "c7c38fecfad3e83e4a9f6f451a37edbf7d42ef399409238253f9a0fd124f879b",
-  "commandCount": 707,
+  "catalogDigest": "9ec82305067852766c79ed3d802c3a16f1c4dd992f7d3195f91a2989da32f544",
+  "commandCount": 712,
   "coverage": {
-    "commandCount": 707,
-    "documentedCommandCount": 650,
-    "implementationCommandCount": 57,
-    "implementationDigest": "503b48eebc37750e50e0427d861e884dfa353a81aae32236e4bc2d7e0f5310e2"
+    "commandCount": 712,
+    "documentedCommandCount": 652,
+    "implementationCommandCount": 60,
+    "implementationDigest": "5047b674e890f899e65baf9235e9df4bd912fa28f44eb10a656e079a1b89974d"
   },
   "commands": [
     {
@@ -2849,7 +2849,7 @@
       "visibility": "documented",
       "rustPath": "frontend_workbench::frontend_update_candidate_failed",
       "sourceFile": "src/apps/desktop/src/frontend_workbench.rs",
-      "signature": "fn frontend_update_candidate_failed( state: tauri::State<'_, Arc<FrontendWorkbenchManager>>, webview: tauri::WebviewWindow, request: FrontendUpdateFailureRequest, ) -> Result<Value, String>",
+      "signature": "fn frontend_update_candidate_failed( state: tauri::State<'_, Arc<FrontendWorkbenchManager>>, webview: tauri::Webview, request: FrontendUpdateFailureRequest, ) -> Result<Value, String>",
       "remoteWorkspacePolicy": "LocalOnly"
     },
     {
@@ -2865,7 +2865,7 @@
       "visibility": "documented",
       "rustPath": "frontend_workbench::frontend_update_candidate_ready",
       "sourceFile": "src/apps/desktop/src/frontend_workbench.rs",
-      "signature": "fn frontend_update_candidate_ready( state: tauri::State<'_, Arc<FrontendWorkbenchManager>>, webview: tauri::WebviewWindow, request: FrontendUpdateDecisionRequest, ) -> Result<Value, String>",
+      "signature": "fn frontend_update_candidate_ready( state: tauri::State<'_, Arc<FrontendWorkbenchManager>>, webview: tauri::Webview, request: FrontendUpdateDecisionRequest, ) -> Result<Value, String>",
       "remoteWorkspacePolicy": "LocalOnly"
     },
     {
@@ -3845,6 +3845,22 @@
       "rustPath": "api::model_pool_api::get_model_pools",
       "sourceFile": "src/apps/desktop/src/api/model_pool_api.rs",
       "signature": "fn get_model_pools() -> Result<ModelPoolDocument, String>",
+      "remoteWorkspacePolicy": "WorkspaceAgnostic"
+    },
+    {
+      "id": "get_model_routing_status",
+      "moduleId": "agentic",
+      "capabilityId": "setting.ai.models",
+      "capabilityIds": [
+        "setting.ai.models"
+      ],
+      "documentedItemIds": [
+        "setting.ai.models:smart-routing"
+      ],
+      "visibility": "documented",
+      "rustPath": "api::agentic_api::get_model_routing_status",
+      "sourceFile": "src/apps/desktop/src/api/agentic_api.rs",
+      "signature": "fn get_model_routing_status( runtime: State<'_, DesktopRuntimeContext>, coordinator: State<'_, Arc<ConversationCoordinator>>, request: ModelRoutingStatusRequest, ) -> Result< openbitfun_core::agentic::execution::round_model_routing::configuration::ModelRoutingStatus, String, >",
       "remoteWorkspacePolicy": "WorkspaceAgnostic"
     },
     {
@@ -5028,6 +5044,20 @@
       "remoteWorkspacePolicy": "RemoteRouted"
     },
     {
+      "id": "html_preview_read_resource",
+      "moduleId": "html_preview",
+      "capabilityId": "feature.files-editor",
+      "capabilityIds": [
+        "feature.files-editor"
+      ],
+      "documentedItemIds": [],
+      "visibility": "implementation",
+      "rustPath": "api::html_preview_api::html_preview_read_resource",
+      "sourceFile": "src/apps/desktop/src/api/html_preview_api.rs",
+      "signature": "fn html_preview_read_resource( request: HtmlPreviewResourceRequest, ) -> HtmlPreviewResourceReply",
+      "remoteWorkspacePolicy": "RemoteRouted"
+    },
+    {
       "id": "html_preview_release",
       "moduleId": "html_preview",
       "capabilityId": "feature.files-editor",
@@ -5910,6 +5940,20 @@
       "remoteWorkspacePolicy": "RemoteRouted"
     },
     {
+      "id": "mark_miniapp_web_surface_ready",
+      "moduleId": "miniapp_web_host",
+      "capabilityId": "feature.miniapps",
+      "capabilityIds": [
+        "feature.miniapps"
+      ],
+      "documentedItemIds": [],
+      "visibility": "implementation",
+      "rustPath": "miniapp_web_host::mark_miniapp_web_surface_ready",
+      "sourceFile": "src/apps/desktop/src/miniapp_web_host.rs",
+      "signature": "fn mark_miniapp_web_surface_ready(request: Option<MiniAppWebSurfaceReadyRequest>)",
+      "remoteWorkspacePolicy": "WorkspaceAgnostic"
+    },
+    {
       "id": "mark_openbitfun_control_surface_ready",
       "moduleId": "openbitfun_control_host",
       "capabilityId": null,
@@ -6326,7 +6370,7 @@
       "visibility": "documented",
       "rustPath": "api::miniapp_market_api::miniapp_market_capture_window",
       "sourceFile": "src/apps/desktop/src/api/miniapp_market_api.rs",
-      "signature": "fn miniapp_market_capture_window( app: AppHandle, window: WebviewWindow, ) -> Result<String, String>",
+      "signature": "fn miniapp_market_capture_window( app: AppHandle, webview: Webview, ) -> Result<String, String>",
       "remoteWorkspacePolicy": "LocalOnly"
     },
     {
@@ -6534,7 +6578,7 @@
       "visibility": "documented",
       "rustPath": "api::miniapp_api::miniapp_presentation",
       "sourceFile": "src/apps/desktop/src/api/miniapp_api.rs",
-      "signature": "fn miniapp_presentation( app: AppHandle, window: tauri::WebviewWindow, request: crate::miniapp_desktop::PresentationRequest, ) -> Result<Value, String>",
+      "signature": "fn miniapp_presentation( app: AppHandle, webview: tauri::Webview, request: crate::miniapp_desktop::PresentationRequest, ) -> Result<Value, String>",
       "remoteWorkspacePolicy": "LocalOnly"
     },
     {
@@ -8039,6 +8083,20 @@
       "remoteWorkspacePolicy": "LegacyUnaudited"
     },
     {
+      "id": "report_miniapp_web_result",
+      "moduleId": "miniapp_web_host",
+      "capabilityId": "feature.miniapps",
+      "capabilityIds": [
+        "feature.miniapps"
+      ],
+      "documentedItemIds": [],
+      "visibility": "implementation",
+      "rustPath": "miniapp_web_host::report_miniapp_web_result",
+      "sourceFile": "src/apps/desktop/src/miniapp_web_host.rs",
+      "signature": "fn report_miniapp_web_result( request: ReportMiniAppWebResultRequest, ) -> Result<(), String>",
+      "remoteWorkspacePolicy": "WorkspaceAgnostic"
+    },
+    {
       "id": "report_openbitfun_control_result",
       "moduleId": "openbitfun_control_host",
       "capabilityId": null,
@@ -8177,7 +8235,7 @@
       "visibility": "documented",
       "rustPath": "api::browser_file_drop_api::resolve_browser_dropped_file_paths",
       "sourceFile": "src/apps/desktop/src/api/browser_file_drop_api.rs",
-      "signature": "fn resolve_browser_dropped_file_paths( webview: tauri::WebviewWindow, request: ResolveBrowserDroppedFilePathsRequest, ) -> Result<Vec<String>, String>",
+      "signature": "fn resolve_browser_dropped_file_paths( webview: tauri::Webview, request: ResolveBrowserDroppedFilePathsRequest, ) -> Result<Vec<String>, String>",
       "remoteWorkspacePolicy": "LocalOnly"
     },
     {
@@ -9314,7 +9372,7 @@
       "visibility": "documented",
       "rustPath": "api::file_drop_preview_api::set_file_drop_preview_target",
       "sourceFile": "src/apps/desktop/src/api/file_drop_preview_api.rs",
-      "signature": "fn set_file_drop_preview_target( window: tauri::WebviewWindow, request: SetFileDropPreviewTargetRequest, ) -> Result<(), String>",
+      "signature": "fn set_file_drop_preview_target( webview: tauri::Webview, request: SetFileDropPreviewTargetRequest, ) -> Result<(), String>",
       "remoteWorkspacePolicy": "LocalOnly"
     },
     {
@@ -10740,6 +10798,22 @@
       "sourceFile": "src/apps/desktop/src/api/commands.rs",
       "signature": "fn test_ai_connection(state: State<'_, AppState>) -> Result<bool, String>",
       "remoteWorkspacePolicy": "LegacyUnaudited"
+    },
+    {
+      "id": "test_image_generation_service",
+      "moduleId": "commands",
+      "capabilityId": "setting.ai.models",
+      "capabilityIds": [
+        "setting.ai.models"
+      ],
+      "documentedItemIds": [
+        "setting.ai.models:connection-test"
+      ],
+      "visibility": "documented",
+      "rustPath": "test_image_generation_service",
+      "sourceFile": "src/apps/desktop/src/api/commands.rs",
+      "signature": "fn test_image_generation_service( request: TestImageGenerationServiceRequest, ) -> Result<openbitfun_core::agentic::image_generation::ImageServiceTestOutcome, String>",
+      "remoteWorkspacePolicy": "WorkspaceAgnostic"
     },
     {
       "id": "toggle_main_window_fullscreen",

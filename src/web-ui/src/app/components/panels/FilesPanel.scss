@@ -464,13 +464,13 @@
 
     &__title {
       font-size: var(--openbitfun-type-label-md-font-size);
-      font-weight: 600;
+      font-weight: var(--openbitfun-type-heading-section-font-weight);
     }
 
     &__reason,
     &__hint-label {
       font-size: var(--openbitfun-type-meta-font-size);
-      line-height: 1.4;
+      line-height: var(--openbitfun-type-modifier-leading-ui-line-height);
     }
 
     &__hint {

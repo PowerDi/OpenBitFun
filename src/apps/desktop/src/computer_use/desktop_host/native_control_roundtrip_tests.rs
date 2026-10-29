@@ -5,6 +5,7 @@ use openbitfun_core::agentic::tools::framework::{Tool, ToolResult, ToolUseContex
 use openbitfun_core::agentic::tools::implementations::ComputerUseTool;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use std::time::Duration;
 
 #[path = "native_control_probe.rs"]
 mod probe;
@@ -218,6 +219,10 @@ async fn wait_for_observer(path: &str) -> Value {
 }
 
 pub(crate) async fn run() {
+    if std::env::var_os("OPENBITFUN_CUA_SELF_TEST").is_some() {
+        self_webview_roundtrip().await;
+        return;
+    }
     if std::env::var_os("OPENBITFUN_CUA_PROBE_PID").is_some() {
         probe::run().await;
         return;
@@ -509,6 +514,203 @@ pub(crate) async fn run() {
         foreground
     );
     eprintln!("PASS native tool pipeline: observation, semantic click, image click, Unicode input, Return, OCR verification and stop; binding/generation/foreground stayed stable");
+}
+
+async fn self_webview_roundtrip() {
+    let pid = std::process::id();
+    let host = Arc::new(DesktopComputerUseHost::new());
+    let mut context = ToolUseContext::for_tool_listing(None, None);
+    context.session_id = Some(OWNER.into());
+    context.computer_use_host = Some(host.clone());
+    context.primary_model_facts.supports_image_inputs = true;
+    context.primary_model_facts.api_format = "anthropic".into();
+    let tool = ComputerUseTool::new();
+    let _cleanup = StopOnExit;
+    let ready_deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let window = loop {
+        let windows = call(&tool, &context, json!({"action":"list_windows"})).await;
+        if let Some(window) = windows["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|window| {
+                window["pid"] == pid && window["title"] == "Computer Use Self WebView Fixture"
+            })
+        {
+            break window.clone();
+        }
+        assert!(
+            std::time::Instant::now() < ready_deadline,
+            "own fixture window must be discoverable"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    let app = json!({"pid":pid,"window_id":window["window_id"]});
+    call(
+        &tool,
+        &context,
+        json!({"action":"start_control","app":app,"mode":"background"}),
+    )
+    .await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let observation = loop {
+        let state = call(
+            &tool,
+            &context,
+            json!({"action":"get_app_state","app":app,"include_image":false}),
+        )
+        .await;
+        if state["app_state"]["tree_text"]
+            .as_str()
+            .unwrap()
+            .contains("Self test button")
+        {
+            break state;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "WebKit AX subtree never arrived: {state}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert!(observation["app_state"]["tree_text"]
+        .as_str()
+        .unwrap()
+        .contains("Self click count 0"));
+    assert!(observation["app_state"]["node_count"].as_u64().unwrap() > 7);
+    assert_eq!(observation["app_state"]["has_screenshot"], false);
+    let image =
+        call_observation(&tool, &context, json!({"action":"get_app_state","app":app})).await;
+    let id = assert_app_observation(
+        &image,
+        true,
+        observation["app_state"]["observation_id"].as_str(),
+    );
+    let idx = observed_node_index(&image.data, "Self test button");
+    // Use the actual observed element geometry to address the screenshot. The
+    // tool still validates the screenshot and dispatches the input itself.
+    let (left, top, width, height) = tokio::task::spawn_blocking(move || {
+        let target =
+            crate::computer_use::macos_ax_dump::retained_cached_target(pid as i32, idx).unwrap();
+        assert_ne!(
+            unsafe { crate::computer_use::macos_ax_dispatch::actual_pid(target.reference().0) }
+                .unwrap(),
+            pid as i32,
+            "The fixture must exercise a real WebKit subprocess element"
+        );
+        target
+            .frame_global()
+            .expect("WebKit button must expose real geometry")
+    })
+    .await
+    .unwrap();
+    let meta = &image.data["app_state"]["screenshot_meta"];
+    let global = &meta["image_global_bounds"];
+    let content = &meta["image_content_rect"];
+    let x = content["left"].as_f64().unwrap()
+        + (left + width / 2.0 - global["left"].as_f64().unwrap())
+            * content["width"].as_f64().unwrap()
+            / global["width"].as_f64().unwrap();
+    let y = content["top"].as_f64().unwrap()
+        + (top + height / 2.0 - global["top"].as_f64().unwrap())
+            * content["height"].as_f64().unwrap()
+            / global["height"].as_f64().unwrap();
+    let clicked = call(
+        &tool,
+        &context,
+        json!({"action":"app_click", "app":app, "observation_id":id,
+        "target":{"kind":"image_xy","x":x.round() as i32,"y":y.round() as i32,"screenshot_id":meta["screenshot_id"]}}),
+    )
+    .await;
+    assert!(
+        clicked["app_state"]["tree_text"]
+            .as_str()
+            .unwrap()
+            .contains("Self click count 1"),
+        "{clicked}"
+    );
+    let button_idx = observed_node_index(&clicked, "Self test button");
+    let clicked = call(
+        &tool,
+        &context,
+        json!({"action":"app_click", "app":app,
+        "observation_id":clicked["app_state"]["observation_id"],
+        "target":{"kind":"node_idx", "idx":button_idx}}),
+    )
+    .await;
+    assert!(
+        clicked["app_state"]["tree_text"]
+            .as_str()
+            .unwrap()
+            .contains("Self click count 2"),
+        "{clicked}"
+    );
+    let field_idx = observed_node_index(&clicked, "text field title=\"Self test field\"");
+    let typed = call(
+        &tool,
+        &context,
+        json!({"action":"app_type_text", "app":app, "text":"Self input ✓",
+        "observation_id":clicked["app_state"]["observation_id"],
+        "focus":{"kind":"node_idx", "idx":field_idx}}),
+    )
+    .await;
+    let typed_tree = typed["app_state"]["tree_text"].as_str().unwrap();
+    assert!(
+        typed_tree.contains("Self input value: Self input ✓"),
+        "The DOM must contain the exact inserted text: {typed}"
+    );
+    assert!(
+        typed_tree.contains("Self click count 2"),
+        "Text focus must not activate the button again: {typed}"
+    );
+    call(
+        &tool,
+        &context,
+        json!({"action":"get_app_shortcuts","app":app}),
+    )
+    .await;
+    let native_idx = observed_node_index(&typed, "Computer Use Self WebView Fixture");
+    let native_target =
+        crate::computer_use::macos_ax_dump::retained_cached_target(pid as i32, native_idx).unwrap();
+    let lease = crate::computer_use::control_session::acquire(OWNER, "app_click").unwrap();
+    let stale_token = crate::computer_use::control_session::capture_token().unwrap();
+    crate::computer_use::control_session::stop(Some(OWNER), "fixture_revoke_queued_input").unwrap();
+    drop(lease);
+    tokio::task::spawn_blocking(move || {
+        use crate::computer_use::{control_session, macos_ax_dispatch};
+        use core_foundation::{base::TCFType, string::CFString};
+        assert_eq!(
+            unsafe { macos_ax_dispatch::actual_pid(native_target.reference().0) }.unwrap(),
+            pid as i32,
+            "Revocation must exercise a same-process main-queue message"
+        );
+        control_session::with_token(stale_token, || unsafe {
+            let action = CFString::new("AXRaise");
+            assert_eq!(
+                macos_ax_dispatch::perform_action(
+                    native_target.reference().0,
+                    action.as_concrete_TypeRef()
+                ),
+                -25200,
+                "Stopped input must be rejected on main before AXRaise"
+            );
+            let attr = CFString::new("AXTitle");
+            let value = CFString::new("Revoked write must not arrive");
+            assert_eq!(
+                macos_ax_dispatch::set_input_attribute_value(
+                    native_target.reference().0,
+                    attr.as_concrete_TypeRef(),
+                    value.as_CFTypeRef()
+                ),
+                -25200,
+                "Stopped input must be rejected on main before attribute writes"
+            );
+        });
+    })
+    .await
+    .unwrap();
+    call(&tool, &context, json!({"action":"stop_control"})).await;
+    eprintln!("PASS same-process AppKit/WebKit observations, screenshot, exact image/node clicks, Unicode text, shortcuts and Stop with stale-input rejection through ComputerUse");
 }
 
 async fn run_covered_semantic() {

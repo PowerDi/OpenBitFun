@@ -266,6 +266,9 @@ pub struct AgentSessionModelSelection {
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_preset: Option<String>,
+    /// Explicit manual/smart strategy; omitted callers preserve the current strategy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_mode: Option<String>,
 }
 
 /// Explicit model or pool choice applied when creating a child session.
@@ -1751,6 +1754,7 @@ pub trait AgentSessionModelPort: Send + Sync {
             selection: AgentSessionModelSelection {
                 model_id: request.model_id,
                 reasoning_preset: None,
+                routing_mode: None,
             },
         })
         .await
@@ -2205,6 +2209,19 @@ pub trait SessionTranscriptReader: Send + Sync {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn model_routing_selection_reads_old_payload_without_enabling_routing() {
+        let legacy = serde_json::json!({"modelId": "primary"});
+        let selection: super::AgentSessionModelSelection =
+            serde_json::from_value(legacy.clone()).unwrap();
+        assert!(selection.routing_mode.is_none());
+        assert_eq!(serde_json::to_value(selection).unwrap(), legacy);
+        let smart = serde_json::json!({"modelId": "primary", "routingMode":"smart"});
+        let selection: super::AgentSessionModelSelection =
+            serde_json::from_value(smart.clone()).unwrap();
+        assert_eq!(serde_json::to_value(selection).unwrap(), smart);
+    }
+
     use std::sync::Mutex;
 
     use super::*;

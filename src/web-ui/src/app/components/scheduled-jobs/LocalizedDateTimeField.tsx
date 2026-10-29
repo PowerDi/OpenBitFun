@@ -52,6 +52,7 @@ const LocalizedDateTimeField: React.FC<LocalizedDateTimeFieldProps> = ({
 }) => {
   const { t, currentLanguage } = useI18n('common');
   const anchorRef = useRef<HTMLDivElement | null>(null);
+  const pickerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const editingRef = useRef(false);
   const [pickerOpen, setPickerOpen] = useState(false);
 
@@ -140,6 +141,7 @@ const LocalizedDateTimeField: React.FC<LocalizedDateTimeFieldProps> = ({
 
       <Tooltip content={t('dateTimeField.openPicker')} disabled={disabled}>
         <IconButton
+          ref={pickerTriggerRef}
           type="button"
           size="sm"
           disabled={disabled}
@@ -153,6 +155,7 @@ const LocalizedDateTimeField: React.FC<LocalizedDateTimeFieldProps> = ({
       {pickerOpen && !disabled ? (
         <DateTimePickerPopover
           anchorRef={anchorRef}
+          triggerRef={pickerTriggerRef}
           selected={selectedDay}
           onSelect={handlePickDay}
           onClose={() => setPickerOpen(false)}

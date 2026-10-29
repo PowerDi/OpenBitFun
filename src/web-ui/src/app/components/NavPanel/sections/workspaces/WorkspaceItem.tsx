@@ -17,8 +17,8 @@ import {
   DialogTitle,
   OverflowText,
 } from '@openbitfun/ui';
-import React, { Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { EyeOff, FolderOpen, FolderSearch, History, MessageCirclePlus, RotateCcw, ListChecks, ShieldCheck, Network, Server } from 'lucide-react';
+import React, { Suspense, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { ChevronUp, EyeOff, FolderOpen, FolderSearch, History, MessageCirclePlus, RotateCcw, ListChecks, ShieldCheck, Network, Server } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { RetainedMountBoundary } from '@/shared/presence';
 import { InputDialog } from '@/app/components/InputDialog';
@@ -77,7 +77,7 @@ const PortForwardDialog = lazyWithRecovery(() =>
     default: module.PortForwardDialog,
   }))
 );
-const AssistantSessionHistoryDialog = lazyWithRecovery(() => import('./AssistantSessionHistoryDialog'));
+const AssistantSessionHistory = lazyWithRecovery(() => import('./AssistantSessionHistory'));
 const WorkspaceSessionBatchModal = lazyWithRecovery(() => import('./WorkspaceSessionBatchModal'));
 const ScheduledJobsModal = lazyWithRecovery(() => import('@/app/components/scheduled-jobs/ScheduledJobsModal'));
 
@@ -99,6 +99,8 @@ interface WorkspaceItemProps {
   isDragging?: boolean;
   onDragStart?: React.DragEventHandler<HTMLDivElement>;
   onDragEnd?: React.DragEventHandler<HTMLDivElement>;
+  sessionsCollapsed?: boolean;
+  onSessionsCollapsedChange?: (collapsed: boolean) => void;
 }
 
 const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
@@ -110,6 +112,8 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
   isDragging = false,
   onDragStart,
   onDragEnd,
+  sessionsCollapsed: controlledSessionsCollapsed,
+  onSessionsCollapsedChange,
 }) => {
   const { t } = useI18n('common');
   const { t: tFiles } = useTranslation('panels/files');
@@ -143,8 +147,10 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
   const [portForwardDialogOpen, setPortForwardDialogOpen] = useState(false);
   const [isDeletingAssistant, setIsDeletingAssistant] = useState(false);
   const [isResettingWorkspace, setIsResettingWorkspace] = useState(false);
-  const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
+  const [localSessionsCollapsed, setSessionsCollapsed] = useState(false);
+  const sessionsCollapsed = controlledSessionsCollapsed ?? localSessionsCollapsed;
   const [assistantHistoryOpen, setAssistantHistoryOpen] = useState(false);
+  const assistantHistoryId = useId();
   const openingAssistantRef = useRef(false);
   const sessionDisclosureIcon = sessionsCollapsed ? 'chevron-right' : 'chevron-down';
   const collapseAllRequestId = useWorkspaceSessionViewStore(state => state.collapseAllRequestId);
@@ -154,7 +160,10 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
 
   useEffect(() => {
-    if (collapseAllRequestId > 0) setSessionsCollapsed(true);
+    if (collapseAllRequestId > 0) {
+      setSessionsCollapsed(true);
+      setAssistantHistoryOpen(false);
+    }
   }, [collapseAllRequestId]);
   const [workspaceSearchEnabled, setWorkspaceSearchEnabled] = useState(
     () => aiExperienceConfigService.getSettings().enable_workspace_search,
@@ -531,8 +540,9 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
   }, [menuOpen, workspace]);
 
   const handleCollapseToggle = useCallback(() => {
-    setSessionsCollapsed(prev => !prev);
-  }, []);
+    if (onSessionsCollapsedChange) onSessionsCollapsedChange(!sessionsCollapsed);
+    else setSessionsCollapsed(prev => !prev);
+  }, [onSessionsCollapsedChange, sessionsCollapsed]);
 
   const handleCloseWorkspace = useCallback(async () => {
     setMenuOpen(false);
@@ -883,19 +893,20 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
                 <Icon name="more" size="xs" />
               </button>
             </div>
-            <Tooltip content={t('nav.sessions.history')} placement="right" followCursor>
+            <Tooltip content={assistantHistoryOpen ? t('nav.workspaces.collapseSessions') : t('nav.sessions.history')} placement="right" followCursor>
               <button
                 data-openbitfun-product-component="workspace-item"
                 data-openbitfun-product-part="action"
                 type="button"
-                className="openbitfun-nav-panel__assistant-item-menu-trigger"
-                onClick={() => setAssistantHistoryOpen(true)}
-                aria-label={t('nav.sessions.history')}
-                aria-haspopup="dialog"
+                className={`openbitfun-nav-panel__assistant-item-menu-trigger${assistantHistoryOpen ? ' is-open' : ''}`}
+                onClick={() => setAssistantHistoryOpen(open => !open)}
+                aria-label={assistantHistoryOpen ? t('nav.workspaces.collapseSessions') : t('nav.sessions.history')}
+                aria-expanded={assistantHistoryOpen}
+                aria-controls={assistantHistoryId}
                 data-testid="nav-assistant-history-btn"
                 data-workspace-id={workspace.id}
               >
-                <Icon glyph={History} size="xs" />
+                <Icon glyph={assistantHistoryOpen ? ChevronUp : History} size="xs" />
               </button>
             </Tooltip>
             <Tooltip content={t('nav.workspaces.actions.newSession')} placement="right" followCursor>
@@ -995,15 +1006,23 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
           </div>
         </div>
 
-        {assistantHistoryOpen && (
-          <Suspense fallback={null}>
-            <AssistantSessionHistoryDialog
-              workspace={workspace}
-              isActive={isActive}
-              onClose={() => setAssistantHistoryOpen(false)}
-            />
-          </Suspense>
-        )}
+        <div
+          id={assistantHistoryId}
+          role="region"
+          aria-label={t('nav.sessions.assistantHistory', { name: workspaceDisplayName })}
+          hidden={!assistantHistoryOpen}
+          className="openbitfun-nav-panel__workspace-item-sessions"
+          data-openbitfun-product-component="workspace-item"
+          data-openbitfun-product-part="sessions"
+          data-testid="nav-assistant-session-region"
+          data-workspace-id={workspace.id}
+        >
+          {assistantHistoryOpen && (
+            <Suspense fallback={null}>
+              <AssistantSessionHistory workspace={workspace} isActive={isActive} />
+            </Suspense>
+          )}
+        </div>
 
         <ConfirmDialog
           open={deleteDialogOpen}

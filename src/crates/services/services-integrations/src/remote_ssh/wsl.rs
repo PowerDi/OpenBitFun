@@ -1,11 +1,15 @@
 //! Native WSL transport. Linux paths and commands are interpreted in the named
 //! distribution; the Windows host is only responsible for launching wsl.exe.
 
+use super::transport::WorkspaceReader;
 use super::types::{ServerInfo, WslDistributions, WslWorkspaceConfig};
 use anyhow::{anyhow, Context};
 use openbitfun_services_core::process_manager;
+use std::pin::Pin;
 use std::process::{Output, Stdio};
+use std::task::{Context as TaskContext, Poll};
 use std::time::Duration;
+use tokio::io::{AsyncRead, ReadBuf};
 
 pub(crate) const EXECUTABLE: &str = "wsl.exe";
 
@@ -180,6 +184,171 @@ pub(super) fn stderr_diagnostics(mut bytes: &[u8]) -> StderrDiagnostics {
     diagnostics
 }
 
+/// Streaming counterpart of [`stderr_diagnostics`] for the workspace stdio path.
+///
+/// A stdio transport hands stderr to the consumer while the command runs, so
+/// host messages have to be dropped as the stream flows instead of after the
+/// process exits. Lines are classified with the same rules as the buffered
+/// path: UTF-16LE lines and `wsl:` / `wsl.exe:` lines describe the Windows
+/// host, everything else is Linux stderr and is forwarded as UTF-8.
+pub(super) fn streamed_stderr(reader: WorkspaceReader) -> WorkspaceReader {
+    Box::pin(StreamedStderr {
+        inner: reader,
+        pending: Vec::new(),
+        ready: Vec::new(),
+        ready_at: 0,
+        eof: false,
+    })
+}
+
+/// Longest single stderr line buffered before it is forwarded as it stands.
+///
+/// `wsl.exe` host messages are short; the cap only keeps a command that never
+/// writes a newline from buffering without bound.
+const MAX_PENDING_STDERR_LINE: usize = 64 * 1024;
+
+struct StreamedStderr {
+    inner: WorkspaceReader,
+    /// Bytes of the line currently being assembled.
+    pending: Vec<u8>,
+    /// Decoded Linux diagnostics waiting for the consumer.
+    ready: Vec<u8>,
+    ready_at: usize,
+    eof: bool,
+}
+
+impl StreamedStderr {
+    /// Split one buffered line off `pending`.
+    ///
+    /// Returns `None` while the current line is incomplete, except at the end
+    /// of the stream, where the last line arrives without a delimiter. Mirrors
+    /// [`stderr_diagnostics`], including consuming the whole two-byte LF code
+    /// unit of UTF-16LE so the next line stays aligned.
+    fn take_line(&mut self, end_of_stream: bool) -> Option<StreamedLine> {
+        if self.pending.is_empty() {
+            return None;
+        }
+        let prefix = self
+            .pending
+            .split(|byte| *byte == b'\n')
+            .next()
+            .unwrap_or(&self.pending);
+        let utf16 = prefix.starts_with(&[0xff, 0xfe])
+            || prefix.iter().skip(1).step_by(2).any(|byte| *byte == 0);
+        let delimiter = if utf16 {
+            self.pending
+                .chunks_exact(2)
+                .position(|pair| pair == [b'\n', 0])
+                .map(|index| (index * 2, 2))
+        } else {
+            self.pending
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map(|index| (index, 1))
+        };
+        let (end, delimiter_len) = match delimiter {
+            Some(delimiter) => delimiter,
+            None if end_of_stream => (self.pending.len(), 0),
+            None => return None,
+        };
+        let bytes = self.pending[..end].to_vec();
+        self.pending.drain(..end + delimiter_len);
+        Some(StreamedLine {
+            bytes,
+            utf16,
+            terminated: delimiter_len > 0,
+        })
+    }
+
+    /// Forward an over-long unterminated line instead of buffering forever.
+    fn flush_oversized_line(&mut self) {
+        if self.pending.len() <= MAX_PENDING_STDERR_LINE {
+            return;
+        }
+        let bytes = std::mem::take(&mut self.pending);
+        let utf16 = bytes.starts_with(&[0xff, 0xfe])
+            || bytes.iter().skip(1).step_by(2).any(|byte| *byte == 0);
+        self.queue(&StreamedLine {
+            bytes,
+            utf16,
+            terminated: false,
+        });
+    }
+
+    /// Queue one line when it belongs to the Linux side.
+    ///
+    /// The line keeps its own terminator: the last diagnostic of a command that
+    /// wrote no trailing newline must not gain one.
+    fn queue(&mut self, line: &StreamedLine) {
+        if line.utf16 {
+            return;
+        }
+        let decoded = decode_cli_output(&line.bytes);
+        let text = decoded.trim_matches(|character| matches!(character, '\0' | '\r' | '\u{feff}'));
+        if text.trim().is_empty() || is_host_diagnostic(text) {
+            return;
+        }
+        self.ready.extend_from_slice(text.as_bytes());
+        if line.terminated {
+            self.ready.push(b'\n');
+        }
+    }
+}
+
+/// One line split out of the streamed `wsl.exe` stderr.
+struct StreamedLine {
+    bytes: Vec<u8>,
+    utf16: bool,
+    terminated: bool,
+}
+
+impl AsyncRead for StreamedStderr {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        loop {
+            if this.ready_at < this.ready.len() {
+                let take = (this.ready.len() - this.ready_at).min(buf.remaining());
+                if take == 0 {
+                    return Poll::Ready(Ok(()));
+                }
+                buf.put_slice(&this.ready[this.ready_at..this.ready_at + take]);
+                this.ready_at += take;
+                if this.ready_at == this.ready.len() {
+                    this.ready.clear();
+                    this.ready_at = 0;
+                }
+                return Poll::Ready(Ok(()));
+            }
+            let end_of_stream = this.eof;
+            if let Some(line) = this.take_line(end_of_stream) {
+                this.queue(&line);
+                continue;
+            }
+            if end_of_stream {
+                return Poll::Ready(Ok(()));
+            }
+            let mut chunk = [0u8; 4096];
+            let mut chunk_buf = ReadBuf::new(&mut chunk);
+            match this.inner.as_mut().poll_read(cx, &mut chunk_buf) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                Poll::Ready(Ok(())) => {
+                    if chunk_buf.filled().is_empty() {
+                        this.eof = true;
+                    } else {
+                        this.pending.extend_from_slice(chunk_buf.filled());
+                        this.flush_oversized_line();
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn check_output(output: &Output) -> anyhow::Result<()> {
     if !output.status.success() {
         let mut detail = decode_cli_output(&output.stderr);
@@ -343,6 +512,68 @@ mod tests {
             stderr_diagnostics(b"\r\n").failure_detail(),
             "no stderr output"
         );
+    }
+
+    /// A stdio transport hands stderr to the consumer while the command runs, so
+    /// host messages have to be dropped during the stream instead of after it.
+    /// Writing one byte at a time keeps line boundaries, the two-byte UTF-16LE
+    /// LF, and the final unterminated line on read boundaries.
+    #[tokio::test]
+    async fn wsl_streamed_stderr_forwards_linux_diagnostics_only() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mut stream: Vec<u8> = "wsl: 检测到 localhost 代理配置，但未镜像到 WSL。\r\n"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        stream.extend_from_slice("cat: /workspace/文件: Permission denied\n".as_bytes());
+        stream.extend_from_slice("wsl: 上次启动警告\r\n".as_bytes());
+        stream.extend_from_slice(b"second Linux diagnostic");
+
+        let (mut writer, reader) = tokio::io::duplex(8);
+        let write = tokio::spawn(async move {
+            for byte in stream {
+                writer.write_all(&[byte]).await.unwrap();
+            }
+            writer.shutdown().await.unwrap();
+        });
+        let reader: WorkspaceReader = Box::pin(reader);
+        let mut output = String::new();
+        streamed_stderr(reader)
+            .read_to_string(&mut output)
+            .await
+            .unwrap();
+        write.await.unwrap();
+        assert_eq!(
+            output,
+            "cat: /workspace/文件: Permission denied\nsecond Linux diagnostic"
+        );
+    }
+
+    /// A command that never writes a newline must not buffer without bound, and
+    /// its diagnostics must still arrive whole.
+    #[tokio::test]
+    async fn wsl_streamed_stderr_forwards_overlong_lines() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let payload = vec![b'x'; MAX_PENDING_STDERR_LINE + 1024];
+        let (mut writer, reader) = tokio::io::duplex(16 * 1024);
+        let write = tokio::spawn({
+            let payload = payload.clone();
+            async move {
+                writer.write_all(&payload).await.unwrap();
+                writer.shutdown().await.unwrap();
+            }
+        });
+        let reader: WorkspaceReader = Box::pin(reader);
+        let mut output = String::new();
+        streamed_stderr(reader)
+            .read_to_string(&mut output)
+            .await
+            .unwrap();
+        write.await.unwrap();
+        assert_eq!(output.len(), payload.len());
+        assert!(output.bytes().all(|byte| byte == b'x'));
     }
 
     #[test]

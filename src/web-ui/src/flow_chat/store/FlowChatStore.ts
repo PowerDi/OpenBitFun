@@ -1,5 +1,5 @@
 import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
-import { removeBtwSessionFromAgentCanvas } from '@/app/components/panels/content-canvas/stores/canvasStore';
+import { forgetAgentCanvasSession, removeBtwSessionFromAgentCanvas } from '@/app/components/panels/content-canvas/stores/canvasStore';
 import { resolveLegacySessionWorkspace } from '@/infrastructure/api/service-api/legacyWorkspaceCompatibility';
 import { projectUserQuestionTiming } from '../utils/userQuestionTiming';
 import { externalHistoryFromMetadata } from '../utils/externalHistory';
@@ -5435,7 +5435,10 @@ export class FlowChatStore {
   public removeDeletedSession(sessionId: string, options?: RemoveSessionOptions): string[] {
     const removedIds = this.removeSession(sessionId, options);
     // A deletion event may arrive after the record was already removed.
-    new Set([sessionId, ...removedIds]).forEach(removeBtwSessionFromAgentCanvas);
+    new Set([sessionId, ...removedIds]).forEach(id => {
+      removeBtwSessionFromAgentCanvas(id);
+      forgetAgentCanvasSession(id);
+    });
     return removedIds;
   }
 
@@ -6598,7 +6601,16 @@ export class FlowChatStore {
       const updatedModelRounds = turn.modelRounds.map(modelRound => {
         if (updated) return modelRound;
 
-        const activeAttempts = modelRound.attempts ?? deriveRoundAttemptsFromItems(modelRound.items);
+        const recordedAttempts = modelRound.attempts;
+        if (!recordedAttempts && !modelRound.items.some((item: any) => itemMatchesIdentity(item, itemId))) {
+          // Derived attempts only repackage these same items, so a round that
+          // does not hold the item cannot hold it after derivation either. A
+          // streamed token lands in the last round; without this probe every
+          // earlier round re-derives its attempts on every flush.
+          return modelRound;
+        }
+
+        const activeAttempts = recordedAttempts ?? deriveRoundAttemptsFromItems(modelRound.items);
         if (activeAttempts && activeAttempts.length > 0) {
           let foundInAttempts = false;
           const nextAttempts = activeAttempts.map(attempt => {
@@ -7213,9 +7225,11 @@ export class FlowChatStore {
             providerId: round.providerId,
             modelConfigId: round.modelConfigId,
             effectiveModelName: round.effectiveModelName,
+          routing: round.routing,
             firstChunkMs: round.firstChunkMs,
             firstVisibleOutputMs: round.firstVisibleOutputMs,
             streamDurationMs: round.streamDurationMs,
+            ttftMs: round.ttftMs,
             attemptCount: round.attemptCount,
             attemptDiagnostics: round.attemptDiagnostics,
             failureCategory: round.failureCategory,
@@ -9281,9 +9295,11 @@ export class FlowChatStore {
           providerId: round.providerId,
           modelConfigId: round.modelConfigId,
           effectiveModelName: round.effectiveModelName,
+          routing: round.routing,
           firstChunkMs: round.firstChunkMs,
           firstVisibleOutputMs: round.firstVisibleOutputMs,
           streamDurationMs: round.streamDurationMs,
+          ttftMs: round.ttftMs,
           attemptCount: round.attemptCount,
           attemptDiagnostics: round.attemptDiagnostics,
           failureCategory: round.failureCategory,

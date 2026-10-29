@@ -96,7 +96,7 @@ export const optionalDependencyFeatureOwnerRules = [
       },
       { depName: 'which', ownerFeatures: ['process-runtime'] },
       { depName: 'win32job', ownerFeatures: ['process-runtime'] },
-      { depName: 'windows', ownerFeatures: ['installed-apps', 'json-io', 'local-storage', 'process-runtime'] },
+      { depName: 'windows', ownerFeatures: ['installed-apps', 'json-io', 'local-storage', 'process-runtime', 'system-proxy'] },
       {
         depName: 'tokio',
         ownerFeatures: [
@@ -166,7 +166,9 @@ export const optionalDependencyFeatureOwnerRules = [
       { depName: 'base64', ownerFeatures: ['agent-runtime', 'dispatch-store'] },
       {
         depName: 'openbitfun-ai-adapters',
-        ownerFeatures: ['ai-adapter-runtime', 'subscription-auth'],
+        // Agent Runtime selects its local Router tokenizer independently of
+        // protocol clients, subscription credentials and image-generation tools.
+        ownerFeatures: ['ai-adapter-runtime', 'subscription-auth', 'agent-runtime', 'tools-image-generation'],
       },
       { depName: 'openbitfun-agent-runtime', ownerFeatures: ['agent-runtime', 'ai-adapter-runtime'] },
       { depName: 'openbitfun-agent-workflows', ownerFeatures: ['deep-research'] },
@@ -208,6 +210,7 @@ export const optionalDependencyFeatureOwnerRules = [
           'mcp-runtime',
           'model-catalog',
           'plugin-source',
+          'ptc-runtime',
           'remote-connect',
           'remote-workspace',
           'review-platform',
@@ -231,6 +234,7 @@ export const optionalDependencyFeatureOwnerRules = [
           'tools-creation',
           'tools-git',
           'tools-image-analysis',
+          'tools-image-generation',
           'tools-mcp',
           'tools-miniapp',
           'tools-pages',
@@ -276,7 +280,7 @@ export const optionalDependencyFeatureOwnerRules = [
       { depName: 'anyhow', ownerFeatures: ['browser-control', 'deep-research', 'mcp', 'remote-connect', 'remote-persistence', 'remote-ssh', 'remote-ssh-concrete'] },
       {
         depName: 'async-trait',
-        ownerFeatures: ['deep-research', 'git', 'mcp', 'remote-connect', 'remote-ssh', 'remote-ssh-concrete', 'review-platform', 'script-tool-runtime', 'speech', 'web-tools', 'workspace-search'],
+        ownerFeatures: ['deep-research', 'git', 'mcp', 'ptc-runtime', 'remote-connect', 'remote-ssh', 'remote-ssh-concrete', 'review-platform', 'script-tool-runtime', 'speech', 'web-tools', 'workspace-search'],
       },
       {
         depName: 'base64',
@@ -289,7 +293,7 @@ export const optionalDependencyFeatureOwnerRules = [
         ownerFeatures: ['deep-research', 'remote-connect', 'remote-ssh-concrete', 'speech'],
       },
       { depName: 'openbitfun-product-domains', ownerFeatures: ['account-identity', 'canvas-runtime', 'function-agents', 'hook-import', 'miniapp-market', 'miniapp-runtime', 'miniapp-storage', 'plugin-source', 'remote-connect'] },
-      { depName: 'openbitfun-runtime-ports', ownerFeatures: ['deep-research', 'git', 'remote-connect', 'remote-ssh', 'remote-ssh-concrete', 'script-tool-runtime', 'web-tools'] },
+      { depName: 'openbitfun-runtime-ports', ownerFeatures: ['deep-research', 'git', 'ptc-runtime', 'remote-connect', 'remote-ssh', 'remote-ssh-concrete', 'script-tool-runtime', 'web-tools'] },
       {
         depName: 'openbitfun-services-core',
         ownerFeatures: [
@@ -356,7 +360,7 @@ export const optionalDependencyFeatureOwnerRules = [
       { depName: 'tokio-util', ownerFeatures: ['remote-ssh', 'speech'] },
       { depName: 'urlencoding', ownerFeatures: ['canvas-runtime', 'miniapp-market', 'remote-connect', 'review-platform'] },
       { depName: 'uuid', ownerFeatures: ['canvas-runtime', 'hook-import', 'miniapp-runtime', 'miniapp-storage', 'plugin-source', 'remote-connect', 'remote-ssh-concrete', 'speech'] },
-      { depName: 'which', ownerFeatures: ['miniapp-runtime', 'remote-connect', 'script-tool-runtime', 'workspace-search'] },
+      { depName: 'which', ownerFeatures: ['miniapp-runtime', 'ptc-runtime', 'remote-connect', 'script-tool-runtime', 'workspace-search'] },
       { depName: 'windows', ownerFeatures: ['models-dev', 'plugin-source', 'remote-connect', 'remote-persistence', 'remote-ssh-concrete', 'review-platform'] },
       { depName: 'x25519-dalek', ownerFeatures: ['remote-connect'] },
     ],
@@ -406,6 +410,7 @@ export const capabilityContractDependencyRules = [
       permission: ['dep:openbitfun-product-domains'],
       'plugin-runtime': [],
       'product-search': ['dep:openbitfun-product-domains'],
+      'ptc-runtime': [],
       'remote-exec-port': ['dep:tokio'],
       'remote-workspace-ports': [],
       'runtime-event-port': [],
@@ -463,12 +468,13 @@ export const capabilityContractDependencyRules = [
           capabilityForwarder('opencode-plugin-host', 'hook-function-runtime'),
           capabilityForwarder('plugin-runtime', 'plugin-runtime'),
           capabilityForwarder('product-search', 'product-search'),
+          capabilityForwarder('ptc-runtime', 'ptc-runtime'),
           capabilityForwarder('script-tool-runtime', 'script-tool-runtime'),
           capabilityForwarder('ts', 'ts'),
           capabilityForwarder('web-tools', 'web-search-port'),
         ],
         [],
-        ['external-sources', 'mcp-runtime', 'opencode-plugin-host', 'product-full', 'remote-connect', 'tools-browser-web', 'tools-mcp'],
+        ['external-sources', 'mcp-runtime', 'opencode-plugin-host', 'product-full', 'ptc-runtime', 'remote-connect', 'tools-browser-web', 'tools-mcp'],
       )],
       ['openbitfun-desktop', capabilityConsumer([
         capabilityEdge(['agent-api', 'permission', 'workspace-ports']),
@@ -527,6 +533,7 @@ export const capabilityContractDependencyRules = [
           capabilityForwarder('remote-ssh', 'remote-exec-port'),
           capabilityForwarder('remote-ssh', 'remote-workspace-ports'),
           capabilityForwarder('remote-ssh', 'workspace-ports'),
+          capabilityForwarder('ptc-runtime', 'ptc-runtime'),
           capabilityForwarder('script-tool-runtime', 'script-tool-runtime'),
           capabilityForwarder('web-tools', 'web-search-port'),
         ],
@@ -579,6 +586,7 @@ export const capabilityContractDependencyRules = [
           'plugin-runtime',
           'product-search',
           'product-full',
+          'ptc-runtime',
           'remote-connect',
           'remote-workspace',
           'ssh-remote',
@@ -622,6 +630,8 @@ export const capabilityContractDependencyRules = [
       'native-hook-runtime': [
         'native-hook-settings',
         'dep:async-trait',
+        // Unix only: signal the hook process group on timeout.
+        'dep:libc',
         'dep:log',
         'dep:serde',
         'dep:serde_json',
@@ -684,7 +694,7 @@ export const capabilityContractDependencyRules = [
           capabilityForwarder('ai-adapter-runtime', 'account-routing'),
         ],
         ['agent-runtime', 'ai-adapter-runtime'],
-        ['external-sources', 'function-agents', 'model-catalog', 'mcp-runtime', 'opencode-plugin-host', 'plugin-runtime', 'product-search', 'product-full', 'remote-connect', 'tools-mcp'],
+        ['external-sources', 'function-agents', 'model-catalog', 'mcp-runtime', 'opencode-plugin-host', 'plugin-runtime', 'product-search', 'product-full', 'ptc-runtime', 'remote-connect', 'tools-mcp', 'tools-image-generation'],
       )],
       ['openbitfun-desktop', capabilityConsumer([
         capabilityEdge(['agent-runtime']),
@@ -738,6 +748,7 @@ export const coreProductFullFeatureAssemblyRule = {
     'tools-creation',
     'tools-git',
     'tools-image-analysis',
+    'tools-image-generation',
     'tools-mcp',
     'tools-miniapp',
     'tools-pages',
@@ -782,6 +793,7 @@ export const acpServerCoreFeatures = [
   'tools-browser-web',
   'tools-computer-use',
   'tools-image-analysis',
+  'tools-image-generation',
   'tools-agent-control',
 ];
 
@@ -877,6 +889,7 @@ export const coreClosedFeatureProfileRules = [
     featureName: 'agent-runtime',
     requiredFeatureRefs: [
       'ai-adapter-runtime',
+      'openbitfun-ai-adapters/local-tokenizer',
       'dep:openbitfun-agent-runtime',
       'openbitfun-agent-runtime/agent-runtime',
       'dep:openbitfun-agent-content',
@@ -1236,6 +1249,33 @@ export const coreClosedFeatureProfileRules = [
   },
   {
     manifestPath: 'src/crates/assembly/core/Cargo.toml',
+    featureName: 'ptc-runtime',
+    requiredFeatureRefs: [
+      'agent-runtime',
+      'git',
+      'openbitfun-runtime-ports/ptc-runtime',
+      'openbitfun-services-integrations/ptc-runtime',
+    ],
+    allowedTransitiveFeatureRefs: [
+      'ai-adapter-runtime',
+      'filesystem',
+      'local-storage',
+      'process-runtime',
+      'terminal',
+      'workspace-runtime',
+      'product-capabilities',
+      'runtime-services',
+      'tool-packs',
+      'tools-basic',
+      'tools-agent-control',
+      'workspace-search',
+      'scheduled-jobs',
+    ],
+    exact: true,
+    reason: 'ptc-runtime composes the tool pipeline and service-owned Node execution through the portable PTC port',
+  },
+  {
+    manifestPath: 'src/crates/assembly/core/Cargo.toml',
     featureName: 'scheduled-jobs',
     requiredFeatureRefs: ['dep:chrono-tz', 'dep:cron'],
     exact: true,
@@ -1349,6 +1389,17 @@ export const coreClosedFeatureProfileRules = [
   },
   {
     manifestPath: 'src/crates/assembly/core/Cargo.toml',
+    featureName: 'tools-image-generation',
+    requiredFeatureRefs: [
+      'openbitfun-tool-packs/image-generation',
+      'ai-adapter-runtime',
+      'openbitfun-ai-adapters/image-generation',
+    ],
+    exact: true,
+    reason: 'tools-image-generation owns image generation with its configured AI client and wire adapter',
+  },
+  {
+    manifestPath: 'src/crates/assembly/core/Cargo.toml',
     featureName: 'tools-pages',
     requiredFeatureRefs: ['openbitfun-tool-packs/pages'],
     exact: true,
@@ -1438,6 +1489,13 @@ export const coreClosedFeatureProfileRules = [
     requiredFeatureRefs: ['dep:rustls'],
     exact: true,
     reason: 'services-core TLS provider owner must select only the workspace Rustls implementation',
+  },
+  {
+    manifestPath: 'src/crates/services/services-core/Cargo.toml',
+    featureName: 'system-proxy',
+    requiredFeatureRefs: ['dep:windows', 'windows/Win32_Foundation', 'windows/Win32_System_Registry'],
+    exact: true,
+    reason: 'services-core system proxy discovery owns only Windows registry access and environment parsing',
   },
   {
     manifestPath: 'src/crates/services/services-core/Cargo.toml',
@@ -1783,6 +1841,7 @@ export const ownerCrateFeatureAssemblyRules = [
       'browser-web',
       'computer-use',
       'image-analysis',
+      'image-generation',
       'miniapp',
       'pages',
       'creation',
@@ -1797,6 +1856,7 @@ export const ownerCrateFeatureAssemblyRules = [
       'function-agents',
       'mcp',
       'miniapp-market',
+      'ptc-runtime',
       'remote-ssh-concrete',
       'script-tool-runtime',
     ],

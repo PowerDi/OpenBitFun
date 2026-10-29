@@ -578,7 +578,7 @@ export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = (
     return (
       <>
         <Tooltip content={branchTooltipContent} placement="top" disabled={branchMenuOpen}>
-          <button
+          <button data-overflow-trigger
             ref={branchTriggerRef}
             type="button"
             className="openbitfun-chat-input-workspace-strip__chip openbitfun-chat-input-workspace-strip__chip--branch openbitfun-chat-input-workspace-strip__chip--branch-switchable"

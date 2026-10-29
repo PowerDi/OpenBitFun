@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { ExternalSourceCatalogSnapshot } from '@/infrastructure/api/service-api/ExternalSourcesAPI';
+import { getProductBrandIcon } from '@/shared/ui/productBrandIcons';
 import {
   buildEcosystemImportItems,
   buildEcosystemProductRuntimes,
@@ -300,6 +301,30 @@ describe('ecosystem compatibility scene presentation contract', () => {
     expect(scene).not.toContain('ecosystem-compatibility__import-action-placeholder');
   });
 
+  it('preserves design-system alert insets and consistent dialog spacing', () => {
+    const styles = source('./EcosystemCompatibilityScene.scss');
+    const block = (name: string) => styles.slice(styles.indexOf(`&__${name} {`)).split('\n  }')[0];
+
+    expect(block('notice')).not.toMatch(/(?:padding|border|background|font):/);
+    expect(block('batch-status')).toContain('var(--openbitfun-overlay-dialog-content-padding-lg)');
+    expect(block('content-expanded')).toContain('padding: 0 var(--openbitfun-space-4) var(--openbitfun-space-4)');
+    expect(block('import-action')).toContain('flex-wrap: wrap');
+    expect(block('metadata')).toContain('align-items: baseline');
+    expect(block('metadata')).toContain('margin: 0');
+    expect(block('content-detail')).not.toContain('margin-block-end:');
+  });
+
+  it('uses heading and action slots for every import dialog header', () => {
+    for (const file of ['ExternalAgentContent.tsx', 'EcosystemPets.tsx', 'EcosystemCompatibilityScene.tsx']) {
+      const headers = [...source(`./${file}`).matchAll(/<DialogHeader>([\s\S]*?)<\/DialogHeader>/g)];
+      expect(headers.length).toBeGreaterThan(0);
+      for (const [, header] of headers) {
+        expect(header).toContain('<DialogHeading>');
+        expect(header).toContain('<DialogHeaderActions>');
+      }
+    }
+  });
+
   it('lets the page inherit the surrounding scene surface', () => {
     const styles = source('./EcosystemCompatibilityScene.scss');
 
@@ -340,20 +365,19 @@ describe('ecosystem compatibility scene presentation contract', () => {
 
   it('uses locally cached official product marks instead of generic product glyphs', () => {
     const scene = source('./EcosystemCompatibilityScene.tsx');
-    const assetRoot = '../../../../public/assets/ecosystem-compatibility/';
-
-    for (const file of [
-      'claude-code.svg',
-      'codex.svg',
-      'pi.svg',
-      'deepseek-harness.svg',
-      'opencode.svg',
-    ]) {
-      expect(source(`${assetRoot}${file}`)).toContain('<svg');
-      expect(scene).toContain(`/assets/ecosystem-compatibility/${file}`);
+    for (const productId of ['claude-code', 'codex', 'zcode', 'pi', 'dsh', 'opencode', 'cursor']) {
+      const icon = getProductBrandIcon(productId);
+      expect(icon).toBeDefined();
+      for (const path of [icon!.src, icon!.darkSrc].filter(Boolean)) {
+        expect(path).toMatch(/^\/assets\/ecosystem-compatibility\//);
+        expect(source(`../../../../public${path}`).length).toBeGreaterThan(0);
+      }
     }
-    expect(scene).toContain('<EcosystemProductIcon productId={runtime.spec.id} />');
-    expect(scene).toContain('<EcosystemProductIcon productId={selectedRuntime.spec.id} size={38} />');
+    expect(getProductBrandIcon('zcode_cn')).toBe(getProductBrandIcon('zcode'));
+    expect(scene).toContain("from '@/shared/ui/ProductBrandIcon'");
+    expect(scene).toContain('<ProductBrandIcon productId={runtime.spec.id} size="100%" />');
+    expect(scene).toContain('<ProductBrandIcon productId={selectedRuntime.spec.id} size={38} />');
+    expect(scene).not.toContain('PRODUCT_ICON_SOURCES');
     expect(scene).not.toContain('PRODUCT_FALLBACK_ICONS');
     expect(scene).not.toContain("'other-acp'");
   });

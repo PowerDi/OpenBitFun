@@ -750,6 +750,7 @@ impl DesktopSessionApplication {
         model_id: &str,
         reasoning_preset: Option<&str>,
         include_internal: bool,
+        routing_mode: Option<&str>,
     ) -> DesktopSessionApplicationResult<bool> {
         if self
             .compatibility
@@ -761,11 +762,12 @@ impl DesktopSessionApplication {
         let scope = self.resolved_scope(request).await?;
         self.ensure_runtime_ownership(&scope)?;
         self.compatibility
-            .update_session_model_selection_from_storage_path(
+            .update_session_model_selection_from_storage_path_with_routing(
                 &self.storage_path(&scope),
                 session_id,
                 model_id,
                 reasoning_preset,
+                routing_mode,
                 include_internal,
             )
             .await

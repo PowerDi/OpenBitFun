@@ -25,6 +25,27 @@ struct PromptOrderTestAgent {
     id: String,
 }
 
+fn named_agent(id: &str, name: &str) -> crate::agentic::agents::AgentInfo {
+    serde_json::from_value(json!({
+        "key": id, "id": id, "name": name, "description": "A specialist agent",
+        "isReadonly": true, "isReview": false, "toolCount": 1,
+        "defaultTools": ["Read"], "promptCacheScopeKey": "test", "source": "user"
+    }))
+    .expect("legacy catalog entry should deserialize")
+}
+
+#[test]
+fn agent_name_reference_catalog_exposes_the_display_name_and_escapes_markup() {
+    let available = vec![named_agent("agent-internal", "Research & <review>")];
+    let listing = AgentExecutionTool::format_agent_descriptions(&available);
+    assert!(listing.contains("<agent type=\"agent-internal\">"));
+    assert!(listing.contains("<name>Research &amp; &lt;review&gt;</name>"));
+    assert!(listing.contains("<tools>Read</tools>"));
+    assert!(AgentSpawnTool
+        .render_agent_spawn_description()
+        .contains("Users reference agents by name"));
+}
+
 #[test]
 fn external_subagent_validation_accepts_model_emitted_casing() {
     let available = vec!["FileFinder".to_string(), "explore".to_string()];

@@ -556,6 +556,18 @@ async fn inspect_desktop(
         ),
     );
     option_values.insert("revision".to_string(), Value::from(current_revision()));
+    if capability_id == "setting.tools.mcp" && state.mcp_service.is_none() {
+        option_values.insert(
+            "controlAvailability".into(),
+            json!({
+                "status": "unavailable",
+                "contractAvailable": true,
+                "adapter": "desktop-native",
+                "readBack": false,
+                "reason": "MCP service is not initialized on the executing product host",
+            }),
+        );
+    }
     if capability_id == "setting.application.pet" {
         let provider_state = match companion_state(&state).await {
             Ok(value) => value,
@@ -832,6 +844,7 @@ async fn configure_desktop_provider_option(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DesktopProviderOperation {
     MiniApp(miniapps::Operation),
+    Mcp(openbitfun_core::service::mcp::control::MCPControlOperation),
     ListCompanionPets,
     UseCompanionPet,
     DeleteCompanionPet,
@@ -843,6 +856,9 @@ fn desktop_provider_operation(
 ) -> Option<DesktopProviderOperation> {
     match (provider_id, operation_id) {
         ("miniapp", id) => miniapps::operation(id).map(DesktopProviderOperation::MiniApp),
+        ("mcp", id) => {
+            openbitfun_core::service::mcp::control::operation(id).map(DesktopProviderOperation::Mcp)
+        }
         ("agent-companion-pet", "list") => Some(DesktopProviderOperation::ListCompanionPets),
         ("agent-companion-pet", "use") => Some(DesktopProviderOperation::UseCompanionPet),
         ("agent-companion-pet", "delete") => Some(DesktopProviderOperation::DeleteCompanionPet),
@@ -877,6 +893,22 @@ async fn execute_desktop_provider_operation(
 ) -> Result<Value, String> {
     let state = app.state::<AppState>();
     match operation {
+        DesktopProviderOperation::Mcp(operation) => {
+            let mut result = state
+                .mcp_service
+                .as_ref()
+                .ok_or_else(|| {
+                    "unsupported: MCP service is not initialized on the executing product host"
+                        .to_string()
+                })?
+                .execute_control(operation, arguments)
+                .await?;
+            if operation != openbitfun_core::service::mcp::control::MCPControlOperation::List {
+                result["presentationSync"] =
+                    emit_applied("setting.tools.mcp", None, None, &["mcp_servers"], None).await;
+            }
+            Ok(result)
+        }
         DesktopProviderOperation::MiniApp(operation) => {
             miniapps::execute(
                 &state.miniapp_manager,

@@ -102,7 +102,7 @@ Use these tables to select tools for the user's tasks, then put their exact name
 | --- | --- |
 | `TodoWrite` | Create and update the session's todo list. |
 | `Cron` | Manage scheduled jobs. |
-| `DesktopCard` | Show glanceable cards (countdowns, checklists, metrics, status) on the user's desktop outside the main window; desktop host only. |
+| `DesktopCard` | Show glanceable cards (countdowns, checklists, metrics, charts, status) on the user's desktop outside the main window; desktop host only. |
 | `Worktree` | List worktrees and manage isolated sessions, branches, and worktree removal. |
 | `GetFileDiff` | Show a file's diff against its baseline snapshot or Git HEAD. |
 | `ReviewPlatform` | Inspect and operate on hosted pull requests or merge requests. |
