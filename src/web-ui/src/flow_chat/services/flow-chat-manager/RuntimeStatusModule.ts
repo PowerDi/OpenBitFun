@@ -7,6 +7,7 @@
 
 import {
   clearRuntimeStatusState,
+  getRuntimeStatus,
   showRuntimeStatus,
 } from '../../store/runtimeStatusStore';
 import type { DialogTurn, FlowChatContext } from './types';
@@ -76,6 +77,43 @@ export function scheduleModelResponseStatus(
   }, delayMs);
 
   context.runtimeStatusTimers.set(key, timer);
+}
+
+/**
+ * Show a labeled status on the latest round of a running turn now, replacing a
+ * pending unlabeled model-response status of the session.
+ */
+export function showLabeledRuntimeStatus(
+  context: FlowChatContext,
+  sessionId: string,
+  turnId: string,
+  label: string,
+  source: string,
+): boolean {
+  const turn = getDialogTurn(context, sessionId, turnId);
+  if (!turn || ['completed', 'cancelled', 'error'].includes(turn.status)) {
+    return false;
+  }
+  const sessionTimerPrefix = `${sessionId}:`;
+  for (const [pendingKey, pendingTimer] of context.runtimeStatusTimers.entries()) {
+    if (pendingKey.startsWith(sessionTimerPrefix)) {
+      clearTimeout(pendingTimer);
+      context.runtimeStatusTimers.delete(pendingKey);
+    }
+  }
+  // Before the first round opens, use a turn-scoped round id; the next round
+  // start replaces it.
+  const roundId = turn.modelRounds[turn.modelRounds.length - 1]?.id ?? `${turnId}:status`;
+  showRuntimeStatus({ sessionId, turnId, roundId, label, source });
+  return true;
+}
+
+/** Clear the session status only while it is still the label `source` showed. */
+export function clearLabeledRuntimeStatus(sessionId: string, source: string): void {
+  const current = getRuntimeStatus(sessionId);
+  if (current?.source === source) {
+    clearRuntimeStatusState({ sessionId, turnId: current.turnId, roundId: current.roundId });
+  }
 }
 
 export function clearRuntimeStatus(

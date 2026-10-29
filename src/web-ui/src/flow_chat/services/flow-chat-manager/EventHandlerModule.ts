@@ -14,6 +14,7 @@ import { finishSubmittedMessagePreview, getSubmittedMessagePreview } from '../su
 import { FlowChatStore, mergeModelRoundAttemptDiagnostics } from '../../store/FlowChatStore';
 import { initializeAcpPlanState } from '../acpPlanState';
 import { initializeAcpBackgroundTaskState } from '../acpBackgroundTaskState';
+import { initializeAcpRuntimeStatusState } from '../acpRuntimeStatusState';
 import { isSessionTurnRetired } from '../../store/sessionMutationStore';
 import { stateMachineManager } from '../../state-machine';
 import { ProcessingPhase, SessionExecutionEvent, SessionExecutionState } from '../../state-machine/types';
@@ -998,6 +999,7 @@ export async function initializeEventListeners(
   await agenticEventListener.startListening(callbacks);
   const cleanupAcpPlanState = initializeAcpPlanState();
   const cleanupAcpBackgroundTaskState = initializeAcpBackgroundTaskState();
+  const cleanupAcpRuntimeStatusState = initializeAcpRuntimeStatusState(context);
 
   return () => {
     unlistenProgress();
@@ -1008,6 +1010,7 @@ export async function initializeEventListeners(
     unlistenAcpPermissionRequest();
     cleanupAcpPlanState();
     cleanupAcpBackgroundTaskState();
+    cleanupAcpRuntimeStatusState();
     agenticEventListener.stopListening();
   };
 }

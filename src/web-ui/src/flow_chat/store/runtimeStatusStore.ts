@@ -6,6 +6,8 @@ export interface RuntimeStatusEntry {
   roundId: string;
   /** Optional operation-specific progress label instead of a rotating model hint. */
   label?: string;
+  /** Owner of a labeled status, so it can clear only its own label. */
+  source?: string;
 }
 
 export interface RuntimeStatusFilter {
