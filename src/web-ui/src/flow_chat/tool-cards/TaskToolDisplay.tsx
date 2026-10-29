@@ -218,12 +218,37 @@ function isDeepReviewReviewerTask(toolItem: FlowToolItem, parentSessionId?: stri
   return false;
 }
 
+interface NativeTaskProgress {
+  lastToolName?: string;
+  toolUses?: number;
+  totalTokens?: number;
+  durationMs?: number;
+}
+
+/** Native agent (Claude) subagent progress carried in the tool progress message. */
+export function readNativeTaskProgress(message: unknown): NativeTaskProgress | null {
+  if (typeof message !== 'string' || !message.startsWith('{')) return null;
+  try {
+    const parsed = JSON.parse(message) as Record<string, unknown>;
+    if (parsed?.kind !== 'native_task_progress') return null;
+    const count = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
+    return {
+      lastToolName: readStringValue(parsed.lastToolName) || undefined,
+      toolUses: count(parsed.toolUses),
+      totalTokens: count(parsed.totalTokens),
+      durationMs: count(parsed.durationMs),
+    };
+  } catch {
+    return null;
+  }
+}
+
 const TaskLaunchDisplay: React.FC<ToolCardProps> = ({
   toolItem,
   onOpenInPanel,
   sessionId,
 }) => {
-  const { t, currentLanguage } = useI18n('flow-chat');
+  const { t, currentLanguage, formatNumber } = useI18n('flow-chat');
   const { t: tAgents } = useI18n('scenes/agents');
   const { toolCall, toolResult, status, requiresConfirmation, userConfirmed } = toolItem;
   const toolId = toolItem.id ?? toolCall?.id;
@@ -475,7 +500,24 @@ const TaskLaunchDisplay: React.FC<ToolCardProps> = ({
         : effectiveIsRunning ? 'running'
           : displayStatus === 'completed' || displayStatus === 'confirmed' ? 'completed'
             : subagentAvatarStatus;
-  const statusLabel = reviewOutcome
+  const nativeProgress = capsuleLifecycle === 'running'
+    ? readNativeTaskProgress((toolItem as { _progressMessage?: unknown })._progressMessage)
+    : null;
+  const nativeProgressLabel = nativeProgress
+    ? [
+      nativeProgress.lastToolName
+        && t('toolCards.taskTool.progressLastTool', { tool: nativeProgress.lastToolName }),
+      nativeProgress.toolUses != null
+        && t('toolCards.taskTool.progressToolUses', { value: formatNumber(nativeProgress.toolUses) }),
+      nativeProgress.totalTokens != null
+        && t('toolCards.taskTool.progressTokens', { value: formatNumber(nativeProgress.totalTokens) }),
+      nativeProgress.durationMs != null
+        && t('toolCards.taskTool.progressDuration', { value: formatNumber(Math.round(nativeProgress.durationMs / 1000)) }),
+    ].filter(Boolean).join(t('toolCards.taskTool.progressSeparator')) || undefined
+    : undefined;
+  const statusLabel = nativeProgressLabel
+    ? nativeProgressLabel
+    : reviewOutcome
     ? t(reviewOutcome.key)
     : hasFailedOutcome
       ? t('toolCards.taskTool.failed')

@@ -183,7 +183,16 @@
     }
   },
   "runtimeStatus": {
-    "waitingForModelResponse": "Waiting for model response..."
+    "waitingForModelResponse": "Waiting for model response...",
+    "retrying": "Retrying the request...",
+    "retryingWithDetails": "Retrying the request ({{details}})...",
+    "retryAttempt": "attempt {{attempt}}",
+    "retryAttemptOf": "attempt {{attempt}}/{{max}}",
+    "retryDelay": "in {{seconds}}s",
+    "detailSeparator": ", ",
+    "rateLimitReached": "Rate limit reached. Waiting for the agent...",
+    "rateLimitHighUsage": "Rate limit {{percent}}% used",
+    "rateLimitWarning": "Approaching the rate limit"
   },
   "historyState": {
     "loadingTitle": "Loading saved session",
@@ -2384,6 +2393,11 @@
       "processing": "Processing..."
     },
     "taskTool": {
+      "progressLastTool": "Running {{tool}}",
+      "progressToolUses": "{{value}} tool uses",
+      "progressTokens": "{{value}} tokens",
+      "progressDuration": "{{value}}s",
+      "progressSeparator": " · ",
       "headerLine": "{{agentType}}: {{description}}",
       "headerLineWithModel": "{{agentType}} ({{modelName}}): {{description}}",
       "headerLinePrefix": "{{agentType}}",

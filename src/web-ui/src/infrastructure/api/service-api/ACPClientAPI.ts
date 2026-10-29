@@ -252,6 +252,8 @@ export interface AcpSessionOptions {
   contextUsage?: AcpContextUsage;
   /** Native agents advertising `backgroundTasks`; omitted when empty. */
   backgroundTasks?: AcpBackgroundTask[];
+  /** Native agents: latest account rate limits; omitted until reported. */
+  rateLimits?: AcpRateLimitSnapshot;
 }
 
 /** One background task run by an external agent (background shell, subagent, ...). */
@@ -274,6 +276,45 @@ export interface AcpBackgroundTasksUpdatedEvent {
   sessionId: string;
   clientId: string;
   tasks: AcpBackgroundTask[];
+}
+
+/** One automatic retry of the model request announced by a native agent. */
+export interface AcpRetryStatus {
+  attempt?: number | null;
+  maxAttempts?: number | null;
+  delayMs?: number | null;
+  errorStatus?: number | null;
+  message?: string | null;
+}
+
+export interface AcpRetryStatusChangedEvent {
+  sessionId: string;
+  clientId: string;
+  turnId: string;
+  /** `null` once output resumed or the turn ended. */
+  retry: AcpRetryStatus | null;
+}
+
+export interface AcpRateLimitWindow {
+  /** Claude `five_hour` / `seven_day` / ..., Codex `primary` / `secondary`. */
+  kind: string;
+  /** Claude `allowed` / `allowed_warning` / `rejected`. */
+  status?: string | null;
+  usedPercent?: number | null;
+  windowMinutes?: number | null;
+  resetsAtMs?: number | null;
+}
+
+export interface AcpRateLimitSnapshot {
+  windows: AcpRateLimitWindow[];
+  limitReached?: string | null;
+  updatedAtMs: number;
+}
+
+export interface AcpRateLimitsUpdatedEvent {
+  sessionId: string;
+  clientId: string;
+  rateLimits: AcpRateLimitSnapshot;
 }
 
 export interface StopAcpSessionTaskRequest {
@@ -702,6 +743,18 @@ export class ACPClientAPI {
       'agentic://acp-background-tasks-updated',
       callback
     );
+  }
+
+  static onRetryStatusChanged(
+    callback: (event: AcpRetryStatusChangedEvent) => void
+  ): () => void {
+    return api.listen<AcpRetryStatusChangedEvent>('agentic://acp-retry-status-changed', callback);
+  }
+
+  static onRateLimitsUpdated(
+    callback: (event: AcpRateLimitsUpdatedEvent) => void
+  ): () => void {
+    return api.listen<AcpRateLimitsUpdatedEvent>('agentic://acp-rate-limits-updated', callback);
   }
 
   static onSessionOptionsChanged(

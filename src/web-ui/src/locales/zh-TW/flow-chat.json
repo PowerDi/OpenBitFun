@@ -183,7 +183,16 @@
     }
   },
   "runtimeStatus": {
-    "waitingForModelResponse": "等待模型回應..."
+    "waitingForModelResponse": "等待模型回應...",
+    "retrying": "正在重試請求...",
+    "retryingWithDetails": "正在重試請求（{{details}}）...",
+    "retryAttempt": "第 {{attempt}} 次",
+    "retryAttemptOf": "第 {{attempt}}/{{max}} 次",
+    "retryDelay": "{{seconds}} 秒後",
+    "detailSeparator": "，",
+    "rateLimitReached": "已達到速率限制，正在等待智能體...",
+    "rateLimitHighUsage": "速率限制已用 {{percent}}%",
+    "rateLimitWarning": "即將達到速率限制"
   },
   "historyState": {
     "loadingTitle": "正在載入歷史會話",
@@ -2384,6 +2393,11 @@
       "processing": "處理中..."
     },
     "taskTool": {
+      "progressLastTool": "正在執行 {{tool}}",
+      "progressToolUses": "已呼叫 {{value}} 次工具",
+      "progressTokens": "{{value}} tokens",
+      "progressDuration": "{{value}} 秒",
+      "progressSeparator": " · ",
       "headerLine": "{{agentType}}：{{description}}",
       "headerLineWithModel": "{{agentType}}（{{modelName}}）：{{description}}",
       "headerLinePrefix": "{{agentType}}",

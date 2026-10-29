@@ -75,6 +75,7 @@ import {
   isAcpBackgroundTaskRunning,
   useAcpBackgroundTaskStore,
 } from '../../services/acpBackgroundTaskState';
+import { hydrateAcpRateLimits } from '../../services/acpRuntimeStatusState';
 import { acpSessionRef } from '../../utils/acpSession';
 import { ACPClientAPI, type AcpBackgroundTask } from '@/infrastructure/api/service-api/ACPClientAPI';
 import { flowChatStore } from '../../store/FlowChatStore';
@@ -2491,6 +2492,18 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       })?.backgroundTasks,
     );
   }, [acpTaskSession, externalCaps, supportsAcpBackgroundTasks]);
+  useEffect(() => {
+    if (!acpTaskSession) return;
+    // Native agents replay their latest rate limits through session options.
+    hydrateAcpRateLimits(
+      acpTaskSession.sessionId,
+      ACPClientAPI.getCachedSessionOptions({
+        sessionId: acpTaskSession.sessionId,
+        clientId: acpTaskSession.clientId,
+        remoteConnectionId: acpTaskSession.remoteConnectionId,
+      })?.rateLimits,
+    );
+  }, [acpTaskSession, externalCaps]);
   const backgroundCommands = useMemo(
     () => [
       ...visibleBackgroundCommandActivitiesForSession(
