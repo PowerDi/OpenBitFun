@@ -857,3 +857,23 @@ describe('FlowChatManager live subscription self-healing', () => {
     manager.destroy();
   });
 });
+
+describe('FlowChatManager.compactSession', () => {
+  it('sends /compact to a native external agent instead of the OpenBitFun runtime', async () => {
+    const session = createHistoricalSession({ sessionId: 'acp_pi', mode: 'acp:pi-native', config: { agentType: 'acp:pi-native' } });
+    storeMocks.store = {
+      registerPersistUnreadCompletionCallback: vi.fn(),
+      getState: () => ({ activeSessionId: 'acp_pi', sessions: new Map([['acp_pi', session]]) }),
+    };
+    // The module-level instance captured the import-time store.
+    FlowChatManager.disposeInstance();
+    const manager = FlowChatManager.getInstance();
+    const send = vi.spyOn(manager, 'sendMessage').mockResolvedValue(undefined);
+    try {
+      await manager.compactSession('acp_pi');
+      expect(send).toHaveBeenCalledExactlyOnceWith('/compact', 'acp_pi', '/compact');
+    } finally {
+      manager.destroy();
+    }
+  });
+});

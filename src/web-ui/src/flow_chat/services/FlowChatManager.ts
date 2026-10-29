@@ -75,6 +75,7 @@ import { installPeerSessionRefresh } from './flow-chat-manager/PeerSessionRefres
 import { installDispatchJobObserver } from '../session-drivers/dispatch/install';
 import { driverForSession } from '../session-drivers/registry';
 import { registerDriverSessionLookup } from '../session-drivers/resolve';
+import { isAcpFlowSession } from '../utils/acpSession';
 import type { SendMessageOptions } from '../session-drivers/types';
 
 const log = createLogger('FlowChatManager');
@@ -841,6 +842,11 @@ export class FlowChatManager {
     const draft = this.context.flowChatStore.getState().sessions.get(sessionId);
     if (draft?.draft) await prepareSessionDraftForCommand(draft);
     const session = this.context.flowChatStore.getState().sessions.get(sessionId);
+    // External agents own their context: their native driver runs `/compact`
+    // as a turn. The OpenBitFun runtime cannot compact (or resolve) them.
+    if (isAcpFlowSession(session)) {
+      return this.sendMessage('/compact', sessionId, '/compact');
+    }
     return driverForSession(sessionId, session).compactSession(this.context, sessionId);
   }
 
