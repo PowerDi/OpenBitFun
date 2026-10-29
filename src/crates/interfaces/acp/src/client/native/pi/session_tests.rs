@@ -656,3 +656,152 @@ fn launch_args_pin_or_fork_the_pi_session_and_compact_parsing_is_strict() {
     assert_eq!(compact_instructions("/compaction"), None);
     assert_eq!(compact_instructions("please /compact"), None);
 }
+
+fn dialog_answer(
+    id: &str,
+    option: &str,
+    answers: Option<Value>,
+) -> SubmitAcpPermissionResponseRequest {
+    SubmitAcpPermissionResponseRequest {
+        permission_id: id.into(),
+        approve: option != "reject_once",
+        option_id: Some(option.into()),
+        answers,
+        feedback: None,
+    }
+}
+
+#[tokio::test]
+async fn extension_dialogs_are_answered_from_the_question_card() {
+    let (session, process, output) = fixture().await;
+    let (task, sent) = respond(session.clone(), process.clone(), output, started);
+    session
+        .start_turn("t1".into(), "deploy".into(), None)
+        .await
+        .unwrap();
+    let pending_id =
+        |session: &PiNativeSession| session.dialogs.iter().next().unwrap().key().clone();
+    // select: only an offered option is accepted.
+    route(
+        &session,
+        &process,
+        &[json!({"type":"extension_ui_request", "id":"u1",
+        "method":"select", "title":"Target?", "options":["staging","prod"]})],
+    )
+    .await;
+    let id = pending_id(&session);
+    assert!(session
+        .submit_permission(&dialog_answer(&id, "allow_once", Some(json!({"0":"dev"}))))
+        .await
+        .unwrap()
+        .is_err());
+    session
+        .submit_permission(&dialog_answer(&id, "allow_once", Some(json!({"0":"prod"}))))
+        .await
+        .unwrap()
+        .unwrap();
+    // confirm -> confirmed; input -> value; skip -> cancelled.
+    route(
+        &session,
+        &process,
+        &[json!({"type":"extension_ui_request", "id":"u2",
+        "method":"confirm", "title":"Clear?", "message":"All lost."})],
+    )
+    .await;
+    let id = pending_id(&session);
+    session
+        .submit_permission(&dialog_answer(&id, "allow_once", Some(json!({"0":"No"}))))
+        .await
+        .unwrap()
+        .unwrap();
+    route(
+        &session,
+        &process,
+        &[json!({"type":"extension_ui_request", "id":"u3",
+        "method":"input", "title":"Name?"})],
+    )
+    .await;
+    let id = pending_id(&session);
+    session
+        .submit_permission(&dialog_answer(&id, "allow_once", Some(json!({"0":"api"}))))
+        .await
+        .unwrap()
+        .unwrap();
+    route(
+        &session,
+        &process,
+        &[json!({"type":"extension_ui_request", "id":"u4",
+        "method":"input", "title":"Again?"})],
+    )
+    .await;
+    let id = pending_id(&session);
+    session
+        .submit_permission(&dialog_answer(&id, "reject_once", None))
+        .await
+        .unwrap()
+        .unwrap();
+    // editor is cancelled with a visible notice; notify needs no answer.
+    route(
+        &session,
+        &process,
+        &[
+            json!({"type":"extension_ui_request", "id":"u5", "method":"editor", "title":"Edit"}),
+            json!({"type":"extension_ui_request", "id":"u6", "method":"notify", "message":"hi"}),
+        ],
+    )
+    .await;
+    let responses = wait_until(&sent, |s| {
+        s.iter()
+            .filter(|c| c["type"] == "extension_ui_response")
+            .count()
+            >= 5
+    })
+    .await;
+    let responses: Vec<Value> = responses
+        .into_iter()
+        .filter(|c| c["type"] == "extension_ui_response")
+        .collect();
+    assert_eq!(
+        responses,
+        vec![
+            json!({"type":"extension_ui_response","id":"u1","value":"prod"}),
+            json!({"type":"extension_ui_response","id":"u2","confirmed":false}),
+            json!({"type":"extension_ui_response","id":"u3","value":"api"}),
+            json!({"type":"extension_ui_response","id":"u4","cancelled":true}),
+            json!({"type":"extension_ui_response","id":"u5","cancelled":true}),
+        ]
+    );
+    assert!(session.dialogs.is_empty());
+    let failed: Vec<String> = events(&session)
+        .await
+        .into_iter()
+        .filter_map(|e| match e {
+            AgenticEvent::ToolEvent {
+                tool_event: openbitfun_events::ToolEventData::Failed { error, .. },
+                ..
+            } => Some(error),
+            _ => None,
+        })
+        .collect();
+    assert!(failed.iter().any(|e| e.contains("editor")), "{failed:?}");
+    // An unanswered dialog is cancelled when the turn ends.
+    route(
+        &session,
+        &process,
+        &[json!({"type":"extension_ui_request", "id":"u7",
+        "method":"select", "title":"Pick", "options":["a"]})],
+    )
+    .await;
+    route(
+        &session,
+        &process,
+        &[json!({"type":"agent_settled","aborted":false})],
+    )
+    .await;
+    assert!(session.dialogs.is_empty());
+    wait_until(&sent, |s| {
+        s.iter().any(|c| c["id"] == "u7" && c["cancelled"] == true)
+    })
+    .await;
+    task.abort();
+}

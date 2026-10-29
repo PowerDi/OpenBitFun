@@ -29,6 +29,7 @@ use super::super::{
 use super::approval::{self, ApprovalRequest};
 use super::history::{PendingFork, PiHistory, TurnAnchor};
 use super::projector::PiTurnProjector;
+use crate::client::native::questions::{self, CardOutcome, Decision, Question};
 use crate::client::remote_shell::{remote_user_shell_command, shell_escape};
 use crate::client::session_persistence::AcpSessionPersistence;
 use crate::client::{
@@ -150,6 +151,16 @@ struct PendingApproval {
     turn_id: String,
 }
 
+/// An extension dialog (`select`/`confirm`/`input`) shown on the question card.
+struct PendingDialog {
+    process: Arc<PiProcess>,
+    ui_id: Value,
+    method: String,
+    turn_id: String,
+    card_id: String,
+    question: Question,
+}
+
 /// A steering message sent with `steer` and not yet echoed by Pi.
 #[derive(Debug, Clone)]
 struct PendingSteer {
@@ -196,6 +207,7 @@ pub struct PiNativeSession {
     active_pi_session: std::sync::Mutex<String>,
     permission_mode: std::sync::Mutex<String>,
     approvals: DashMap<String, PendingApproval>,
+    dialogs: DashMap<String, PendingDialog>,
     /// Calls the user allowed for this session (see `ApprovalRequest::session_key`).
     session_grants: std::sync::Mutex<std::collections::HashSet<String>>,
     history: std::sync::Mutex<PiHistory>,
@@ -255,6 +267,7 @@ impl PiNativeSession {
             title_resolver: std::sync::Mutex::new(title::default_resolver()),
             permission_mode: std::sync::Mutex::new(approval::MODE_ASK.to_string()),
             approvals: DashMap::new(),
+            dialogs: DashMap::new(),
             session_grants: std::sync::Mutex::new(Default::default()),
             history: std::sync::Mutex::new(PiHistory::default()),
             bridge_loaded: AtomicBool::new(false),
@@ -806,6 +819,8 @@ impl PiNativeSession {
         // never fail a turn submitted after a restart.
         self.approvals
             .retain(|_, pending| pending.process.id != process.id);
+        self.dialogs
+            .retain(|_, pending| pending.process.id != process.id);
         let slot = self.process.lock().await;
         let mut state = self.state.lock().await;
         state.steers.clear();
@@ -838,21 +853,7 @@ impl PiNativeSession {
                 if let Some(request) = ApprovalRequest::parse(&frame) {
                     return self.handle_approval(process, request).await;
                 }
-                // Other extension dialogs have no OpenBitFun surface yet.
-                // Cancel instead of leaving the extension blocked.
-                if matches!(
-                    frame["method"].as_str(),
-                    Some("select" | "confirm" | "input" | "editor")
-                ) {
-                    log::warn!(
-                        "Pi extension dialog cancelled (unsupported): method={}",
-                        frame["method"]
-                    );
-                    process
-                        .write(&json!({"type":"extension_ui_response", "id":frame["id"], "cancelled":true}))
-                        .await?;
-                }
-                return Ok(());
+                return self.handle_extension_ui(process, &frame).await;
             }
             Some("extension_error") => {
                 log::warn!(
@@ -1040,6 +1041,21 @@ impl PiNativeSession {
                     .await;
             }
         }
+        let ids: Vec<String> = self
+            .dialogs
+            .iter()
+            .filter(|entry| entry.turn_id == turn_id)
+            .map(|entry| entry.key().clone())
+            .collect();
+        for id in ids {
+            if let Some((_, pending)) = self.dialogs.remove(&id) {
+                // The turn's open cards were settled with the turn.
+                let _ = pending
+                    .process
+                    .write(&approval::cancel_response(&pending.ui_id))
+                    .await;
+            }
+        }
     }
 
     /// Route one approval dialog: answer from the permission mode or a
@@ -1108,10 +1124,195 @@ impl PiNativeSession {
         Ok(())
     }
 
+    /// Extension UI requests other than the approval bridge. Dialogs go to
+    /// the question card; fire-and-forget methods are only logged.
+    async fn handle_extension_ui(
+        &self,
+        process: &Arc<PiProcess>,
+        frame: &Value,
+    ) -> OpenBitFunResult<()> {
+        let method = frame["method"].as_str().unwrap_or_default();
+        let title = frame["title"].as_str().unwrap_or("Pi extension").trim();
+        let question = match method {
+            "select" => Question {
+                header: "Pi extension".into(),
+                question: title.to_string(),
+                options: frame["options"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|option| Some((option.as_str()?.to_string(), String::new())))
+                    .collect(),
+                multi_select: false,
+            },
+            "confirm" => {
+                let message = frame["message"].as_str().unwrap_or_default().trim();
+                Question {
+                    header: "Pi extension".into(),
+                    question: if message.is_empty() {
+                        title.to_string()
+                    } else {
+                        format!("{title}\n\n{message}")
+                    },
+                    options: vec![
+                        (PI_CONFIRM_YES.into(), String::new()),
+                        (PI_CONFIRM_NO.into(), String::new()),
+                    ],
+                    multi_select: false,
+                }
+            }
+            "input" => Question::free_text("Pi extension", title),
+            "editor" => {
+                log::warn!("Pi extension editor dialog cancelled (unsupported)");
+                self.show_dialog_notice(
+                    &format!("pi_extension_editor_{}", uuid::Uuid::new_v4()),
+                    title,
+                    "OpenBitFun cannot open the Pi extension editor, so the request was cancelled. Use the Pi CLI for this command.",
+                )
+                .await?;
+                return process
+                    .write(&approval::cancel_response(&frame["id"]))
+                    .await;
+            }
+            "notify" => {
+                let message = frame["message"].as_str().unwrap_or_default();
+                match frame["notifyType"].as_str() {
+                    Some("warning" | "error") => {
+                        log::warn!("Pi extension notification: {message}")
+                    }
+                    _ => log::debug!("Pi extension notification: {message}"),
+                }
+                return Ok(());
+            }
+            other => {
+                // setStatus, setWidget, setTitle, set_editor_text: no surface.
+                log::debug!("Pi extension UI request ignored: method={other}");
+                return Ok(());
+            }
+        };
+        if method == "select" && question.options.is_empty() {
+            log::warn!("Pi extension select dialog has no options; cancelled");
+            return process
+                .write(&approval::cancel_response(&frame["id"]))
+                .await;
+        }
+        let card_id = format!("pi_extension_dialog_{}", uuid::Uuid::new_v4());
+        let input = questions::card_input(std::slice::from_ref(&question));
+        let turn_id = {
+            let mut state = self.state.lock().await;
+            let current = state.process_id.as_deref() == Some(process.id.as_str());
+            match state.projector.as_mut().filter(|_| current) {
+                Some(projector) => {
+                    let events =
+                        projector.permission_tool(&card_id, questions::QUESTION_TOOL, &input);
+                    let turn_id = projector.turn_id().to_string();
+                    self.enqueue(events).await?;
+                    Some(turn_id)
+                }
+                None => None,
+            }
+        };
+        let Some(turn_id) = turn_id else {
+            log::warn!("Pi extension dialog arrived outside a turn; cancelled: method={method}");
+            return process
+                .write(&approval::cancel_response(&frame["id"]))
+                .await;
+        };
+        let permission_id = format!("pi_native_permission_{}", uuid::Uuid::new_v4());
+        let payload =
+            questions::question_payload(&permission_id, &self.session_id, &card_id, title, &input);
+        self.dialogs.insert(
+            permission_id.clone(),
+            PendingDialog {
+                process: process.clone(),
+                ui_id: frame["id"].clone(),
+                method: method.to_string(),
+                turn_id,
+                card_id,
+                question,
+            },
+        );
+        if let Err(error) = emit_global_event(BackendEvent::Custom {
+            event_name: "backend-event-acppermissionrequest".into(),
+            payload,
+        })
+        .await
+        {
+            if let Some((_, pending)) = self.dialogs.remove(&permission_id) {
+                self.settle_dialog_card(
+                    &pending,
+                    CardOutcome::Failed("The dialog could not be shown".into()),
+                )
+                .await;
+                let _ = pending
+                    .process
+                    .write(&approval::cancel_response(&pending.ui_id))
+                    .await;
+            }
+            return Err(service_error(format!("Pi dialog delivery failed: {error}")));
+        }
+        Ok(())
+    }
+
+    /// A failed card in the running turn explaining an unsupported dialog.
+    async fn show_dialog_notice(
+        &self,
+        card_id: &str,
+        title: &str,
+        message: &str,
+    ) -> OpenBitFunResult<()> {
+        let mut state = self.state.lock().await;
+        let Some(projector) = state.projector.as_mut() else {
+            return Ok(());
+        };
+        let mut events = projector.permission_tool(
+            card_id,
+            questions::INTERACTION_TOOL,
+            &json!({"title": title}),
+        );
+        events.extend(projector.settle_interaction(card_id, CardOutcome::Failed(message.into())));
+        self.enqueue(events).await
+    }
+
+    async fn settle_dialog_card(&self, pending: &PendingDialog, outcome: CardOutcome) {
+        let mut state = self.state.lock().await;
+        let Some(projector) = state
+            .projector
+            .as_mut()
+            .filter(|projector| projector.turn_id() == pending.turn_id)
+        else {
+            return;
+        };
+        let events = projector.settle_interaction(&pending.card_id, outcome);
+        if let Err(error) = self.enqueue(events).await {
+            log::error!("Pi dialog card delivery failed: {error}");
+        }
+    }
+
+    async fn submit_dialog(
+        &self,
+        request: &SubmitAcpPermissionResponseRequest,
+    ) -> Option<OpenBitFunResult<()>> {
+        let (_, pending) = self.dialogs.remove(&request.permission_id)?;
+        let (response, outcome) = match dialog_response(&pending, request) {
+            Ok(reply) => reply,
+            Err(error) => {
+                self.dialogs.insert(request.permission_id.clone(), pending);
+                return Some(Err(error));
+            }
+        };
+        let result = pending.process.write(&response).await;
+        self.settle_dialog_card(&pending, outcome).await;
+        Some(result)
+    }
+
     pub(crate) async fn submit_permission(
         &self,
         request: &SubmitAcpPermissionResponseRequest,
     ) -> Option<OpenBitFunResult<()>> {
+        if self.dialogs.contains_key(&request.permission_id) {
+            return self.submit_dialog(request).await;
+        }
         let (_, pending) = self.approvals.remove(&request.permission_id)?;
         let answer = match approval::decision(request) {
             Ok(answer) => answer,
@@ -1263,6 +1464,8 @@ impl PiNativeSession {
         if let Err(error) = self.enqueue(events).await {
             log::error!("Pi command turn event delivery failed: {error}");
         }
+        // Dialogs and approvals asked during the command die with its turn.
+        self.clear_approvals(turn_id).await;
         self.settled.notify_waiters();
     }
 
@@ -1762,6 +1965,41 @@ fn rollback_target(history: &PiHistory, turn_id: &str) -> OpenBitFunResult<TurnA
 /// program name does not resolve to.
 pub(crate) fn local_executable() -> PathBuf {
     crate::client::requirements::find_executable("pi").unwrap_or_else(|| PathBuf::from("pi"))
+}
+
+const PI_CONFIRM_YES: &str = "Yes";
+const PI_CONFIRM_NO: &str = "No";
+
+/// `extension_ui_response` and card outcome for the user's answer to a
+/// dialog (Pi RPC docs: `value` for select/input, `confirmed` for confirm,
+/// `cancelled` when skipped).
+fn dialog_response(
+    pending: &PendingDialog,
+    request: &SubmitAcpPermissionResponseRequest,
+) -> OpenBitFunResult<(Value, CardOutcome)> {
+    let questions = std::slice::from_ref(&pending.question);
+    let answers = match questions::decision(request, questions)? {
+        Decision::Skipped => {
+            return Ok((
+                approval::cancel_response(&pending.ui_id),
+                CardOutcome::Failed("The user dismissed the dialog".into()),
+            ))
+        }
+        Decision::Answered(answers) => answers,
+    };
+    let response = match pending.method.as_str() {
+        "confirm" => {
+            let confirmed =
+                questions::single_choice(&pending.question, &answers[0])? == PI_CONFIRM_YES;
+            json!({"type": "extension_ui_response", "id": pending.ui_id, "confirmed": confirmed})
+        }
+        "select" => {
+            let value = questions::single_choice(&pending.question, &answers[0])?;
+            approval::select_response(&pending.ui_id, value)
+        }
+        _ => approval::select_response(&pending.ui_id, &answers[0].join(", ")),
+    };
+    Ok((response, questions::answered_outcome(questions, &answers)))
 }
 
 fn service_error(message: impl Into<String>) -> OpenBitFunError {
