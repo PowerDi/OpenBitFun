@@ -6,7 +6,9 @@
 //!   frame only contributes the suffix the deltas did not cover;
 //! - the CLI sends one `assistant` frame per content block, all sharing the
 //!   message id, so dedupe is keyed by message id + block kind order;
-//! - a tool card starts once, from the complete `tool_use` block;
+//! - a tool card is detected at `content_block_start`, streams its input from
+//!   `input_json_delta` (like the core agent's EarlyDetected / ParamsPartial),
+//!   and starts once, from the complete `tool_use` block;
 //! - frames carrying `parent_tool_use_id` belong to a subagent and never
 //!   leak into the parent transcript;
 //! - a round stays open until the next round starts or the turn ends, because
@@ -39,6 +41,8 @@ struct StreamedMessage {
     /// How many streamed blocks of each kind the final frames consumed.
     consumed_text: usize,
     consumed_thinking: usize,
+    /// Block index (stream) -> tool id of a streaming `tool_use` block.
+    tool_blocks: HashMap<u64, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +73,8 @@ pub(crate) struct ClaudeTurnProjector {
     open_thinking_block: Option<u64>,
     tools: HashMap<String, ToolCall>,
     started_tools: HashSet<String>,
+    /// Tools whose card opened from `content_block_start` (EarlyDetected).
+    detected_tools: HashSet<String>,
     total_rounds: usize,
     total_tools: usize,
     has_text: bool,
@@ -90,6 +96,8 @@ pub(crate) struct ClaudeTurnProjector {
     assistant_error: Option<String>,
     /// Cumulative session cost reported by the last `result` frame.
     total_cost_usd: Option<f64>,
+    /// Last known context window, reported on compaction start.
+    context_window: usize,
 }
 
 #[derive(Debug)]
@@ -125,6 +133,7 @@ impl ClaudeTurnProjector {
             open_thinking_block: None,
             tools: HashMap::new(),
             started_tools: HashSet::new(),
+            detected_tools: HashSet::new(),
             total_rounds: 0,
             total_tools: 0,
             has_text: false,
@@ -139,7 +148,13 @@ impl ClaudeTurnProjector {
             compaction_trigger: "auto",
             assistant_error: None,
             total_cost_usd: None,
+            context_window: 0,
         }
+    }
+
+    /// Context window the session last observed (0 when unknown).
+    pub(crate) fn set_context_window(&mut self, context_window: usize) {
+        self.context_window = context_window;
     }
 
     /// Projector for one subagent transcript (frames with `parent_tool_use_id`).
@@ -287,7 +302,13 @@ impl ClaudeTurnProjector {
                     .unwrap_or(self.compaction_trigger)
                     .to_string(),
                 tokens_before,
-                context_window: 0,
+                // Unknown window: report the pre-compaction size, the best
+                // available bound, instead of an impossible 0.
+                context_window: if self.context_window > 0 {
+                    self.context_window
+                } else {
+                    tokens_before
+                },
             });
             self.compaction = Some(Compaction {
                 id,
@@ -438,9 +459,14 @@ impl ClaudeTurnProjector {
             }
             Some("content_block_start") => {
                 let index = event.get("index").and_then(Value::as_u64).unwrap_or(0);
-                let kind = match event.pointer("/content_block/type").and_then(Value::as_str) {
+                let block = event.get("content_block").unwrap_or(&Value::Null);
+                let kind = match block.get("type").and_then(Value::as_str) {
                     Some("text") => BlockKind::Text,
                     Some("thinking") => BlockKind::Thinking,
+                    Some("tool_use") | Some("server_tool_use") | Some("mcp_tool_use") => {
+                        self.detect_tool(index, block, out);
+                        return;
+                    }
                     _ => return,
                 };
                 if let Some(message) = self.active_message_mut() {
@@ -484,8 +510,11 @@ impl ClaudeTurnProjector {
                     .and_then(Value::as_str)
                     .unwrap_or_default(),
             ),
-            // input_json_delta / signature_delta: the complete tool_use block
-            // and signature arrive with the final assistant frame.
+            Some("input_json_delta") => {
+                self.tool_input_delta(index, delta, out);
+                return;
+            }
+            // signature_delta: the signature arrives with the final frame.
             _ => return,
         };
         if text.is_empty() {
@@ -595,6 +624,108 @@ impl ClaudeTurnProjector {
             }
         }
     }
+    /// Open the card as soon as a `tool_use` block starts streaming.
+    fn detect_tool(&mut self, index: u64, block: &Value, out: &mut Vec<AgenticEvent>) {
+        let Some(tool_id) = block.get("id").and_then(Value::as_str) else {
+            return;
+        };
+        if let Some(message) = self.active_message_mut() {
+            message.tool_blocks.insert(index, tool_id.to_string());
+        }
+        if self.started_tools.contains(tool_id) || !self.detected_tools.insert(tool_id.to_string())
+        {
+            return;
+        }
+        let native_name = block.get("name").and_then(Value::as_str).unwrap_or("tool");
+        let tool_name = native_tool_name(native_name);
+        let Some(round) = self.open_round.as_mut() else {
+            self.detected_tools.remove(tool_id);
+            return;
+        };
+        round.has_tool_calls = true;
+        let round_id = round.round_id.clone();
+        self.total_tools += 1;
+        self.tools.insert(
+            tool_id.to_string(),
+            ToolCall {
+                tool_name: tool_name.clone(),
+                round_id: round_id.clone(),
+                started_at: std::time::Instant::now(),
+            },
+        );
+        out.push(self.tool_event(
+            &round_id,
+            ToolEventData::EarlyDetected {
+                identity: ToolEventIdentity::direct(tool_id, tool_name),
+            },
+        ));
+    }
+
+    /// Stream a raw `input_json_delta` fragment into the detected card. The UI
+    /// accumulates fragments and parses partial JSON, as for core tools.
+    fn tool_input_delta(&mut self, index: u64, delta: &Value, out: &mut Vec<AgenticEvent>) {
+        let Some(fragment) = delta
+            .get("partial_json")
+            .and_then(Value::as_str)
+            .filter(|fragment| !fragment.is_empty())
+        else {
+            return;
+        };
+        let Some(tool_id) = self
+            .active_message_id
+            .as_ref()
+            .and_then(|id| self.messages.get(id))
+            .and_then(|message| message.tool_blocks.get(&index))
+            .cloned()
+        else {
+            return;
+        };
+        if self.started_tools.contains(&tool_id) {
+            return;
+        }
+        let Some(call) = self.tools.get(&tool_id) else {
+            return;
+        };
+        let (round_id, tool_name) = (call.round_id.clone(), call.tool_name.clone());
+        out.push(self.tool_event(
+            &round_id,
+            ToolEventData::ParamsPartial {
+                identity: ToolEventIdentity::direct(tool_id, tool_name),
+                params: fragment.to_string(),
+            },
+        ));
+    }
+
+    /// Claude `system/task_progress` for a running Task card: a structured,
+    /// replace-semantics progress message the Task card renders while running.
+    pub(crate) fn task_progress(&self, frame: &Value) -> Vec<AgenticEvent> {
+        let Some(call) = frame["tool_use_id"]
+            .as_str()
+            .and_then(|tool_id| self.tools.get(tool_id).map(|call| (tool_id, call)))
+        else {
+            return Vec::new();
+        };
+        let (tool_id, call) = call;
+        let usage = &frame["usage"];
+        let message = json!({
+            "kind": "native_task_progress",
+            "description": frame["description"],
+            "lastToolName": frame["last_tool_name"],
+            "summary": frame["summary"],
+            "totalTokens": usage["total_tokens"],
+            "toolUses": usage["tool_uses"],
+            "durationMs": usage["duration_ms"],
+        });
+        vec![self.tool_event(
+            &call.round_id,
+            ToolEventData::Progress {
+                identity: ToolEventIdentity::direct(tool_id, call.tool_name.clone()),
+                message: message.to_string(),
+                percentage: 0.0,
+            },
+        )]
+    }
+
     fn start_tool(&mut self, block: &Value, out: &mut Vec<AgenticEvent>) {
         let Some(tool_id) = block.get("id").and_then(Value::as_str) else {
             return;
@@ -606,6 +737,22 @@ impl ClaudeTurnProjector {
         let tool_name = native_tool_name(native_name);
         let input = block.get("input").cloned().unwrap_or_else(|| json!({}));
         let params = normalize_tool_params(&tool_name, input);
+        if self.detected_tools.contains(tool_id) {
+            // The streamed card exists: complete its input in place.
+            let Some(call) = self.tools.get(tool_id) else {
+                return;
+            };
+            let round_id = call.round_id.clone();
+            out.push(self.tool_event(
+                &round_id,
+                ToolEventData::Started {
+                    identity: ToolEventIdentity::direct(tool_id, tool_name),
+                    params,
+                    timeout_seconds: None,
+                },
+            ));
+            return;
+        }
         let Some(round) = self.open_round.as_mut() else {
             return;
         };
@@ -1260,5 +1407,124 @@ mod tests {
         assert_eq!(native_tool_name("Agent"), "Task");
         assert_eq!(native_tool_name("Read"), "Read");
         assert_eq!(native_tool_name("mcp__x__y"), "mcp__x__y");
+    }
+
+    fn tool_kinds(events: &[AgenticEvent]) -> Vec<&'static str> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                AgenticEvent::ToolEvent { tool_event, .. } => Some(match tool_event {
+                    ToolEventData::EarlyDetected { .. } => "early",
+                    ToolEventData::ParamsPartial { .. } => "partial",
+                    ToolEventData::Started { .. } => "started",
+                    ToolEventData::Progress { .. } => "progress",
+                    ToolEventData::Completed { .. } => "completed",
+                    _ => "other",
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Streamed tool input opens the card early, streams raw fragments, and
+    /// the final assistant frame starts the same card once.
+    #[test]
+    fn streams_tool_input_into_one_card() {
+        let frames = vec![
+            se(json!({"type": "message_start", "message": {"id": "m1"}})),
+            se(json!({"type": "content_block_start", "index": 0,
+                "content_block": {"type": "tool_use", "id": "tu1", "name": "Write", "input": {}}})),
+            se(json!({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": "{\"file_path\":\"a.txt\","}})),
+            se(json!({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": "\"content\":\"hi\"}"}})),
+            json!({"type": "assistant", "parent_tool_use_id": null, "message": {"id": "m1",
+                "content": [{"type": "tool_use", "id": "tu1", "name": "Write",
+                    "input": {"file_path": "a.txt", "content": "hi"}}]}}),
+            se(json!({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": "late"}})),
+            se(json!({"type": "content_block_stop", "index": 0})),
+            se(json!({"type": "message_stop"})),
+            json!({"type": "result", "subtype": "success", "is_error": false,
+                "stop_reason": "tool_use"}),
+        ];
+        let events = run(&frames);
+        let kinds = tool_kinds(&events);
+        assert_eq!(&kinds[..4], ["early", "partial", "partial", "started"]);
+        assert_eq!(kinds.iter().filter(|kind| **kind == "started").count(), 1);
+        assert!(!kinds[4..].contains(&"partial"), "no fragments after start");
+        let fragments: String = events
+            .iter()
+            .filter_map(|e| match e {
+                AgenticEvent::ToolEvent {
+                    tool_event: ToolEventData::ParamsPartial { params, .. },
+                    ..
+                } => Some(params.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(fragments, r#"{"file_path":"a.txt","content":"hi"}"#);
+        assert!(matches!(
+            events.last(),
+            Some(AgenticEvent::DialogTurnCompleted { total_tools: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn task_progress_updates_the_task_card() {
+        let mut projector = ClaudeTurnProjector::new("s1", "t1", None);
+        for frame in [
+            se(json!({"type": "message_start", "message": {"id": "m1"}})),
+            se(json!({"type": "content_block_start", "index": 0,
+                "content_block": {"type": "tool_use", "id": "tu1", "name": "Agent", "input": {}}})),
+        ] {
+            projector.consume(&frame);
+        }
+        let events = projector.task_progress(&json!({"type": "system",
+            "subtype": "task_progress", "task_id": "x", "tool_use_id": "tu1",
+            "description": "Explore", "last_tool_name": "Grep",
+            "usage": {"total_tokens": 1200, "tool_uses": 3, "duration_ms": 4500}}));
+        let Some(AgenticEvent::ToolEvent {
+            tool_event:
+                ToolEventData::Progress {
+                    identity, message, ..
+                },
+            ..
+        }) = events.first()
+        else {
+            panic!("expected progress, got {events:?}");
+        };
+        assert_eq!(identity.tool_name, "Task");
+        let message: Value = serde_json::from_str(message).unwrap();
+        assert_eq!(message["kind"], "native_task_progress");
+        assert_eq!(message["lastToolName"], "Grep");
+        assert_eq!(message["toolUses"], 3);
+        assert!(projector
+            .task_progress(&json!({"type": "system", "subtype": "task_progress",
+                "tool_use_id": "unknown"}))
+            .is_empty());
+    }
+
+    #[test]
+    fn compaction_start_reports_a_known_context_window() {
+        let window = |set: usize| {
+            let mut projector = ClaudeTurnProjector::new("s1", "t1", None);
+            projector.set_context_window(set);
+            projector
+                .consume(
+                    &json!({"type": "system", "subtype": "status", "status": "compacting",
+                    "compact_metadata": {"pre_tokens": 150_000}}),
+                )
+                .into_iter()
+                .find_map(|e| match e {
+                    AgenticEvent::ContextCompressionStarted { context_window, .. } => {
+                        Some(context_window)
+                    }
+                    _ => None,
+                })
+                .expect("compaction started")
+        };
+        assert_eq!(window(200_000), 200_000);
+        assert_eq!(window(0), 150_000, "falls back to the pre-compaction size");
     }
 }

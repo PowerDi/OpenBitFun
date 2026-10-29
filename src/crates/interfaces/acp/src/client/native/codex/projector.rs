@@ -6,8 +6,12 @@
 //!   precedes it) and settle from `item/completed`;
 //! - Codex has no explicit model rounds: a round closes when the model
 //!   produces output again after it ran tools;
+//! - `item/commandExecution/outputDelta` streams live output into the
+//!   ExecCommand card as replace-semantics `Progress` (the tail, throttled);
+//!   `item/completed` stays authoritative for the final output;
 //! - `turn/completed` settles the turn by `turn.status`.
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 use openbitfun_events::{AgenticEvent, ToolEventData, ToolEventIdentity};
 use serde_json::{json, Value};
@@ -16,6 +20,19 @@ use crate::client::native::round_latency::RoundLatency;
 use crate::client::tool_card_bridge::{normalize_tool_params, normalize_tool_result};
 
 pub(crate) const CODEX_NATIVE_MODEL_CONFIG_ID: &str = "codex-native";
+
+/// Live output kept per command card (the newest output matters while it runs).
+const OUTPUT_TAIL_CHARS: usize = 16 * 1024;
+/// Minimum spacing of live output updates per card.
+pub(crate) const OUTPUT_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
+
+#[derive(Debug, Default)]
+struct LiveOutput {
+    tail: String,
+    last_emit: Option<Instant>,
+    /// Output arrived since the last emitted update.
+    pending: bool,
+}
 
 #[derive(Debug, Clone)]
 struct ToolCall {
@@ -60,6 +77,8 @@ pub(crate) struct CodexTurnProjector {
     last_context_tokens: usize,
     /// Last non-retried `error` notification (message, codexErrorInfo tag).
     error: Option<(String, Option<String>)>,
+    /// Streamed output of running command cards.
+    live_output: HashMap<String, LiveOutput>,
 }
 
 impl CodexTurnProjector {
@@ -87,6 +106,7 @@ impl CodexTurnProjector {
             compaction_trigger: "auto",
             last_context_tokens: 0,
             error: None,
+            live_output: HashMap::new(),
         }
     }
 
@@ -201,6 +221,14 @@ impl CodexTurnProjector {
                     .is_some_and(|id| self.streamed_reasoning.contains(id))
                 {
                     out.extend(self.thinking_event("\n\n".to_string(), false));
+                }
+            }
+            // `item/fileChange/outputDelta` is deprecated and no longer sent.
+            "item/commandExecution/outputDelta" => {
+                if let (Some(id), Some(delta)) =
+                    (params["itemId"].as_str(), params["delta"].as_str())
+                {
+                    self.output_delta(id, delta, Instant::now(), &mut out);
                 }
             }
             "item/fileChange/patchUpdated" => {
@@ -450,6 +478,74 @@ impl CodexTurnProjector {
         }
     }
 
+    fn output_delta(&mut self, id: &str, delta: &str, now: Instant, out: &mut Vec<AgenticEvent>) {
+        if delta.is_empty() || !self.tools.contains_key(id) {
+            return;
+        }
+        let live = self.live_output.entry(id.to_string()).or_default();
+        live.tail.push_str(delta);
+        let count = live.tail.chars().count();
+        if count > OUTPUT_TAIL_CHARS {
+            let start = live
+                .tail
+                .char_indices()
+                .nth(count - OUTPUT_TAIL_CHARS)
+                .map_or(0, |(index, _)| index);
+            live.tail.drain(..start);
+        }
+        live.pending = true;
+        if live
+            .last_emit
+            .is_some_and(|last| now.duration_since(last) < OUTPUT_FLUSH_INTERVAL)
+        {
+            return;
+        }
+        self.emit_output(id, now, out);
+    }
+
+    fn emit_output(&mut self, id: &str, now: Instant, out: &mut Vec<AgenticEvent>) {
+        let (Some(live), Some(call)) = (self.live_output.get_mut(id), self.tools.get(id)) else {
+            return;
+        };
+        if !live.pending {
+            return;
+        }
+        live.pending = false;
+        live.last_emit = Some(now);
+        let event = ToolEventData::Progress {
+            identity: ToolEventIdentity::direct(id, call.tool_name.clone()),
+            message: live.tail.clone(),
+            percentage: 0.0,
+        };
+        let round_id = call.round_id.clone();
+        out.push(self.tool_event(&round_id, event));
+    }
+
+    /// Live output held back by the throttle.
+    pub(crate) fn has_pending_output(&self) -> bool {
+        self.live_output.values().any(|live| live.pending)
+    }
+
+    /// Emit throttled live output (trailing edge of the throttle window).
+    pub(crate) fn flush_output(&mut self) -> Vec<AgenticEvent> {
+        let mut out = Vec::new();
+        if self.finished {
+            return out;
+        }
+        let mut ids: Vec<String> = self
+            .live_output
+            .iter()
+            .filter(|(_, live)| live.pending)
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.sort();
+        let now = Instant::now();
+        for id in ids {
+            self.emit_output(&id, now, &mut out);
+        }
+        out
+    }
+
     /// One card per changed file; the first keeps the item id so approval
     /// cards (keyed by item id) and the change card are the same card.
     fn start_file_change(&mut self, item_id: &str, changes: &Value, out: &mut Vec<AgenticEvent>) {
@@ -527,6 +623,7 @@ impl CodexTurnProjector {
         text: String,
         out: &mut Vec<AgenticEvent>,
     ) {
+        self.live_output.remove(tool_id);
         let Some(call) = self.tools.remove(tool_id) else {
             return;
         };
@@ -545,6 +642,7 @@ impl CodexTurnProjector {
     }
 
     fn fail_tool(&mut self, tool_id: &str, error: &str, out: &mut Vec<AgenticEvent>) {
+        self.live_output.remove(tool_id);
         let Some(call) = self.tools.remove(tool_id) else {
             return;
         };
@@ -563,6 +661,7 @@ impl CodexTurnProjector {
 
     /// Close cards still open at turn end: failed with `error`, or cancelled.
     fn settle_open_tools(&mut self, error: Option<&str>, out: &mut Vec<AgenticEvent>) {
+        self.live_output.clear();
         let mut open: Vec<(String, ToolCall)> = self.tools.drain().collect();
         open.sort_by(|a, b| a.0.cmp(&b.0));
         for (tool_id, call) in open {
@@ -1010,6 +1109,84 @@ mod tests {
             .iter()
             .flat_map(|(method, params)| projector.consume(method, params))
             .collect()
+    }
+
+    fn progress(events: &[AgenticEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                AgenticEvent::ToolEvent {
+                    tool_event: ToolEventData::Progress { message, .. },
+                    ..
+                } => Some(message.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Command output deltas stream as throttled, replace-semantics progress
+    /// carrying the whole tail; `item/completed` stays authoritative.
+    #[test]
+    fn streams_command_output_as_throttled_progress() {
+        let mut projector = CodexTurnProjector::new("s1", "t1", None);
+        projector.open_pending_round();
+        run(
+            &mut projector,
+            &[(
+                "item/started",
+                json!({"item":{"type":"commandExecution","id":"c1",
+                "command":"ls","cwd":"/w","status":"inProgress","commandActions":[]}}),
+            )],
+        );
+        let t0 = Instant::now();
+        let mut out = Vec::new();
+        projector.output_delta("c1", "a\n", t0, &mut out);
+        projector.output_delta("c1", "b\n", t0 + Duration::from_millis(10), &mut out);
+        projector.output_delta("unknown", "x", t0, &mut out);
+        assert_eq!(progress(&out), ["a\n"], "second delta is throttled");
+        assert!(projector.has_pending_output());
+        assert_eq!(progress(&projector.flush_output()), ["a\nb\n"]);
+        assert!(!projector.has_pending_output());
+
+        out.clear();
+        projector.output_delta("c1", "c\n", t0 + OUTPUT_FLUSH_INTERVAL * 2, &mut out);
+        assert_eq!(progress(&out), ["a\nb\nc\n"]);
+
+        let events = run(
+            &mut projector,
+            &[
+                (
+                    "item/commandExecution/outputDelta",
+                    json!({"itemId":"c1","delta":"d\n"}),
+                ),
+                (
+                    "item/completed",
+                    json!({"item":{"type":"commandExecution","id":"c1",
+                    "command":"ls","cwd":"/w","status":"completed",
+                    "aggregatedOutput":"final\n","exitCode":0,"commandActions":[]}}),
+                ),
+                (
+                    "item/commandExecution/outputDelta",
+                    json!({"itemId":"c1","delta":"late"}),
+                ),
+            ],
+        );
+        let result = events.iter().find_map(|event| match event {
+            AgenticEvent::ToolEvent {
+                tool_event: ToolEventData::Completed { result, .. },
+                ..
+            } => Some(result.clone()),
+            _ => None,
+        });
+        assert_eq!(result.expect("completed")["output"], "final\n");
+        assert!(
+            !projector.has_pending_output(),
+            "completion drops live output"
+        );
+        assert!(
+            progress(&events[1..]).is_empty(),
+            "no progress after completion"
+        );
     }
 
     #[test]
