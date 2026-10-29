@@ -8,6 +8,7 @@ pub use session::{CodexNativeSession, CLIENT_ID};
 
 use super::{
     NativeAgentCapabilities, NativeAgentDriver, NativeAgentOpenContext, NativeAgentSession,
+    NativeSubagentCapabilities,
 };
 use crate::client::session_persistence::{
     CUSTOM_METADATA_CLIENT_ID_KEY, CUSTOM_METADATA_LAST_RESUME_ERROR_KEY,
@@ -71,6 +72,15 @@ impl NativeAgentDriver for CodexNativeDriver {
             worktree: true,
             // The driver wakes an idle parent when a spawned agent finishes.
             autonomous_turns: true,
+            // `/compact` starts `thread/compact/start`; context usage comes
+            // from `thread/tokenUsage/updated`.
+            compact: true,
+            context_usage: true,
+            // `spawn_agent` threads are projected as linked child sessions.
+            subagents: NativeSubagentCapabilities {
+                observe: true,
+                ..Default::default()
+            },
             ..Default::default()
         }
     }

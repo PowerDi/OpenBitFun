@@ -139,6 +139,24 @@ impl CodexTurnProjector {
         out
     }
 
+    /// Close a card the driver projected for an interactive request.
+    pub(crate) fn settle_interaction(
+        &mut self,
+        card_id: &str,
+        outcome: crate::client::native::questions::CardOutcome,
+    ) -> Vec<AgenticEvent> {
+        let mut out = Vec::new();
+        match outcome {
+            crate::client::native::questions::CardOutcome::Completed { result, text } => {
+                self.complete_tool(card_id, result, text, &mut out)
+            }
+            crate::client::native::questions::CardOutcome::Failed(error) => {
+                self.fail_tool(card_id, &error, &mut out)
+            }
+        }
+        out
+    }
+
     /// Consume one notification of this turn.
     pub(crate) fn consume(&mut self, method: &str, params: &Value) -> Vec<AgenticEvent> {
         let mut out = Vec::new();

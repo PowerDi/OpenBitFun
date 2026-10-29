@@ -6,6 +6,7 @@ mod events;
 pub mod pi;
 pub(crate) mod preferences;
 mod process;
+mod questions;
 mod round_latency;
 pub(crate) mod title;
 

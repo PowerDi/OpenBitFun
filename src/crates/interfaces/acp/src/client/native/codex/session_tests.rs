@@ -221,6 +221,7 @@ async fn approval_round_trip_and_turn_end_cancels_unanswered_requests() {
                 method: "item/commandExecution/requestApproval".into(),
                 params: params.clone(),
                 turn_id: "t1".into(),
+                interaction: None,
             },
         );
         let request = SubmitAcpPermissionResponseRequest {
@@ -263,6 +264,7 @@ async fn approval_round_trip_and_turn_end_cancels_unanswered_requests() {
             method: "item/fileChange/requestApproval".into(),
             params: json!({}),
             turn_id: "t1".into(),
+            interaction: None,
         },
     );
     session.clear_approvals("t1").await;
@@ -627,4 +629,179 @@ async fn cancel_suppresses_wake_until_the_user_starts_a_turn() {
             .is_err()
     );
     assert!(session.state.lock().await.threads.wake_reasons.is_empty());
+}
+
+#[tokio::test]
+async fn request_user_input_is_answered_from_the_question_card() {
+    let (session, process, mut lines) = fixture(Some("th1"));
+    session
+        .begin_turn("t1".into(), "hi".into(), None)
+        .await
+        .unwrap();
+    let params = json!({"threadId":"th1","turnId":"ct1","itemId":"q1","isBlocking":true,
+        "autoResolutionMs":null,"questions":[
+        {"id":"color","header":"Color","question":"Which color?","isOther":true,"isSecret":false,
+         "options":[{"label":"Red","description":"warm"},{"label":"Blue","description":"cool"}]},
+        {"id":"token","header":"Token","question":"API token?","isOther":false,"isSecret":true,"options":null}]});
+    session
+        .route_frame(
+            &process,
+            json!({"id": 7, "method": "item/tool/requestUserInput", "params": params}),
+        )
+        .await
+        .unwrap();
+    let permission_id = session.approvals.iter().next().unwrap().key().clone();
+    // Unanswered questions keep the request pending.
+    let mut request = SubmitAcpPermissionResponseRequest {
+        permission_id: permission_id.clone(),
+        approve: true,
+        option_id: Some("allow_once".into()),
+        answers: Some(json!({"0": "Blue"})),
+        feedback: None,
+    };
+    assert!(session.submit_permission(&request).await.unwrap().is_err());
+    request.answers = Some(json!({"0": "Blue", "1": "s3cret"}));
+    session.submit_permission(&request).await.unwrap().unwrap();
+    assert_eq!(
+        next_frame(&mut lines).await,
+        json!({"id": 7, "result": {"answers": {
+            "color": {"answers": ["Blue"]}, "token": {"answers": ["s3cret"]}}}})
+    );
+    // The card shows the answers but not the secret one.
+    let events = session.queue.dequeue_batch(200).await;
+    let completed = events
+        .iter()
+        .find_map(|e| match &e.event {
+            AgenticEvent::ToolEvent {
+                tool_event: openbitfun_events::ToolEventData::Completed { result, .. },
+                ..
+            } => Some(result.clone()),
+            _ => None,
+        })
+        .expect("question card completed");
+    assert_eq!(completed["answers"], json!({"0": "Blue", "1": "(hidden)"}));
+
+    // Skip answers with an explicit note, never empty answers.
+    session
+        .route_frame(
+            &process,
+            json!({"id": 8, "method": "item/tool/requestUserInput", "params": params}),
+        )
+        .await
+        .unwrap();
+    let permission_id = session.approvals.iter().next().unwrap().key().clone();
+    session
+        .submit_permission(&SubmitAcpPermissionResponseRequest {
+            permission_id,
+            approve: false,
+            option_id: Some("reject_once".into()),
+            answers: None,
+            feedback: None,
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    let reply = next_frame(&mut lines).await;
+    assert_eq!(reply["id"], 8);
+    let note = &reply["result"]["answers"]["color"]["answers"][0];
+    assert!(note.as_str().unwrap().starts_with("user_note:"));
+
+    // An unanswered request fails explicitly when its turn ends.
+    session
+        .route_frame(
+            &process,
+            json!({"id": 9, "method": "item/tool/requestUserInput", "params": params}),
+        )
+        .await
+        .unwrap();
+    session.clear_approvals("t1").await;
+    let reply = next_frame(&mut lines).await;
+    assert_eq!(reply["id"], 9);
+    assert_eq!(reply["error"]["code"], -32800);
+}
+
+#[tokio::test]
+async fn mcp_elicitations_route_forms_and_decline_url_mode() {
+    let (session, process, mut lines) = fixture(Some("th1"));
+    session
+        .begin_turn("t1".into(), "hi".into(), None)
+        .await
+        .unwrap();
+    session
+        .route_frame(
+            &process,
+            json!({"id": 3, "method": "mcpServer/elicitation/request", "params": {
+                "threadId":"th1","turnId":"ct1","serverName":"db","mode":"form","_meta":null,
+                "message":"Approve?","requestedSchema":{"type":"object","properties":{
+                    "ok":{"type":"boolean","title":"Proceed"}}}}}),
+        )
+        .await
+        .unwrap();
+    let permission_id = session.approvals.iter().next().unwrap().key().clone();
+    session
+        .submit_permission(&SubmitAcpPermissionResponseRequest {
+            permission_id,
+            approve: true,
+            option_id: Some("allow_once".into()),
+            answers: Some(json!({"0": "Yes"})),
+            feedback: None,
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        next_frame(&mut lines).await,
+        json!({"id": 3, "result": {"action":"accept","content":{"ok":true},"_meta":null}})
+    );
+    session
+        .route_frame(
+            &process,
+            json!({"id": 4, "method": "mcpServer/elicitation/request", "params": {
+                "threadId":"th1","turnId":"ct1","serverName":"auth","mode":"url","_meta":null,
+                "message":"Sign in","url":"https://example.test","elicitationId":"e1"}}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        next_frame(&mut lines).await,
+        json!({"id": 4, "result": {"action":"decline","content":null,"_meta":null}})
+    );
+    // Pending elicitations are cancelled (not declined) when the turn ends.
+    session
+        .route_frame(
+            &process,
+            json!({"id": 5, "method": "mcpServer/elicitation/request", "params": {
+                "threadId":"th1","turnId":"ct1","serverName":"db","mode":"form","_meta":null,
+                "message":"Confirm","requestedSchema":{"type":"object","properties":{}}}}),
+        )
+        .await
+        .unwrap();
+    session.clear_approvals("t1").await;
+    assert_eq!(
+        next_frame(&mut lines).await,
+        json!({"id": 5, "result": {"action":"cancel","content":null,"_meta":null}})
+    );
+}
+
+#[tokio::test]
+async fn compact_command_starts_thread_compaction() {
+    let (session, process, mut lines) = fixture(Some("th1"));
+    *session.process.lock().await = Some(process.clone());
+    *lock(&session.thread_process) = Some(process.id.clone());
+    let turn = {
+        let session = session.clone();
+        tokio::spawn(async move {
+            session
+                .start_turn("t1".into(), "/compact".into(), None)
+                .await
+        })
+    };
+    let request = answer(&session, &process, &mut lines, json!({})).await;
+    assert_eq!(request["method"], "thread/compact/start");
+    assert_eq!(request["params"], json!({"threadId":"th1"}));
+    turn.await.unwrap().unwrap();
+    assert!(session
+        .start_turn("t2".into(), "/compact keep it short".into(), None)
+        .await
+        .is_err());
 }
