@@ -194,6 +194,9 @@ struct TurnState {
     /// Next child turn index per spawning tool_use id, so a resumed agent
     /// appends a turn instead of overwriting turn 0.
     child_turns: std::collections::HashMap<String, usize>,
+    /// Parent turn and card each child was last linked to; a background
+    /// agent resumed between parent turns reopens under that card.
+    child_links: std::collections::HashMap<String, (String, String)>,
     tasks: ClaudeTasks,
     /// Steering messages written to stdin and not yet taken in by Claude.
     steers: Vec<PendingSteer>,
@@ -1703,16 +1706,36 @@ impl ClaudeNativeSession {
         if state.children.contains_key(tool_id) {
             return Ok(());
         }
-        // The card lives in the turn that issued the tool call.
-        let Some(parent_turn_id) = state.projector.as_ref().map(|p| p.turn_id().to_string()) else {
-            return Ok(());
-        };
         // Path-safe and stable per tool call (session ids may become file names).
         let session_id = format!("{}-subagent-{tool_id}", self.session_id);
+        let saved = if state.child_turns.contains_key(tool_id) {
+            None
+        } else {
+            self.persisted_child(&session_id).await
+        };
+        // The card lives in the turn that issued the tool call. Between
+        // parent turns, keep the card the child was last linked to.
+        let link = match state.projector.as_ref() {
+            Some(projector) => Some((projector.turn_id().to_string(), link_tool_id.to_string())),
+            None => state.child_links.get(tool_id).cloned().or_else(|| {
+                let relationship = saved.as_ref()?.relationship.as_ref()?;
+                Some((
+                    relationship.parent_dialog_turn_id.clone()?,
+                    relationship.parent_tool_call_id.clone()?,
+                ))
+            }),
+        };
+        let Some((parent_turn_id, link_tool_id)) = link else {
+            return Ok(());
+        };
+        state.child_links.insert(
+            tool_id.to_string(),
+            (parent_turn_id.clone(), link_tool_id.clone()),
+        );
         let turn_id = uuid::Uuid::new_v4().to_string();
         let turn_index = match state.child_turns.get(tool_id) {
             Some(index) => *index,
-            None => self.persisted_child_turns(&session_id).await,
+            None => saved.map_or(0, |metadata| metadata.turn_count),
         };
         state
             .child_turns
@@ -1754,7 +1777,7 @@ impl ClaudeNativeSession {
                 subagent_dialog_turn_id: turn_id.clone(),
                 parent_session_id: self.session_id.clone(),
                 parent_dialog_turn_id: parent_turn_id,
-                parent_tool_call_id: link_tool_id.to_string(),
+                parent_tool_call_id: link_tool_id,
                 agent_type: subagent_type,
                 model_id: None,
                 focused_review_display_label: None,
@@ -1784,16 +1807,17 @@ impl ClaudeNativeSession {
         Ok(())
     }
 
-    /// Turns already saved for a child, e.g. one reopened after a restart.
-    async fn persisted_child_turns(&self, child_session_id: &str) -> usize {
-        let Some((persistence, storage)) = &self.persistence else {
-            return 0;
-        };
+    /// Saved record of a child, e.g. one reopened after a restart.
+    async fn persisted_child(
+        &self,
+        child_session_id: &str,
+    ) -> Option<openbitfun_core::service::session::SessionMetadata> {
+        let (persistence, storage) = self.persistence.as_ref()?;
         match persistence.load_metadata(storage, child_session_id).await {
-            Ok(metadata) => metadata.map_or(0, |metadata| metadata.turn_count),
+            Ok(metadata) => metadata,
             Err(error) => {
                 log::warn!("Claude subagent metadata read failed: {error}");
-                0
+                None
             }
         }
     }
