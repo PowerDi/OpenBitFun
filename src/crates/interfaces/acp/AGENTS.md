@@ -52,6 +52,10 @@ closure without enabling the server role or `product-full`.
 
 ## Claude native stdio driver
 
+Native agent decisions (no new native agents without explicit request, crate
+split, runtime ownership, interaction and persistence owners) are recorded in
+[`docs/architecture/native-agents.md`](../../../../docs/architecture/native-agents.md).
+
 The native driver registry and the object-safe `NativeAgentDriver` /
 `NativeAgentSession` interfaces live in `client/native/mod.rs`. Manager and
 desktop dispatch use that registry; adding a native provider must not extend the
