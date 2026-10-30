@@ -17,6 +17,7 @@ use std::collections::{HashMap, HashSet};
 use openbitfun_events::{AgenticEvent, ToolEventData, ToolEventIdentity};
 use serde_json::{json, Value};
 
+use crate::client::native::round_latency::RoundLatency;
 use crate::client::tool_card_bridge::{normalize_tool_params, normalize_tool_result};
 
 /// Model identifiers reported on native rounds. Native harnesses pick their
@@ -108,6 +109,7 @@ struct OpenRound {
     /// Opened at turn start so the UI shows a waiting indicator before Claude
     /// streams anything; adopted by the first real message instead of a new round.
     placeholder: bool,
+    latency: RoundLatency,
 }
 
 impl ClaudeTurnProjector {
@@ -608,6 +610,7 @@ impl ClaudeTurnProjector {
             return;
         };
         round.has_tool_calls = true;
+        round.latency.observe_output();
         let round_id = round.round_id.clone();
         self.total_tools += 1;
         self.tools.insert(
@@ -799,6 +802,7 @@ impl ClaudeTurnProjector {
             self.start_round(&mut out);
             if let Some(round) = self.open_round.as_mut() {
                 round.placeholder = true;
+                round.latency = RoundLatency::requested_now();
             }
         }
         out
@@ -827,6 +831,7 @@ impl ClaudeTurnProjector {
             round_id,
             has_tool_calls: false,
             placeholder: false,
+            latency: RoundLatency::default(),
         });
     }
 
@@ -849,7 +854,7 @@ impl ClaudeTurnProjector {
             first_chunk_ms: None,
             first_visible_output_ms: None,
             stream_duration_ms: None,
-            ttft_ms: None,
+            ttft_ms: round.latency.ttft_ms(),
             attempt_count: None,
             failure_category: None,
             token_details: None,
@@ -891,7 +896,11 @@ impl ClaudeTurnProjector {
         }
     }
     fn text_event(&mut self, text: String) -> Option<AgenticEvent> {
-        let round_id = self.open_round.as_ref()?.round_id.clone();
+        let round = self.open_round.as_mut()?;
+        if !text.is_empty() {
+            round.latency.observe_output();
+        }
+        let round_id = round.round_id.clone();
         self.has_text = true;
         Some(AgenticEvent::TextChunk {
             session_id: self.session_id.clone(),
@@ -903,8 +912,12 @@ impl ClaudeTurnProjector {
         })
     }
 
-    fn thinking_event(&self, content: String, is_end: bool) -> Option<AgenticEvent> {
-        let round_id = self.open_round.as_ref()?.round_id.clone();
+    fn thinking_event(&mut self, content: String, is_end: bool) -> Option<AgenticEvent> {
+        let round = self.open_round.as_mut()?;
+        if !content.is_empty() {
+            round.latency.observe_output();
+        }
+        let round_id = round.round_id.clone();
         Some(AgenticEvent::ThinkingChunk {
             session_id: self.session_id.clone(),
             turn_id: self.turn_id.clone(),
@@ -1142,6 +1155,34 @@ mod tests {
             events.first(),
             Some(AgenticEvent::ModelRoundStarted { .. })
         ));
+    }
+
+    #[test]
+    fn only_the_host_submitted_round_reports_ttft() {
+        let mut projector = ClaudeTurnProjector::new("s1", "t1", None);
+        let mut events = projector.open_pending_round();
+        let frames = vec![
+            se(json!({"type": "message_start", "message": {"id": "m1"}})),
+            json!({"type": "assistant", "message": {"id": "m1",
+                "content": [{"type": "tool_use", "id": "tu1", "name": "Read", "input": {"file_path": "a"}}]}}),
+            json!({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "tu1", "content": "ok"}]}}),
+            se(json!({"type": "message_start", "message": {"id": "m2"}})),
+            json!({"type": "assistant", "message": {"id": "m2",
+                "content": [{"type": "text", "text": "done"}]}}),
+            json!({"type": "result", "subtype": "success", "is_error": false}),
+        ];
+        events.extend(frames.iter().flat_map(|f| projector.consume(f)));
+        let ttfts: Vec<Option<u64>> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgenticEvent::ModelRoundCompleted { ttft_ms, .. } => Some(*ttft_ms),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ttfts.len(), 2);
+        assert!(ttfts[0].is_some());
+        assert_eq!(ttfts[1], None);
     }
 
     #[test]

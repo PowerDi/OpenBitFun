@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 use openbitfun_events::{AgenticEvent, ToolEventData, ToolEventIdentity};
 use serde_json::{json, Value};
 
+use crate::client::native::round_latency::RoundLatency;
 use crate::client::tool_card_bridge::{normalize_tool_params, normalize_tool_result};
 
 pub(crate) const CODEX_NATIVE_MODEL_CONFIG_ID: &str = "codex-native";
@@ -28,6 +29,7 @@ struct OpenRound {
     round_id: String,
     has_tool_calls: bool,
     placeholder: bool,
+    latency: RoundLatency,
 }
 
 #[derive(Debug)]
@@ -114,6 +116,7 @@ impl CodexTurnProjector {
             self.start_round(&mut out);
             if let Some(round) = self.open_round.as_mut() {
                 round.placeholder = true;
+                round.latency = RoundLatency::requested_now();
             }
         }
         out
@@ -478,6 +481,7 @@ impl CodexTurnProjector {
             return;
         };
         round.has_tool_calls = true;
+        round.latency.observe_output();
         let round_id = round.round_id.clone();
         self.total_tools += 1;
         self.tools.insert(
@@ -690,6 +694,7 @@ impl CodexTurnProjector {
             round_id,
             has_tool_calls: false,
             placeholder: false,
+            latency: RoundLatency::default(),
         });
     }
 
@@ -716,7 +721,7 @@ impl CodexTurnProjector {
             first_chunk_ms: None,
             first_visible_output_ms: None,
             stream_duration_ms: None,
-            ttft_ms: None,
+            ttft_ms: round.latency.ttft_ms(),
             attempt_count: None,
             failure_category: None,
             token_details: None,
@@ -724,7 +729,11 @@ impl CodexTurnProjector {
     }
 
     fn text_event(&mut self, text: String) -> Option<AgenticEvent> {
-        let round_id = self.open_round.as_ref()?.round_id.clone();
+        let round = self.open_round.as_mut()?;
+        if !text.is_empty() {
+            round.latency.observe_output();
+        }
+        let round_id = round.round_id.clone();
         self.has_text = true;
         Some(AgenticEvent::TextChunk {
             session_id: self.session_id.clone(),
@@ -736,8 +745,12 @@ impl CodexTurnProjector {
         })
     }
 
-    fn thinking_event(&self, content: String, is_end: bool) -> Option<AgenticEvent> {
-        let round_id = self.open_round.as_ref()?.round_id.clone();
+    fn thinking_event(&mut self, content: String, is_end: bool) -> Option<AgenticEvent> {
+        let round = self.open_round.as_mut()?;
+        if !content.is_empty() {
+            round.latency.observe_output();
+        }
+        let round_id = round.round_id.clone();
         Some(AgenticEvent::ThinkingChunk {
             session_id: self.session_id.clone(),
             turn_id: self.turn_id.clone(),
