@@ -407,6 +407,7 @@ mod tests {
             round_index: 0,
             model_config_id: "m".into(),
             effective_model_name: "m".into(),
+            routing: None,
         };
         assert!(
             status.settle_retry_after(&[round]).is_none(),
