@@ -2483,8 +2483,6 @@ fn unix_ms() -> u64 {
         .unwrap_or_default()
 }
 
-/// Task id of a `<task-notification>` the CLI injected into the main
-/// conversation as a user message.
 /// A `task_started` for a subagent (not a background shell or other task).
 fn is_agent_task(frame: &Value) -> bool {
     match frame["task_type"].as_str() {
@@ -2493,6 +2491,8 @@ fn is_agent_task(frame: &Value) -> bool {
     }
 }
 
+/// Task id of a `<task-notification>` the CLI injected into the main
+/// conversation as a user message.
 fn injected_notification_task(frame: &Value) -> Option<String> {
     if frame["type"] != "user" || !frame.get("parent_tool_use_id").is_none_or(Value::is_null) {
         return None;
