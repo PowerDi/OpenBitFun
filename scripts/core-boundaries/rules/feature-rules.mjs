@@ -810,6 +810,8 @@ export const acpClosedFeatureProfileRules = [
     featureName: 'client',
     requiredFeatureRefs: [
       'openbitfun-agent-tools/acp-bridge',
+      // Native drivers and the external-CLI utilities shared with them.
+      'dep:openbitfun-native-agents',
       'dep:futures',
       'dep:serde',
       // The bundled DeepSeek Harness profile: `dirs` locates $DSH_HOME,

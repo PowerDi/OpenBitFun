@@ -13,6 +13,7 @@ members = [
     "src/crates/interfaces/app-server",
     "src/crates/interfaces/app-server-client",
     "src/crates/interfaces/app-server-protocol",
+    "src/crates/interfaces/native-agents",
     "src/crates/interfaces/sdk-host",
     "src/crates/adapters/agent-runtime-ipc",
     "src/crates/adapters/miniapp-ipc",

@@ -26,8 +26,10 @@ use openbitfun_core::util::errors::{OpenBitFunError, OpenBitFunResult};
 use serde::Deserialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use super::remote_shell::{remote_user_shell_command, render_remote_env_assignments, shell_escape};
 use super::requirements::probe_executable;
+use openbitfun_native_agents::remote_shell::{
+    remote_user_shell_command, render_remote_env_assignments, shell_escape,
+};
 
 /// Points directly at a built profile directory, overriding every other
 /// candidate. This is how a packaged build that lays resources out unusually —

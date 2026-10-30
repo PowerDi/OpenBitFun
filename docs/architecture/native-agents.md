@@ -29,7 +29,7 @@ dependencies:
 |---|---|---|
 | D1 | Do not add new native agents unless the product owner explicitly asks. Work goes into depth (runtime ownership, delegation, remote) for Claude, Codex, and Pi. | Accepted |
 | D2 | codex-host is a design reference only; no code dependency or vendored adapters. | Accepted |
-| D3 | Move native drivers out of `openbitfun-acp` into a dedicated interface crate (`openbitfun-native-agents`). The move is mechanical and changes no behavior. | Accepted |
+| D3 | Move native drivers out of `openbitfun-acp` into a dedicated interface crate (`openbitfun-native-agents`). The move is mechanical and changes no behavior. | Done |
 | D4 | Native sessions are owned by the shared runtime, not by Desktop. Desktop, CLI, mobile web, IM bots, cron, `SessionMessage`, and delegation reach them through one runtime port. | Accepted |
 | D5 | Native approvals and questions use the runtime `PermissionRequestManager` and `UserInputManager`. The custom `backend-event-acppermissionrequest` path is removed, not kept in parallel. | Accepted |
 | D6 | The backend persists native turns. Frontend persistence of native turns is removed. | Accepted |
@@ -110,7 +110,9 @@ open window, and a turn lost when the window closes mid-turn.
 
 Each step merges on its own.
 
-1. **Crate split (D3).** Mechanical move, no behavior change.
+1. **Crate split (D3).** Mechanical move, no behavior change. Done:
+   `src/crates/interfaces/native-agents`; `openbitfun_acp::client::native`
+   re-exports it for existing hosts.
 2. **Notifications.** Replace the Tauri sink with the shared event emitter;
    event names and payloads stay the same, so the Web UI is unchanged.
 3. **Interactions (D5).** Register approvals and questions with the runtime

@@ -1,0 +1,34 @@
+[package]
+name = "openbitfun-native-agents"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+description = "OpenBitFun native agent drivers (Claude Code, Codex, Pi) over their own CLI protocols"
+
+[lib]
+name = "openbitfun_native_agents"
+
+[dependencies]
+# Native sessions drive the shared EventQueue, session storage and the SSH
+# workspace transport; Agent Runtime and SSH are the only Core slices used.
+openbitfun-core = { path = "../../assembly/core", features = ["agent-runtime", "ssh-remote"] }
+openbitfun-events = { path = "../../contracts/events" }
+
+# Session option DTOs keep their ACP-schema conversions for the ACP client,
+# and context usage cost keeps the same wire shape.
+agent-client-protocol = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
+async-trait = { workspace = true }
+dashmap = { workspace = true }
+dirs = { workspace = true }
+log = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
+
+[lints]
+workspace = true

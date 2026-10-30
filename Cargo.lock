@@ -5997,6 +5997,7 @@ dependencies = [
  "openbitfun-core",
  "openbitfun-core-types",
  "openbitfun-events",
+ "openbitfun-native-agents",
  "semver",
  "serde",
  "serde_json",
@@ -6675,6 +6676,24 @@ dependencies = [
  "tokio",
  "uuid",
  "windows 0.61.3",
+]
+
+[[package]]
+name = "openbitfun-native-agents"
+version = "1.0.8"
+dependencies = [
+ "agent-client-protocol",
+ "async-trait",
+ "dashmap",
+ "dirs 6.0.0",
+ "log",
+ "openbitfun-core",
+ "openbitfun-events",
+ "semver",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

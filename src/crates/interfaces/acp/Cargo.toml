@@ -9,6 +9,7 @@ description = "OpenBitFun Agent Client Protocol surface"
 default = ["client", "server"]
 client = [
     "openbitfun-agent-tools/acp-bridge",
+    "dep:openbitfun-native-agents",
     "dep:futures",
     "dep:serde",
     "dep:dirs",
@@ -44,6 +45,7 @@ name = "openbitfun_acp"
 
 [dependencies]
 openbitfun-core = { path = "../../assembly/core", optional = true }
+openbitfun-native-agents = { path = "../native-agents", optional = true }
 openbitfun-agent-runtime = { path = "../../execution/agent-runtime", optional = true }
 openbitfun-agent-tools = { path = "../../execution/tool-contracts", optional = true }
 openbitfun-events = { path = "../../contracts/events" }

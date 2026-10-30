@@ -31,7 +31,7 @@ use openbitfun_core::service::remote_ssh::workspace_state::get_remote_workspace_
 use openbitfun_core::util::errors::{OpenBitFunError, OpenBitFunResult};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tokio::sync::{oneshot, Mutex, RwLock};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
@@ -44,28 +44,35 @@ use super::config::{
     AcpClientRequirementProbe, AcpClientStatus, RemoteAcpClientRequirementSnapshot,
 };
 use super::dsh_profile::{ensure_bundled_profile, ensure_bundled_profile_remote};
-use super::native::{self, NativeAgentDriver, NativeAgentOpenContext, NativeAgentSession};
 use super::prompt::AcpPrompt;
 use super::remote_capability_store::RemoteAcpCapabilityStore;
 use super::remote_session::{preferred_resume_strategies, AcpRemoteSessionStrategy};
-use super::remote_shell::{remote_user_shell_command, render_remote_env_assignments, shell_escape};
 use super::requirements::{
     acp_requirement_spec, apply_command_environment, install_npm_cli_package,
     install_remote_npm_cli_package, predownload_npm_adapter, probe_executable, probe_npm_adapter,
     probe_remote_executable, probe_remote_npx_adapter, resolve_configured_command,
 };
-use super::session_options::{
-    model_config_id, session_options_from_state, AcpAvailableCommand, AcpSessionContextUsage,
-    AcpSessionOptions,
-};
-use super::session_persistence::AcpSessionPersistence;
-pub use super::session_persistence::CreateAcpFlowSessionRecordResponse;
 use super::stream::{
     acp_dispatch_to_stream_events_with_tracker, AcpClientStreamEvent, AcpStreamRoundTracker,
     AcpToolCallTracker,
 };
 use super::tool::AcpAgentTool;
 use super::transport::{handle_transport_closed, AcpTransport};
+use openbitfun_native_agents::process_tree::{
+    configure_process_group, terminate_child_process_tree,
+};
+use openbitfun_native_agents::remote_shell::{
+    remote_user_shell_command, render_remote_env_assignments, shell_escape,
+};
+use openbitfun_native_agents::session_options::{
+    model_config_id, session_options_from_state, AcpAvailableCommand, AcpSessionContextUsage,
+    AcpSessionOptions,
+};
+use openbitfun_native_agents::CreateAcpFlowSessionRecordResponse;
+use openbitfun_native_agents::{
+    self as native, AcpSessionConfigValue, AcpSessionPersistence, NativeAgentDriver,
+    NativeAgentOpenContext, NativeAgentSession, SubmitAcpPermissionResponseRequest,
+};
 
 const CONFIG_PATH: &str = "acp_clients";
 const CLIENT_STARTUP_TIMEOUT_SECS: u64 = 60;
@@ -81,21 +88,6 @@ const TURN_COMPLETION_DRAIN_MAX_DURATION: Duration = Duration::from_secs(2);
 
 type AcpOutgoingStream = Pin<Box<dyn FuturesAsyncWrite + Send>>;
 type AcpIncomingStream = Pin<Box<dyn FuturesAsyncRead + Send>>;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SubmitAcpPermissionResponseRequest {
-    pub permission_id: String,
-    pub approve: bool,
-    #[serde(default)]
-    pub option_id: Option<String>,
-    /// Native question answers (question index or text -> answer value).
-    #[serde(default)]
-    pub answers: Option<serde_json::Value>,
-    /// Optional free-text feedback sent with a rejection.
-    #[serde(default)]
-    pub feedback: Option<String>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -139,23 +131,10 @@ pub struct SetAcpSessionConfigOptionRequest {
     pub value: AcpSessionConfigValue,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(
-    tag = "type",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase"
-)]
-pub enum AcpSessionConfigValue {
-    Select { value: String },
-    Boolean { value: bool },
-}
-
-impl AcpSessionConfigValue {
-    fn into_protocol_value(self) -> SessionConfigOptionValue {
-        match self {
-            Self::Select { value } => SessionConfigOptionValue::value_id(value),
-            Self::Boolean { value } => SessionConfigOptionValue::boolean(value),
-        }
+fn config_value_into_protocol(value: AcpSessionConfigValue) -> SessionConfigOptionValue {
+    match value {
+        AcpSessionConfigValue::Select { value } => SessionConfigOptionValue::value_id(value),
+        AcpSessionConfigValue::Boolean { value } => SessionConfigOptionValue::boolean(value),
     }
 }
 
@@ -1467,7 +1446,7 @@ impl AcpClientService {
             .send_request(SetSessionConfigOptionRequest::new(
                 remote_session_id,
                 request.config_id,
-                request.value.into_protocol_value(),
+                config_value_into_protocol(request.value),
             ))
             .block_task()
             .await
@@ -2443,108 +2422,6 @@ fn aggregate_client_status(statuses: &[AcpClientStatus]) -> AcpClientStatus {
     AcpClientStatus::Stopped
 }
 
-pub(super) fn configure_process_group(command: &mut Command) {
-    #[cfg(unix)]
-    {
-        command.process_group(0);
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = command;
-    }
-}
-
-pub(super) async fn terminate_child_process_tree(client_id: &str, mut child: Child) {
-    let pid = child.id();
-
-    #[cfg(unix)]
-    if let Some(pid) = pid {
-        let process_group = format!("-{}", pid);
-        match openbitfun_core::util::process_manager::create_tokio_command("kill")
-            .arg("-TERM")
-            .arg(&process_group)
-            .status()
-            .await
-        {
-            Ok(status) if status.success() => {}
-            Ok(status) => {
-                warn!(
-                    "ACP client process group terminate exited unsuccessfully: id={} pid={} status={}",
-                    client_id, pid, status
-                );
-            }
-            Err(error) => {
-                warn!(
-                    "Failed to terminate ACP client process group: id={} pid={} error={}",
-                    client_id, pid, error
-                );
-            }
-        }
-
-        match tokio::time::timeout(Duration::from_millis(750), child.wait()).await {
-            Ok(Ok(_)) => return,
-            Ok(Err(error)) => {
-                warn!(
-                    "Failed to wait for ACP client process after terminate: id={} pid={} error={}",
-                    client_id, pid, error
-                );
-            }
-            Err(_) => {}
-        }
-
-        if let Err(error) = openbitfun_core::util::process_manager::create_tokio_command("kill")
-            .arg("-KILL")
-            .arg(&process_group)
-            .status()
-            .await
-        {
-            warn!(
-                "Failed to kill ACP client process group: id={} pid={} error={}",
-                client_id, pid, error
-            );
-        }
-        let _ = child.wait().await;
-        return;
-    }
-
-    #[cfg(windows)]
-    if let Some(pid) = pid {
-        match openbitfun_core::util::process_manager::create_tokio_command("taskkill")
-            .arg("/PID")
-            .arg(pid.to_string())
-            .arg("/T")
-            .arg("/F")
-            .status()
-            .await
-        {
-            Ok(status) if status.success() => {
-                let _ = child.wait().await;
-                return;
-            }
-            Ok(status) => {
-                warn!(
-                    "ACP client process tree kill exited unsuccessfully: id={} pid={} status={}",
-                    client_id, pid, status
-                );
-            }
-            Err(error) => {
-                warn!(
-                    "Failed to kill ACP client process tree: id={} pid={} error={}",
-                    client_id, pid, error
-                );
-            }
-        }
-    }
-
-    if let Err(error) = child.start_kill() {
-        warn!(
-            "Failed to kill ACP client process: id={} error={}",
-            client_id, error
-        );
-    }
-    let _ = child.wait().await;
-}
-
 async fn close_or_cancel_remote_session(
     client: &AcpClientConnection,
     connection: Option<ConnectionTo<Agent>>,
@@ -3201,16 +3078,15 @@ mod tests {
 
     #[test]
     fn maps_session_config_values_to_acp_protocol_values() {
-        let select = AcpSessionConfigValue::Select {
+        let select = config_value_into_protocol(AcpSessionConfigValue::Select {
             value: "on".to_string(),
-        }
-        .into_protocol_value();
+        });
         assert_eq!(
             select.as_value_id().map(ToString::to_string).as_deref(),
             Some("on")
         );
 
-        let boolean = AcpSessionConfigValue::Boolean { value: true }.into_protocol_value();
+        let boolean = config_value_into_protocol(AcpSessionConfigValue::Boolean { value: true });
         assert_eq!(boolean.as_bool(), Some(true));
     }
 

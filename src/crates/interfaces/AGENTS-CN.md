@@ -9,6 +9,7 @@
 | Crate | 职责 | 本地文档 |
 |---|---|---|
 | `acp` | 基于已组装产品 runtime 的 Agent Client Protocol 接口 | [AGENTS.md](acp/AGENTS.md) |
+| `native-agents` | Claude Code、Codex、Pi 的 native 驱动（走各自 CLI 协议），以及与 `acp` 共用的外部 CLI 工具 | [AGENTS.md](native-agents/AGENTS.md) |
 | `app-server-protocol` | behavior-light App Server method、wire DTO、错误、事件和 protocol role | [AGENTS.md](app-server/AGENTS.md) |
 | `app-server-client` | transport-agnostic 类型化 App Server client 和事件分发 | [AGENTS.md](app-server/AGENTS.md) |
 | `app-server` | 生产 App Server handler 注册、生命周期和 owner-to-wire adapter | [AGENTS.md](app-server/AGENTS.md) |
