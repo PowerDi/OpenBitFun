@@ -643,6 +643,7 @@ impl ClaudeTurnProjector {
             return;
         };
         round.has_tool_calls = true;
+        round.latency.observe_output();
         let round_id = round.round_id.clone();
         self.total_tools += 1;
         self.tools.insert(
@@ -1370,6 +1371,26 @@ mod tests {
         assert_eq!(ttfts.len(), 2);
         assert!(ttfts[0].is_some());
         assert_eq!(ttfts[1], None);
+    }
+
+    #[test]
+    fn streamed_tool_call_reports_ttft() {
+        let mut projector = ClaudeTurnProjector::new("s1", "t1", None);
+        let mut events = projector.open_pending_round();
+        let frames = vec![
+            se(json!({"type": "message_start", "message": {"id": "m1"}})),
+            se(json!({"type": "content_block_start", "index": 0,
+                "content_block": {"type": "tool_use", "id": "tu1", "name": "Read", "input": {}}})),
+            json!({"type": "assistant", "message": {"id": "m1",
+                "content": [{"type": "tool_use", "id": "tu1", "name": "Read", "input": {"file_path": "a"}}]}}),
+            json!({"type": "result", "subtype": "success", "is_error": false}),
+        ];
+        events.extend(frames.iter().flat_map(|f| projector.consume(f)));
+        let ttft = events.iter().find_map(|e| match e {
+            AgenticEvent::ModelRoundCompleted { ttft_ms, .. } => Some(*ttft_ms),
+            _ => None,
+        });
+        assert!(matches!(ttft, Some(Some(_))));
     }
 
     #[test]
