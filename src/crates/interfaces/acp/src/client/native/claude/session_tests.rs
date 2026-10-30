@@ -708,6 +708,158 @@ async fn subagent_streams_into_linked_read_only_child_session() {
         AgenticEvent::TextChunk { session_id, .. } if session_id == "s1")));
 }
 
+fn linked_children<'a>(
+    events: impl IntoIterator<Item = &'a AgenticEvent>,
+) -> Vec<(String, String, String)> {
+    events
+        .into_iter()
+        .filter_map(|event| match event {
+            AgenticEvent::SubagentSessionLinked {
+                session_id,
+                parent_dialog_turn_id,
+                parent_tool_call_id,
+                ..
+            } => Some((
+                session_id.clone(),
+                parent_dialog_turn_id.clone(),
+                parent_tool_call_id.clone(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+fn child_turn_indexes<'a>(
+    events: impl IntoIterator<Item = &'a AgenticEvent>,
+    child: &str,
+) -> Vec<usize> {
+    events
+        .into_iter()
+        .filter_map(|event| match event {
+            AgenticEvent::DialogTurnStarted {
+                session_id,
+                turn_index,
+                ..
+            } if session_id == child => Some(*turn_index),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn resumed_subagent_appends_to_its_original_child_session() {
+    let (session, process, _output) = fixture();
+    session
+        .begin_turn(
+            &mut *session.state.lock().await,
+            "parent-turn".into(),
+            "go".into(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    for frame in [
+        json!({"type":"system", "subtype":"task_started", "task_id":"a1", "tool_use_id":"tool1",
+            "task_type":"local_agent", "subagent_type":"general-purpose", "prompt":"first"}),
+        json!({"type":"system", "subtype":"task_notification", "task_id":"a1",
+            "tool_use_id":"tool1", "status":"completed", "summary":"done"}),
+        // A background shell carries a tool_use_id but is not a subagent.
+        json!({"type":"system", "subtype":"task_started", "task_id":"b1", "tool_use_id":"bash1",
+            "task_type":"local_bash", "description":"npm run dev"}),
+        // SendMessage resumes agent a1 under its own tool_use_id.
+        json!({"type":"system", "subtype":"task_started", "task_id":"a1", "tool_use_id":"send1",
+            "task_type":"local_agent", "prompt":"second"}),
+        json!({"type":"assistant", "parent_tool_use_id":"send1", "agent_id":"a1",
+            "message":{"id":"m-resumed", "content":[{"type":"text", "text":"again"}]}}),
+        json!({"type":"system", "subtype":"task_notification", "task_id":"a1",
+            "tool_use_id":"send1", "status":"completed", "summary":"again"}),
+    ] {
+        session.route_frame(&process, frame).await.unwrap();
+    }
+    let events = session.queue.dequeue_batch(200).await;
+    let child = "s1-subagent-tool1";
+    // One child session for the agent; the resume links the SendMessage card.
+    assert_eq!(
+        linked_children(events.iter().map(|e| &e.event)),
+        vec![
+            (
+                child.to_string(),
+                "parent-turn".to_string(),
+                "tool1".to_string()
+            ),
+            (
+                child.to_string(),
+                "parent-turn".to_string(),
+                "send1".to_string()
+            ),
+        ]
+    );
+    // The resumed run appends a turn instead of overwriting turn 0.
+    assert_eq!(
+        child_turn_indexes(events.iter().map(|e| &e.event), child),
+        vec![0, 1]
+    );
+    assert!(events.iter().any(|e| matches!(&e.event,
+        AgenticEvent::TextChunk { session_id, text, .. } if session_id == child && text == "again")));
+    assert!(!events.iter().any(|e| matches!(&e.event,
+        AgenticEvent::SubagentSessionLinked { session_id, .. } if session_id.contains("bash1"))));
+    assert!(session.state.lock().await.children.is_empty());
+}
+
+#[tokio::test]
+async fn subagent_resumed_between_parent_turns_reopens_under_its_last_card() {
+    let (session, process, _output) = fixture();
+    session
+        .begin_turn(
+            &mut *session.state.lock().await,
+            "parent-turn".into(),
+            "go".into(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    for frame in [
+        json!({"type":"system", "subtype":"task_started", "task_id":"a1", "tool_use_id":"tool1",
+            "task_type":"local_agent", "subagent_type":"general-purpose", "prompt":"first"}),
+        json!({"type":"system", "subtype":"task_notification", "task_id":"a1",
+            "tool_use_id":"tool1", "status":"completed", "summary":"done"}),
+    ] {
+        session.route_frame(&process, frame).await.unwrap();
+    }
+    session.state.lock().await.projector = None;
+    session.queue.dequeue_batch(200).await;
+
+    // Parent idle: a background agent resumes and streams again.
+    for frame in [
+        json!({"type":"system", "subtype":"task_started", "task_id":"a1", "tool_use_id":"send1",
+            "task_type":"local_agent", "prompt":"second"}),
+        json!({"type":"assistant", "parent_tool_use_id":"send1", "agent_id":"a1",
+            "message":{"id":"m-idle", "content":[{"type":"text", "text":"late"}]}}),
+    ] {
+        session.route_frame(&process, frame).await.unwrap();
+    }
+    let events = session.queue.dequeue_batch(200).await;
+    let child = "s1-subagent-tool1";
+    assert_eq!(
+        linked_children(events.iter().map(|e| &e.event)),
+        vec![(
+            child.to_string(),
+            "parent-turn".to_string(),
+            "tool1".to_string()
+        )]
+    );
+    assert_eq!(
+        child_turn_indexes(events.iter().map(|e| &e.event), child),
+        vec![1]
+    );
+    assert!(
+        events.iter().any(|e| matches!(&e.event,
+        AgenticEvent::TextChunk { session_id, text, .. } if session_id == child && text == "late"))
+    );
+}
+
 #[tokio::test]
 async fn trailing_autonomous_result_cannot_settle_next_user_turn() {
     let (session, process, _output) = fixture();
