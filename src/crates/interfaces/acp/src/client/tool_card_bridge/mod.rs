@@ -1,6 +1,4 @@
 mod tool_name;
-mod tool_params;
-mod tool_result;
 
 pub(super) fn acp_tool_name(
     title: &str,
@@ -10,22 +8,9 @@ pub(super) fn acp_tool_name(
     tool_name::acp_tool_name(title, raw_input, kind)
 }
 
-pub(super) fn normalize_tool_params(
-    tool_name: &str,
-    params: serde_json::Value,
-) -> serde_json::Value {
-    tool_params::normalize_tool_params(tool_name, params)
-}
+pub(super) use openbitfun_native_agents::tool_card::normalize_tool_params;
 
-/// Translate a completed tool's result into the shape its native card reads.
-/// Results the card already understands, and results this cannot parse, are
-/// returned unchanged.
-pub(super) fn normalize_tool_result(
-    tool_name: &str,
-    result: serde_json::Value,
-) -> serde_json::Value {
-    tool_result::normalize_tool_result(tool_name, result)
-}
+pub(super) use openbitfun_native_agents::tool_card::normalize_tool_result;
 
 #[cfg(test)]
 mod tests {

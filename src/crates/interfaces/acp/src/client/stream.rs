@@ -9,8 +9,10 @@ use agent_client_protocol::util::MatchDispatch;
 use openbitfun_core::util::errors::{OpenBitFunError, OpenBitFunResult};
 use openbitfun_events::ToolEventData;
 
-use super::session_options::{AcpAvailableCommand, AcpPlanEntry, AcpSessionContextUsage};
 use super::tool_card_bridge::{acp_tool_name, normalize_tool_params, normalize_tool_result};
+use openbitfun_native_agents::session_options::{
+    AcpAvailableCommand, AcpPlanEntry, AcpSessionContextUsage,
+};
 
 #[derive(Debug, Clone)]
 pub enum AcpClientStreamEvent {

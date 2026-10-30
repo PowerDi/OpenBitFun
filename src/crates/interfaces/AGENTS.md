@@ -12,6 +12,7 @@ product behavior. UI apps and delivery hosts remain under `src/apps`,
 | Crate | Responsibility | Local doc |
 |---|---|---|
 | `acp` | Agent Client Protocol interface over the assembled product runtime | [AGENTS.md](acp/AGENTS.md) |
+| `native-agents` | Native Claude Code, Codex and Pi drivers over their own CLI protocols, plus external-CLI utilities shared with `acp` | [AGENTS.md](native-agents/AGENTS.md) |
 | `app-server-protocol` | Behavior-light App Server methods, wire DTOs, errors, events, and protocol roles | [AGENTS.md](app-server/AGENTS.md) |
 | `app-server-client` | Transport-agnostic typed App Server client and event distribution | [AGENTS.md](app-server/AGENTS.md) |
 | `app-server` | Production App Server handler registration, lifecycle, and owner-to-wire adapters | [AGENTS.md](app-server/AGENTS.md) |
