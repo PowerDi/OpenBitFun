@@ -90,8 +90,8 @@ open window, and a turn lost when the window closes mid-turn.
   `src/apps/desktop/src/api/acp_client_api.rs`. The scheduler and coordinator
   have no native route.
 - Presentation updates (context usage, background tasks, retry, rate limits,
-  plan, options) are emitted with Tauri `AppHandle::emit` from
-  `native_notification_sink`, so only the Desktop window receives them.
+  plan, options) go through the shared backend event system (step 2), so any
+  host emitter and Peer Mode controllers receive them.
 - Turn content events already enter the shared `EventQueue`
   (`native/events.rs`), so live projection works for any event subscriber.
 - Mobile web and IM bots submit through `submit_remote_dialog`, which restores
@@ -115,6 +115,8 @@ Each step merges on its own.
    re-exports it for existing hosts.
 2. **Notifications.** Replace the Tauri sink with the shared event emitter;
    event names and payloads stay the same, so the Web UI is unchanged.
+   Done: `notifications::global_notification_sink` publishes through
+   `emit_global_event`; Desktop adds the events to the Peer Mode fan-out list.
 3. **Interactions (D5).** Register approvals and questions with the runtime
    managers; remove the custom event and its Web UI handling.
 4. **Runtime port (D4).**

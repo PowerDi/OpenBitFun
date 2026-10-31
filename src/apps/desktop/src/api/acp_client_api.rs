@@ -3,7 +3,8 @@
 use crate::api::app_state::AppState;
 use crate::startup_trace::DesktopStartupTrace;
 use openbitfun_acp::client::native::{
-    NativeAgentNotification, NativeAgentNotificationSink, NativeImageInput, NativeTurnInput,
+    notifications::global_notification_sink, NativeAgentNotificationSink, NativeImageInput,
+    NativeTurnInput,
 };
 use openbitfun_acp::client::{
     AcpAvailableCommand, AcpClientInfo, AcpClientPermissionResponse, AcpClientRequirementProbe,
@@ -19,52 +20,10 @@ use std::path::PathBuf;
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, State};
 
-/// Native drivers publish through the same presentation events as ACP streams.
-fn native_notification_sink(
-    app_handle: &AppHandle,
-    session_id: &str,
-    client_id: &str,
-) -> NativeAgentNotificationSink {
-    let app_handle = app_handle.clone();
-    let session_id = session_id.to_string();
-    let client_id = client_id.to_string();
-    std::sync::Arc::new(move |update| {
-        let result = match update {
-            NativeAgentNotification::AvailableCommandsUpdated(commands) => app_handle.emit(
-                "agentic://acp-available-commands-updated",
-                serde_json::json!({"sessionId":session_id, "clientId":client_id, "commands":commands}),
-            ),
-            NativeAgentNotification::PlanUpdated { turn_id, entries } => app_handle.emit(
-                "agentic://acp-plan-updated",
-                serde_json::json!({"sessionId":session_id, "turnId":turn_id, "clientId":client_id, "entries":entries}),
-            ),
-            NativeAgentNotification::ContextUsageUpdated(usage) => app_handle.emit(
-                "agentic://acp-context-usage-updated",
-                serde_json::json!({"sessionId":session_id, "clientId":client_id,
-                    "used":usage.used, "size":usage.size, "cost":usage.cost,
-                    "subagentParentInfo":null}),
-            ),
-            NativeAgentNotification::OptionsChanged => app_handle.emit(
-                "agentic://acp-session-options-changed",
-                serde_json::json!({"sessionId":session_id, "clientId":client_id}),
-            ),
-            NativeAgentNotification::BackgroundTasksUpdated(tasks) => app_handle.emit(
-                "agentic://acp-background-tasks-updated",
-                serde_json::json!({"sessionId":session_id, "clientId":client_id, "tasks":tasks}),
-            ),
-            NativeAgentNotification::RetryStatusChanged { turn_id, retry } => app_handle.emit(
-                "agentic://acp-retry-status-changed",
-                serde_json::json!({"sessionId":session_id, "clientId":client_id, "turnId":turn_id, "retry":retry}),
-            ),
-            NativeAgentNotification::RateLimitsUpdated(rate_limits) => app_handle.emit(
-                "agentic://acp-rate-limits-updated",
-                serde_json::json!({"sessionId":session_id, "clientId":client_id, "rateLimits":rate_limits}),
-            ),
-        };
-        if let Err(error) = result {
-            log::warn!("Failed to publish native agent update for {session_id}: {error}");
-        }
-    })
+/// Native drivers publish on the shared backend event system, so the webview
+/// and Peer Mode controllers receive the same presentation events.
+fn native_notification_sink(session_id: &str, client_id: &str) -> NativeAgentNotificationSink {
+    global_notification_sink(session_id, client_id)
 }
 
 /// Workspace facts an ACP session command executes against, derived from the
@@ -461,7 +420,6 @@ pub async fn create_acp_flow_session(
                 scope.remote_connection_id.as_deref(),
                 &scope.session_storage_path,
                 Some(native_notification_sink(
-                    &app_handle,
                     &response.session_id,
                     &request.client_id,
                 )),
@@ -597,11 +555,7 @@ pub async fn start_acp_dialog_turn(
                 path,
                 remote_connection_id.as_deref(),
                 storage,
-                Some(native_notification_sink(
-                    &app_handle,
-                    &session_id,
-                    &request.client_id,
-                )),
+                Some(native_notification_sink(&session_id, &request.client_id)),
             )
             .await
             .map_err(|error| error.to_string())?;
@@ -945,7 +899,6 @@ pub async fn cancel_acp_dialog_turn(
 #[tauri::command]
 pub async fn get_acp_session_options(
     state: State<'_, AppState>,
-    app_handle: AppHandle,
     request: GetAcpSessionOptionsRequest,
 ) -> Result<AcpSessionOptions, String> {
     let service = state
@@ -979,7 +932,6 @@ pub async fn get_acp_session_options(
                         scope.remote_connection_id.as_deref(),
                         &scope.session_storage_path,
                         Some(native_notification_sink(
-                            &app_handle,
                             &request.session_id,
                             &request.client_id,
                         )),
@@ -1069,7 +1021,6 @@ pub async fn get_acp_session_commands(
 #[tauri::command]
 pub async fn set_acp_session_model(
     state: State<'_, AppState>,
-    app_handle: AppHandle,
     request: SetAcpSessionModelRequest,
 ) -> Result<AcpSessionOptions, String> {
     let service = state
@@ -1102,7 +1053,6 @@ pub async fn set_acp_session_model(
                         scope.remote_connection_id.as_deref(),
                         &scope.session_storage_path,
                         Some(native_notification_sink(
-                            &app_handle,
                             &request.session_id,
                             &request.client_id,
                         )),
@@ -1248,7 +1198,6 @@ pub use openbitfun_acp::client::native::NativeRollbackOutcome as RollbackAcpSess
 #[tauri::command]
 pub async fn rollback_acp_session_turn(
     state: State<'_, AppState>,
-    app_handle: AppHandle,
     request: RollbackAcpSessionTurnRequest,
 ) -> Result<RollbackAcpSessionTurnResponse, String> {
     let service = state
@@ -1270,7 +1219,6 @@ pub async fn rollback_acp_session_turn(
                 scope.remote_connection_id.as_deref(),
                 &scope.session_storage_path,
                 Some(native_notification_sink(
-                    &app_handle,
                     &request.session_id,
                     &request.client_id,
                 )),

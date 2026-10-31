@@ -517,6 +517,9 @@ async fn fanout_peer_device_event_current(item: PeerEventFanoutItem) {
 }
 
 fn should_fanout_peer_ui_event(event: &str) -> bool {
+    if openbitfun_acp::client::native::notifications::NATIVE_NOTIFICATION_EVENTS.contains(&event) {
+        return true;
+    }
     matches!(
         event,
         "terminal_event"
@@ -3766,6 +3769,14 @@ mod peer_event_tests {
     fn cron_job_change_hints_are_fanned_out_to_peer_controllers() {
         assert!(should_fanout_peer_ui_event("cron://jobs-changed"));
         assert!(!should_fanout_peer_ui_event("cron://internal"));
+    }
+
+    #[test]
+    fn native_agent_session_updates_are_fanned_out_to_peer_controllers() {
+        for event in openbitfun_acp::client::native::notifications::NATIVE_NOTIFICATION_EVENTS {
+            assert!(should_fanout_peer_ui_event(event), "{event}");
+        }
+        assert!(!should_fanout_peer_ui_event("agentic://acp-internal"));
     }
 }
 
