@@ -108,6 +108,7 @@
     "allowAlwaysTooltip": "Remember approval for this action in {{projectPath}}, limited to the following scope:\n{{resources}}",
     "allowAlwaysTooltipCurrentProject": "Remember approval for this action in the current project, limited to the following scope:\n{{resources}}",
     "allowAlwaysTooltipNoGrant": "This request has no savable access scope; always allow applies only to this request.",
+    "allowAlwaysAgentTooltip": "{{agent}} remembers this in its own settings: {{scope}}",
     "risks": {
       "pageSave": "Save a new immutable version of “{{slug}}” with {{visibility}} visibility without changing production.",
       "pagePublish": "Save “{{slug}}” with {{visibility}} visibility and switch its production version.",
@@ -121,6 +122,14 @@
     "reject": "Reject",
     "rejectWithReason": "Reject with reason",
     "rejectWithReasonTooltip": "Rejects with what you typed in the composer, then clears it.",
+    "planReview": {
+      "title": "Review Claude's plan",
+      "missingPlan": "Claude did not provide plan text. Keep planning and ask Claude to present the plan.",
+      "keepPlanning": "Keep planning",
+      "keepPlanningWithFeedback": "Keep planning with feedback",
+      "keepPlanningWithFeedbackTooltip": "Keeps planning and sends what you typed in the composer to the agent, then clears it.",
+      "approve": "Approve plan"
+    },
     "scopeLabel": "Reply scope",
     "scopeThis": "This one",
     "scopeAll": "All",
@@ -2478,22 +2487,6 @@
       "textCount": "{{count}} text blocks",
       "imageCount": "{{count}} images",
       "resourceCount": "{{count}} resources"
-    },
-    "planReview": {
-      "title": "Review Claude's plan",
-      "missingPlan": "Claude did not provide plan text. Keep planning and ask Claude to present the plan.",
-      "feedbackPlaceholder": "Optional feedback for Claude if you keep planning",
-      "keepPlanning": "Keep planning",
-      "approve": "Approve plan",
-      "approveHint": "Exit plan mode, restore the previous permission mode and let Claude start implementing"
-    },
-    "acpPermission": {
-      "allowSession": "Allow for this session",
-      "allowOnce": "Allow once",
-      "allowAlways": "Always allow",
-      "reject": "Reject once",
-      "rejectAlways": "Always reject",
-      "selectOption": "Select option"
     },
     "default": {
       "waitingConfirm": "Waiting for confirmation",

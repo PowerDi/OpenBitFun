@@ -13,7 +13,6 @@ use std::time::Duration;
 
 use dashmap::DashMap;
 use openbitfun_core::agentic::events::EventQueue;
-use openbitfun_core::infrastructure::events::{emit_global_event, BackendEvent};
 use openbitfun_core::util::errors::{OpenBitFunError, OpenBitFunResult};
 use openbitfun_events::AgenticEvent;
 use serde_json::{json, Value};
@@ -30,6 +29,7 @@ use super::super::{
 use super::approval::{self, ApprovalRequest};
 use super::history::{PendingFork, PiHistory, TurnAnchor};
 use super::projector::PiTurnProjector;
+use crate::interaction::{self, InteractionScope, QuestionAsk};
 use crate::questions::{self, CardOutcome, Decision, Question};
 use crate::remote_shell::{remote_user_shell_command, shell_escape};
 use crate::session_persistence::AcpSessionPersistence;
@@ -180,6 +180,8 @@ struct TurnState {
 
 pub struct PiNativeSession {
     session_id: String,
+    /// Owner handle for runtime interaction replies.
+    weak_self: std::sync::Weak<Self>,
     workspace_path: String,
     remote_connection_id: Option<String>,
     /// Pi holds a transcript for `active_pi_session` (a prompt reached it).
@@ -243,7 +245,8 @@ impl PiNativeSession {
         turn_index: usize,
         notifier: Option<NativeAgentNotificationSink>,
     ) -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new_cyclic(|weak_self| Self {
+            weak_self: weak_self.clone(),
             session_id,
             active_pi_session: std::sync::Mutex::new(pi_session_id),
             workspace_path,
@@ -1055,6 +1058,7 @@ impl PiNativeSession {
             .collect();
         for id in ids {
             if let Some((_, pending)) = self.approvals.remove(&id) {
+                interaction::withdraw(&id, None, "The Pi turn ended").await;
                 let _ = pending
                     .process
                     .write(&approval::cancel_response(&pending.request.ui_id))
@@ -1069,6 +1073,7 @@ impl PiNativeSession {
             .collect();
         for id in ids {
             if let Some((_, pending)) = self.dialogs.remove(&id) {
+                interaction::withdraw(&id, Some(&pending.card_id), "The Pi turn ended").await;
                 // The turn's open cards were settled with the turn.
                 let _ = pending
                     .process
@@ -1116,7 +1121,7 @@ impl PiNativeSession {
                 .await;
         };
         let permission_id = format!("pi_native_permission_{}", uuid::Uuid::new_v4());
-        let payload = request.permission_payload(&permission_id, &self.session_id);
+        let ask = request.approval_ask(&permission_id, &self.session_id, &turn_id);
         self.approvals.insert(
             permission_id.clone(),
             PendingApproval {
@@ -1125,12 +1130,14 @@ impl PiNativeSession {
                 turn_id,
             },
         );
-        if let Err(error) = emit_global_event(BackendEvent::Custom {
-            event_name: "backend-event-acppermissionrequest".into(),
-            payload,
-        })
-        .await
-        {
+        let session = self.weak_self.clone();
+        let published =
+            interaction::ask_approval(&self.interaction_scope(), ask, move |decision| {
+                let session = session.clone();
+                async move { session.upgrade()?.submit_permission(&decision).await }
+            })
+            .await;
+        if let Err(error) = published {
             if let Some((_, pending)) = self.approvals.remove(&permission_id) {
                 let _ = pending
                     .process
@@ -1142,6 +1149,15 @@ impl PiNativeSession {
             )));
         }
         Ok(())
+    }
+
+    fn interaction_scope(&self) -> InteractionScope {
+        InteractionScope {
+            client_id: CLIENT_ID.to_string(),
+            agent_name: "Pi".to_string(),
+            workspace_path: self.workspace_path.clone(),
+            remote_connection_id: self.remote_connection_id.clone(),
+        }
     }
 
     /// Extension UI requests other than the approval bridge. Dialogs go to
@@ -1239,38 +1255,31 @@ impl PiNativeSession {
                 .await;
         };
         let permission_id = format!("pi_native_permission_{}", uuid::Uuid::new_v4());
-        let payload =
-            questions::question_payload(&permission_id, &self.session_id, &card_id, title, &input);
         self.dialogs.insert(
             permission_id.clone(),
             PendingDialog {
                 process: process.clone(),
                 ui_id: frame["id"].clone(),
                 method: method.to_string(),
-                turn_id,
-                card_id,
+                turn_id: turn_id.clone(),
+                card_id: card_id.clone(),
                 question,
             },
         );
-        if let Err(error) = emit_global_event(BackendEvent::Custom {
-            event_name: "backend-event-acppermissionrequest".into(),
-            payload,
-        })
-        .await
-        {
-            if let Some((_, pending)) = self.dialogs.remove(&permission_id) {
-                self.settle_dialog_card(
-                    &pending,
-                    CardOutcome::Failed("The dialog could not be shown".into()),
-                )
-                .await;
-                let _ = pending
-                    .process
-                    .write(&approval::cancel_response(&pending.ui_id))
-                    .await;
-            }
-            return Err(service_error(format!("Pi dialog delivery failed: {error}")));
-        }
+        let session = self.weak_self.clone();
+        interaction::ask_question(
+            QuestionAsk {
+                permission_id,
+                card_id,
+                session_id: self.session_id.clone(),
+                turn_id,
+                input,
+            },
+            move |decision| {
+                let session = session.clone();
+                async move { session.upgrade()?.submit_permission(&decision).await }
+            },
+        );
         Ok(())
     }
 

@@ -13,7 +13,6 @@ use std::time::Duration;
 use dashmap::DashMap;
 use openbitfun_core::agentic::core::SessionContinuationPolicy;
 use openbitfun_core::agentic::events::EventQueue;
-use openbitfun_core::infrastructure::events::{emit_global_event, BackendEvent};
 use openbitfun_core::util::errors::{OpenBitFunError, OpenBitFunResult};
 use openbitfun_events::AgenticEvent;
 use serde_json::{json, Value};
@@ -32,6 +31,7 @@ use super::background::ClaudeBackgroundTasks;
 use super::history::{resume_args, ClaudeHistory, PendingResume, RollbackPlan, TurnAnchor};
 use super::projector::{native_tool_name, ClaudeTurnProjector};
 use super::tasks::ClaudeTasks;
+use crate::interaction::{self, ApprovalAsk, InteractionScope, QuestionAsk};
 use crate::questions::{self, CardOutcome, Decision, Elicitation};
 use crate::remote_shell::{remote_user_shell_command, shell_escape};
 use crate::session_persistence::AcpSessionPersistence;
@@ -83,8 +83,6 @@ const INTERRUPT_GRACE: Duration = Duration::from_secs(3);
 const IDLE_RELEASE_AFTER: Duration = Duration::from_secs(30 * 60);
 /// What the Agent SDK's `enableFileCheckpointing` sets; enables `rewind_files`.
 const FILE_CHECKPOINT_ENV: &str = "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING";
-/// Permission option ids beyond the ACP-standard allow_once/allow_always/reject_once.
-const ALLOW_SESSION_OPTION: &str = "allow_session";
 const APPROVE_PLAN_OPTION: &str = "approve_plan";
 const KEEP_PLANNING_OPTION: &str = "keep_planning";
 /// Deny text codexhost sends when the user keeps Claude in plan mode.
@@ -295,6 +293,8 @@ struct ChildTranscript {
 
 pub struct ClaudeNativeSession {
     session_id: String,
+    /// Owner handle for runtime interaction replies.
+    weak_self: std::sync::Weak<Self>,
     /// Replaced only when rolling back the first turn starts a fresh transcript.
     claude_session_id: std::sync::Mutex<String>,
     workspace_path: String,
@@ -344,7 +344,8 @@ impl ClaudeNativeSession {
         turn_index: usize,
         notifier: Option<NativeAgentNotificationSink>,
     ) -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new_cyclic(|weak_self| Self {
+            weak_self: weak_self.clone(),
             session_id,
             claude_session_id: std::sync::Mutex::new(claude_session_id),
             workspace_path,
@@ -2043,23 +2044,52 @@ impl ClaudeNativeSession {
         ))
         .await?;
         let permission_id = format!("claude_native_permission_{}", uuid::Uuid::new_v4());
+        let tool_name = request["tool_name"].as_str().unwrap_or_default();
+        let kind = PermissionKind::of(tool_name);
+        let turn_id = projector.turn_id().to_string();
+        let parent = (card_session_id != self.session_id).then(|| {
+            state
+                .children
+                .iter()
+                .find(|(_, child)| child.session_id == card_session_id)
+                .map(|(key, _)| key.clone())
+        });
         let pending = PendingPermission {
             process: process.clone(),
-            turn_id: projector.turn_id().to_string(),
+            turn_id: turn_id.clone(),
             request_id,
             tool_id: tool_id.clone(),
             input: request["input"].clone(),
             suggestions: request["permission_suggestions"].clone(),
-            kind: PermissionKind::of(request["tool_name"].as_str().unwrap_or_default()),
+            kind,
         };
         self.permissions.insert(permission_id.clone(), pending);
-        let payload = permission_payload(&permission_id, &card_session_id, request);
-        if let Err(error) = emit_global_event(BackendEvent::Custom {
-            event_name: "backend-event-acppermissionrequest".into(),
-            payload,
-        })
-        .await
-        {
+        let published = match kind {
+            PermissionKind::Question => {
+                self.ask_question(QuestionAsk {
+                    permission_id: permission_id.clone(),
+                    card_id: tool_id.clone(),
+                    session_id: card_session_id,
+                    turn_id,
+                    input: request["input"].clone(),
+                });
+                Ok(())
+            }
+            _ => {
+                let parent_turn = state.projector.as_ref().map(|p| p.turn_id().to_string());
+                let mut ask = approval_ask(&permission_id, &card_session_id, &turn_id, request);
+                ask.delegation = parent.flatten().map(|parent_tool| {
+                    openbitfun_core::runtime_ports::PermissionDelegationContext {
+                        parent_session_id: self.session_id.clone(),
+                        parent_dialog_turn_id: parent_turn,
+                        parent_tool_call_id: parent_tool,
+                        subagent_type: "Claude Code".to_string(),
+                    }
+                });
+                self.ask_approval(ask).await
+            }
+        };
+        if let Err(error) = published {
             if let Some((_, pending)) = self.permissions.remove(&permission_id) {
                 let _ = cancel_permission(pending).await;
             }
@@ -2068,6 +2098,34 @@ impl ClaudeNativeSession {
             )));
         }
         Ok(())
+    }
+
+    fn interaction_scope(&self) -> InteractionScope {
+        InteractionScope {
+            client_id: CLIENT_ID.to_string(),
+            agent_name: "Claude Code".to_string(),
+            workspace_path: self.workspace_path.clone(),
+            remote_connection_id: self.remote_connection_id.clone(),
+        }
+    }
+
+    /// Publish an approval; the runtime reply comes back as a decision.
+    async fn ask_approval(&self, ask: ApprovalAsk) -> OpenBitFunResult<()> {
+        let session = self.weak_self.clone();
+        interaction::ask_approval(&self.interaction_scope(), ask, move |decision| {
+            let session = session.clone();
+            async move { session.upgrade()?.submit_permission(&decision).await }
+        })
+        .await
+    }
+
+    /// Publish a question form; its answers come back as a decision.
+    fn ask_question(&self, ask: QuestionAsk) {
+        let session = self.weak_self.clone();
+        interaction::ask_question(ask, move |decision| {
+            let session = session.clone();
+            async move { session.upgrade()?.submit_permission(&decision).await }
+        });
     }
 
     /// MCP elicitation (`control_request` subtype `elicitation`): ask simple
@@ -2159,27 +2217,45 @@ impl ClaudeNativeSession {
         self.enqueue(projector.permission_tool(&card_id, tool_name, input.clone()))
             .await?;
         let permission_id = format!("claude_native_permission_{}", uuid::Uuid::new_v4());
-        let payload = if tool_name == questions::QUESTION_TOOL {
-            questions::question_payload(&permission_id, &self.session_id, &card_id, &title, &input)
-        } else {
-            questions::confirm_payload(&permission_id, &self.session_id, &card_id, &title, &input)
-        };
+        let is_question = tool_name == questions::QUESTION_TOOL;
         self.elicitations.insert(
             permission_id.clone(),
             PendingElicitation {
                 process: process.clone(),
-                turn_id,
+                turn_id: turn_id.clone(),
                 request_id,
-                card_id,
+                card_id: card_id.clone(),
                 elicitation,
             },
         );
-        if let Err(error) = emit_global_event(BackendEvent::Custom {
-            event_name: "backend-event-acppermissionrequest".into(),
-            payload,
-        })
-        .await
-        {
+        let published = if is_question {
+            self.ask_question(QuestionAsk {
+                permission_id: permission_id.clone(),
+                card_id: card_id.clone(),
+                session_id: self.session_id.clone(),
+                turn_id,
+                input,
+            });
+            Ok(())
+        } else {
+            self.ask_approval(ApprovalAsk {
+                permission_id: permission_id.clone(),
+                session_id: self.session_id.clone(),
+                turn_id,
+                tool_call_id: card_id,
+                action: "mcp".to_string(),
+                resources: vec![if message.trim().is_empty() {
+                    title
+                } else {
+                    format!("{title}\n{}", message.trim())
+                }],
+                agent_always: None,
+                plan: None,
+                delegation: None,
+            })
+            .await
+        };
+        if let Err(error) = published {
             if let Some((_, pending)) = self.elicitations.remove(&permission_id) {
                 self.settle_elicitation_card(
                     &pending,
@@ -2381,6 +2457,9 @@ impl ClaudeNativeSession {
             .collect();
         for id in ids {
             if let Some((_, pending)) = self.permissions.remove(&id) {
+                let card =
+                    (pending.kind == PermissionKind::Question).then(|| pending.tool_id.clone());
+                interaction::withdraw(&id, card.as_deref(), "The Claude turn ended").await;
                 let _ = cancel_permission(pending).await;
             }
         }
@@ -2392,6 +2471,7 @@ impl ClaudeNativeSession {
             .collect();
         for id in ids {
             if let Some((_, pending)) = self.elicitations.remove(&id) {
+                interaction::withdraw(&id, Some(&pending.card_id), "The Claude turn ended").await;
                 // The turn is over: its card was settled with the turn.
                 let _ = write_elicitation_reply(&pending, json!({"action":"cancel"})).await;
             }
@@ -2772,6 +2852,14 @@ fn denied(tool_id: &str, message: &str) -> Value {
         "decisionClassification":"user_reject"})
 }
 
+/// Deny with the user's typed reason, so Claude knows what to do instead.
+fn denied_with_feedback(tool_id: &str, message: &str, feedback: Option<&str>) -> Value {
+    match feedback.map(str::trim).filter(|text| !text.is_empty()) {
+        Some(feedback) => denied(tool_id, &format!("{message}\n\nUser feedback: {feedback}")),
+        None => denied(tool_id, message),
+    }
+}
+
 fn allowed(tool_id: &str, input: Value, permanent: bool) -> Value {
     json!({"behavior":"allow", "updatedInput":input, "toolUseID":tool_id,
         "decisionClassification": if permanent { "user_permanent" } else { "user_temporary" }})
@@ -2781,21 +2869,17 @@ fn usd_cost(amount: f64) -> agent_client_protocol::schema::Cost {
     agent_client_protocol::schema::Cost::new(amount, "USD")
 }
 
-/// Permission updates Claude suggested for one scope. Session scope covers
-/// `session`/`cliArg`; always scope covers the persisted settings files.
-fn scoped_suggestions(suggestions: &Value, always: bool) -> Vec<Value> {
+/// Permission updates Claude suggested for its persisted settings files
+/// ("always allow"). Session-only suggestions are not offered.
+fn always_suggestions(suggestions: &Value) -> Vec<Value> {
     suggestions
         .as_array()
         .into_iter()
         .flatten()
         .filter(|update| {
             matches!(
-                (always, update["destination"].as_str()),
-                (false, Some("session" | "cliArg"))
-                    | (
-                        true,
-                        Some("userSettings" | "projectSettings" | "localSettings")
-                    )
+                update["destination"].as_str(),
+                Some("userSettings" | "projectSettings" | "localSettings")
             )
         })
         .cloned()
@@ -2898,20 +2982,23 @@ fn permission_reply(
             Ok(allowed(tool_id, pending.input.clone(), false))
         }
         PermissionKind::Approval => {
-            // None = deny; Some(None) = once; Some(Some(always)) = scoped.
+            // None = deny; Some(false) = once; Some(true) = always.
             let decision = match option {
-                Some("allow_once") => Some(None),
-                Some(ALLOW_SESSION_OPTION) => Some(Some(false)),
-                Some("allow_always") => Some(Some(true)),
+                Some("allow_once") => Some(false),
+                Some("allow_always") => Some(true),
                 Some("reject_once") => None,
-                None => request.approve.then_some(None),
+                None => request.approve.then_some(false),
                 Some(_) => return Err(service_error("Unknown Claude permission option")),
             };
             match decision {
-                None => Ok(denied(tool_id, "User denied the Tool request")),
-                Some(None) => Ok(allowed(tool_id, pending.input.clone(), false)),
-                Some(Some(always)) => {
-                    let updates = scoped_suggestions(&pending.suggestions, always);
+                None => Ok(denied_with_feedback(
+                    tool_id,
+                    "User denied the Tool request",
+                    request.feedback.as_deref(),
+                )),
+                Some(false) => Ok(allowed(tool_id, pending.input.clone(), false)),
+                Some(true) => {
+                    let updates = always_suggestions(&pending.suggestions);
                     if updates.is_empty() {
                         return Err(service_error("Claude did not offer this permission scope"));
                     }
@@ -3002,40 +3089,74 @@ fn parse_context_usage(response: &Value) -> Option<(u64, u64)> {
     Some((used, size))
 }
 
-fn permission_payload(id: &str, session_id: &str, request: &Value) -> Value {
+/// Runtime approval for a `can_use_tool` request (not a question).
+fn approval_ask(id: &str, session_id: &str, turn_id: &str, request: &Value) -> ApprovalAsk {
     let tool_name = request["tool_name"].as_str().unwrap_or("tool");
-    let option =
-        |id: &str, name: &str, kind: &str| json!({"optionId":id, "name":name, "kind":kind});
-    let options = match PermissionKind::of(tool_name) {
-        // The question card answers through `answers`; the bar only skips.
-        PermissionKind::Question => vec![option("reject_once", "Skip", "reject_once")],
-        // The plan review bar renders these with the plan and a feedback box.
-        PermissionKind::PlanReview => vec![
-            option(APPROVE_PLAN_OPTION, "Approve plan", "allow_once"),
-            option(KEEP_PLANNING_OPTION, "Keep planning", "reject_once"),
-        ],
-        PermissionKind::Approval => {
-            let suggestions = &request["permission_suggestions"];
-            let mut options = vec![option("allow_once", "Allow once", "allow_once")];
-            if !scoped_suggestions(suggestions, false).is_empty() {
-                options.push(option(
-                    ALLOW_SESSION_OPTION,
-                    "Allow for this session",
-                    "allow_session",
-                ));
-            }
-            if !scoped_suggestions(suggestions, true).is_empty() {
-                options.push(option("allow_always", "Always allow", "allow_always"));
-            }
-            options.push(option("reject_once", "Reject", "reject_once"));
-            options
+    let card_name = native_tool_name(tool_name);
+    let params = crate::tool_card::normalize_tool_params(&card_name, request["input"].clone());
+    let plan = (PermissionKind::of(tool_name) == PermissionKind::PlanReview).then(|| {
+        request["input"]["plan"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    });
+    let agent_always = (plan.is_none())
+        .then(|| always_scope_summary(&request["permission_suggestions"]))
+        .flatten();
+    let mut resources = interaction::resources_for_card(&card_name, &params);
+    if let Some(display) = request["display_name"]
+        .as_str()
+        .filter(|name| !name.trim().is_empty() && plan.is_none())
+    {
+        if resources
+            .first()
+            .is_some_and(|first| first.starts_with('{'))
+        {
+            resources = vec![display.to_string()];
         }
-    };
-    json!({"permissionId":id, "sessionId":session_id, "toolCall":{
-        "toolCallId":request["tool_use_id"], "title":request["display_name"].as_str().unwrap_or(tool_name),
-        "kind":match native_tool_name(tool_name).as_str() { "ExecCommand" => "execute", "Read" => "read", "Write" | "Edit" => "edit", _ => "other" },
-        "status":"pending", "rawInput":request["input"], "content":[]},
-        "options":options})
+    }
+    ApprovalAsk {
+        permission_id: id.to_string(),
+        session_id: session_id.to_string(),
+        turn_id: turn_id.to_string(),
+        tool_call_id: request["tool_use_id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        action: if plan.is_some() {
+            "plan_review".to_string()
+        } else {
+            interaction::action_for_card(&card_name).to_string()
+        },
+        resources: if plan.is_some() {
+            vec!["ExitPlanMode".to_string()]
+        } else {
+            resources
+        },
+        agent_always,
+        plan,
+        delegation: None,
+    }
+}
+
+/// What "always allow" writes to Claude settings, when Claude offers it.
+fn always_scope_summary(suggestions: &Value) -> Option<String> {
+    let rules: Vec<String> = always_suggestions(suggestions)
+        .iter()
+        .flat_map(|update| update["rules"].as_array().cloned().unwrap_or_default())
+        .filter_map(|rule| {
+            let tool = rule["toolName"].as_str()?;
+            Some(match rule["ruleContent"].as_str() {
+                Some(content) if !content.is_empty() => format!("{tool}({content})"),
+                _ => tool.to_string(),
+            })
+        })
+        .collect();
+    if !rules.is_empty() {
+        return Some(rules.join(", "));
+    }
+    // Directory or mode updates carry no rule list; still offer the scope.
+    (!always_suggestions(suggestions).is_empty()).then(|| "Claude settings".to_string())
 }
 
 fn read_lock(slot: &std::sync::Mutex<String>) -> String {

@@ -1790,7 +1790,6 @@ pub async fn run() {
             stop_acp_client,
             load_acp_json_config,
             save_acp_json_config,
-            submit_acp_permission_response,
             create_acp_flow_session,
             start_acp_dialog_turn,
             cancel_acp_dialog_turn,

@@ -108,6 +108,7 @@
     "allowAlwaysTooltip": "在 {{projectPath}} 中記住目前操作的授權，僅對以下範圍生效：\n{{resources}}",
     "allowAlwaysTooltipCurrentProject": "在目前專案中記住目前操作的授權，僅對以下範圍生效：\n{{resources}}",
     "allowAlwaysTooltipNoGrant": "此請求沒有可儲存的存取範圍；始終允許僅套用於這次請求。",
+    "allowAlwaysAgentTooltip": "{{agent}} 會在自己的設定中記住：{{scope}}",
     "risks": {
       "pageSave": "以{{visibility}}可見性儲存「{{slug}}」的新不可變版本，不變更目前正式版本。",
       "pagePublish": "以{{visibility}}可見性儲存「{{slug}}」，並切換其正式版本。",
@@ -121,6 +122,14 @@
     "reject": "拒絕",
     "rejectWithReason": "附理由拒絕",
     "rejectWithReasonTooltip": "以輸入框中的內容作為拒絕理由，送出後清空輸入框。",
+    "planReview": {
+      "title": "審閱 Claude 的計畫",
+      "missingPlan": "Claude 未提供計畫內容。請繼續規劃並讓 Claude 提出計畫。",
+      "keepPlanning": "繼續規劃",
+      "keepPlanningWithFeedback": "附回饋繼續規劃",
+      "keepPlanningWithFeedbackTooltip": "繼續規劃，並把輸入框中的內容作為回饋傳給智慧體，然後清空輸入框。",
+      "approve": "核准計畫"
+    },
     "scopeLabel": "回覆範圍",
     "scopeThis": "本次",
     "scopeAll": "全部",
@@ -2478,22 +2487,6 @@
       "textCount": "{{count}} 段文字",
       "imageCount": "{{count}} 張圖片",
       "resourceCount": "{{count}} 個資源"
-    },
-    "planReview": {
-      "title": "審閱 Claude 的計畫",
-      "missingPlan": "Claude 未提供計畫內容。請繼續規劃並讓 Claude 提出計畫。",
-      "feedbackPlaceholder": "繼續規劃時給 Claude 的選填回饋",
-      "keepPlanning": "繼續規劃",
-      "approve": "核准計畫",
-      "approveHint": "退出規劃模式，恢復先前的權限模式，並讓 Claude 開始實作"
-    },
-    "acpPermission": {
-      "allowSession": "本工作階段允許",
-      "allowOnce": "允許一次",
-      "allowAlways": "始終允許",
-      "reject": "拒絕一次",
-      "rejectAlways": "始終拒絕",
-      "selectOption": "選擇操作"
     },
     "default": {
       "waitingConfirm": "等待確認",

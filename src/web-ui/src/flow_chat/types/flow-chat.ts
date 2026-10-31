@@ -75,23 +75,6 @@ export interface FlowToolItem extends FlowItem {
   };
   requiresConfirmation?: boolean;
   userConfirmed?: boolean;
-  acpPermission?: {
-    permissionId: string;
-    sessionId?: string;
-    toolCallId?: string;
-    requestedAt: number;
-    options?: Array<{
-      optionId: string;
-      name: string;
-      kind: 'allow_once' | 'allow_session' | 'allow_always' | 'reject_once' | 'reject_always';
-    }>;
-    toolCall?: {
-      toolCallId?: string;
-      title?: string;
-      rawInput?: unknown;
-      content?: unknown;
-    };
-  };
   aiIntent?: string; // AI rationale for calling the tool.
   startTime?: number;  // Tool start time.
   endTime?: number;    // Tool end time.
@@ -130,11 +113,6 @@ export interface FlowToolItem extends FlowItem {
     monotonicDeadlineMs?: number;
     interactionStarted: boolean;
   };
-}
-
-export interface ToolRejectOptions {
-  permissionOptionId?: string;
-  instruction?: string;
 }
 
 export interface FlowImageAnalysisItem extends FlowItem {

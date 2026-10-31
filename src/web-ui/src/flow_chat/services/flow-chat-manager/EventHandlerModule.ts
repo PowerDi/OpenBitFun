@@ -53,7 +53,6 @@ import type {
   RecoverInterruptedDialogTurnResponse,
 } from '@/infrastructure/api/service-api/AgentAPI';
 import { MCPAPI } from '@/infrastructure/api/service-api/MCPAPI';
-import { ACPClientAPI, type AcpPermissionRequestEvent } from '@/infrastructure/api/service-api/ACPClientAPI';
 import { globalEventBus } from '@/infrastructure/event-bus';
 import type { FlowChatContext, DialogTurn, ModelRound, FlowToolItem } from './types';
 import type { Session, SteeringImage } from '../../types/flow-chat';
@@ -95,7 +94,6 @@ import {
   handleToolExecutionProgress,
   handleToolTerminalReady,
 } from './ToolEventModule';
-import { handleAcpPermissionRequestForToolCard } from './AcpPermissionToolCardModule';
 import {
   clearRuntimeStatus,
   scheduleModelResponseStatus,
@@ -858,9 +856,6 @@ export async function initializeEventListeners(
   const unlistenMcpInteractionRequest = api.listen('backend-event-mcpinteractionrequest', (payload: any) => {
     void handleMcpInteractionRequest((payload as any)?.value || payload);
   });
-  const unlistenAcpPermissionRequest = api.listen('backend-event-acppermissionrequest', (payload: any) => {
-    void handleAcpPermissionRequest((payload as any)?.value || payload);
-  });
 
   const callbacks: AgenticEventCallbacks = {
     onSessionCreated: (event) => {
@@ -969,7 +964,6 @@ export async function initializeEventListeners(
     unlistenTerminalReady();
     unlistenBackgroundCommandLifecycle();
     unlistenMcpInteractionRequest();
-    unlistenAcpPermissionRequest();
     cleanupAcpPlanState();
     cleanupAcpBackgroundTaskState();
     cleanupAcpRuntimeStatusState();
@@ -1009,28 +1003,6 @@ async function handleMcpInteractionRequest(rawEvent: unknown): Promise<void> {
       });
       notificationService.error(`MCP interaction failed: ${method}`);
     }
-  }
-}
-
-async function handleAcpPermissionRequest(rawEvent: unknown): Promise<void> {
-  const event = rawEvent as AcpPermissionRequestEvent | undefined;
-  const permissionId = event?.permissionId;
-  if (!permissionId) {
-    log.warn('Received invalid ACP permission request event', { rawEvent });
-    return;
-  }
-
-  if (handleAcpPermissionRequestForToolCard(event)) return;
-
-  log.warn('ACP permission request cannot be matched to a tool card, rejecting request', { permissionId });
-  try {
-    await ACPClientAPI.submitPermissionResponse({
-      permissionId,
-      approve: false,
-    });
-  } catch (error) {
-    log.error('Failed to submit ACP permission auto-rejection', { permissionId, error });
-    notificationService.error('Failed to respond to ACP permission request');
   }
 }
 

@@ -763,7 +763,6 @@ pub(super) const OPERATIONS: &[OperationDefinition] = &[
     op("stop_acp_session_task",                                      Routed,      Proxied,          CLI_NOT_IMPLEMENTED),
     op("stop_file_watch",                                            Agnostic,    Proxied,          CLI_NOT_IMPLEMENTED),
     op("stop_mcp_server",                                            Unaudited,   Proxied,          CLI_NOT_IMPLEMENTED),
-    op("submit_acp_permission_response",                             Unaudited,   Proxied,          CLI_NOT_IMPLEMENTED),
     op("submit_mcp_interaction_response",                            Unaudited,   Proxied,          CLI_NOT_IMPLEMENTED),
     op("submit_user_answers",                                        Agnostic,    Proxied,          HANDLED),
     op("subscribe_permission_requests",                              Agnostic,    Proxied,          HANDLED),

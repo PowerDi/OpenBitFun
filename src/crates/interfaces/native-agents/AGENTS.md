@@ -19,6 +19,9 @@ runtime-ownership plan are in
   this crate for the shared external-CLI utilities.
 - Keep host-specific APIs (Tauri) out; hosts receive presentation updates
   through `NativeAgentNotificationSink`.
+- Approvals and questions go through `interaction.rs` to the runtime
+  permission and user-question owners. Do not add a custom event or a
+  driver-specific answer command; every surface answers through the mailbox.
 
 ## Drivers
 

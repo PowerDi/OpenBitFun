@@ -367,34 +367,6 @@ export interface AcpSessionOptionsChangedEvent {
   clientId: string;
 }
 
-export interface SubmitAcpPermissionResponseRequest {
-  permissionId: string;
-  approve: boolean;
-  optionId?: string;
-  /** Native question answers keyed by question index (or question text). */
-  answers?: Record<string, string | string[]>;
-  /** Optional free-text feedback sent with a rejection. */
-  feedback?: string;
-}
-
-export interface AcpPermissionOption {
-  optionId: string;
-  name: string;
-  kind: 'allow_once' | 'allow_session' | 'allow_always' | 'reject_once' | 'reject_always';
-}
-
-export interface AcpPermissionRequestEvent {
-  permissionId: string;
-  sessionId: string;
-  toolCall?: {
-    toolCallId?: string;
-    title?: string;
-    rawInput?: unknown;
-    content?: unknown;
-  };
-  options?: AcpPermissionOption[];
-}
-
 const LOCAL_REQUIREMENT_CACHE_KEY = '__local__';
 const CLIENT_LIST_CACHE_TTL_MS = 1000;
 const requirementProbeCache = new Map<string, AcpClientRequirementProbe[]>();
@@ -645,12 +617,6 @@ export class ACPClientAPI {
     };
 
     await ACPClientAPI.saveJsonConfig(JSON.stringify(config, null, 2));
-  }
-
-  static async submitPermissionResponse(
-    request: SubmitAcpPermissionResponseRequest
-  ): Promise<void> {
-    return api.invoke('submit_acp_permission_response', { request });
   }
 
   static async createFlowSession(

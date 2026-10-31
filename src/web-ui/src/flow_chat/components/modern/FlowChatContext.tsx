@@ -6,7 +6,7 @@
 import { createContext, useContext } from 'react';
 import type React from 'react';
 import type { FlowGroupReceiveFeedback } from '@openbitfun/ui/flow-chat';
-import type { Session, ToolRejectOptions } from '../../types/flow-chat';
+import type { Session } from '../../types/flow-chat';
 import { type LineRange } from '@/shared/editor/LineRange';
 import type { SearchMatch } from './useFlowChatSearch';
 
@@ -22,10 +22,6 @@ export interface FlowChatContextValue {
   onTabOpen?: (tabInfo: any, sessionId?: string, panelType?: string) => void;
   onHttpLinkClick?: (url: string, event: React.MouseEvent<HTMLAnchorElement>) => boolean | void;
   onOpenVisualization?: (type: string, data: any) => void;
-
-  // Tool actions
-  onToolConfirm?: (toolId: string, permissionOptionId?: string, approve?: boolean) => Promise<void>;
-  onToolReject?: (toolId: string, options?: ToolRejectOptions) => Promise<void>;
 
   // Session info (scalars only — never put the whole session object here from
   // providers that update on every streaming flush).

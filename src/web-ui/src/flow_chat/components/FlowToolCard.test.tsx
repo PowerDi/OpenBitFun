@@ -45,7 +45,6 @@ vi.mock('./FlowToolCardErrorBoundary', () => ({
   FlowToolCardErrorBoundary: ({ children }: { children: React.ReactNode }) => children,
 }));
 
-vi.mock('./ToolApprovalBar', () => ({ ToolApprovalBar: () => null }));
 
 vi.mock('../tool-cards/DefaultToolCard', () => ({
   DefaultToolCard: ({ toolItem }: { toolItem: FlowToolItem }) => (

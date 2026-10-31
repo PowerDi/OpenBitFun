@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "fnv1a64:c48699263f3bec76",
+  "digest": "fnv1a64:ba5c32dc8cee9bcf",
   "retiredCommandPrefixes": [
     {
       "prefix": "lsp_",
@@ -8068,18 +8068,6 @@
     },
     {
       "id": "stop_mcp_server",
-      "surface": "tauri_command",
-      "remoteWorkspace": "LegacyUnaudited",
-      "peer": {
-        "kind": "proxied"
-      },
-      "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
-      }
-    },
-    {
-      "id": "submit_acp_permission_response",
       "surface": "tauri_command",
       "remoteWorkspace": "LegacyUnaudited",
       "peer": {

@@ -201,11 +201,7 @@ async fn approval_round_trip_and_turn_end_cancels_unanswered_requests() {
     let params = json!({"threadId":"th1","turnId":"ct1","itemId":"c1","command":"cargo test",
         "proposedExecpolicyAmendment":["cargo","test"]});
     for (id, option, expected) in [
-        (
-            "p1",
-            "allow_session",
-            json!({"decision":"acceptForSession"}),
-        ),
+        ("p1", "allow_once", json!({"decision":"accept"})),
         ("p2", "reject_once", json!({"decision":"decline"})),
         (
             "p3",
@@ -415,30 +411,40 @@ async fn unmaterialized_thread_without_turns_starts_afresh() {
 }
 
 #[test]
-fn approval_options_follow_available_decisions() {
-    let ids = |params: Value| -> Vec<String> {
-        permission_payload(
+fn always_allow_follows_available_decisions() {
+    let always = |params: Value| {
+        approval_ask(
             "p",
             "s",
+            "t",
             "item/commandExecution/requestApproval",
             "c1",
-            "ExecCommand",
-            "execute",
-            &json!({}),
             &params,
-        )["options"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|o| o["optionId"].as_str().unwrap().to_string())
-            .collect()
+        )
+        .agent_always
     };
     // Shape sent by codex-cli 0.163.0 for a shell write on Windows.
     let live = json!({"command":"pwsh","proposedExecpolicyAmendment":["pwsh"],
         "availableDecisions":["accept",{"acceptWithExecpolicyAmendment":{"execpolicy_amendment":["pwsh"]}},"cancel"]});
-    assert_eq!(ids(live), ["allow_once", "allow_always", "reject_once"]);
-    let legacy = json!({"command":"ls"});
-    assert_eq!(ids(legacy), ["allow_once", "allow_session", "reject_once"]);
+    assert_eq!(
+        always(live).as_deref(),
+        Some("Commands starting with: pwsh")
+    );
+    let declined = json!({"command":"pwsh","proposedExecpolicyAmendment":["pwsh"],
+        "availableDecisions":["accept","cancel"]});
+    assert_eq!(always(declined), None);
+    let ask = approval_ask(
+        "p",
+        "s",
+        "t",
+        "item/commandExecution/requestApproval",
+        "c1",
+        &json!({"command":"ls"}),
+    );
+    assert_eq!(
+        (ask.action.as_str(), ask.resources.as_slice()),
+        ("bash", &["ls".to_string()][..])
+    );
 }
 
 /// Parent turn `t1` (Codex `ct1`) on thread `th1` that spawns `children`.

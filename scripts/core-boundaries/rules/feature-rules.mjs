@@ -687,6 +687,11 @@ export const capabilityContractDependencyRules = [
       ['openbitfun-cli', capabilityConsumer([
         capabilityEdge(['agent-runtime']),
       ])],
+      // Native agent approvals and questions are registered with the runtime
+      // permission and user-question owners.
+      ['openbitfun-native-agents', capabilityConsumer([
+        capabilityEdge(['agent-runtime']),
+      ])],
       ['openbitfun-core', capabilityConsumer(
         [capabilityEdge([], { optional: true })],
         [

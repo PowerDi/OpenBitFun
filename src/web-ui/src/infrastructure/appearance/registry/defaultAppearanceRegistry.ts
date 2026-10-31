@@ -227,7 +227,6 @@ import { openBitFunControlToolCardAppearanceDescriptor } from '@/flow_chat/tool-
 import { miniAppToolDisplayAppearanceDescriptor } from '@/flow_chat/tool-cards/MiniAppToolDisplay.appearance';
 import { modelThinkingDisplayAppearanceDescriptor } from '@/flow_chat/tool-cards/ModelThinkingDisplay.appearance';
 import { toolTimeoutIndicatorAppearanceDescriptor } from '@/flow_chat/tool-cards/ToolTimeoutIndicator.appearance';
-import { acpPermissionActionsAppearanceDescriptor } from '@/flow_chat/tool-cards/AcpPermissionActions.appearance';
 import { acpPlanPanelAppearanceDescriptor } from '@/flow_chat/components/AcpPlanPanel.appearance';
 import { backgroundCommandInputDialogAppearanceDescriptor } from '@/flow_chat/components/background-command/BackgroundCommandInputDialog.appearance';
 import { chatEmptyStateAppearanceDescriptor } from '@/flow_chat/components/ChatEmptyState.appearance';
@@ -241,7 +240,6 @@ import { scrollToBottomButtonAppearanceDescriptor } from '@/flow_chat/components
 import { scrollToLatestBarAppearanceDescriptor } from '@/flow_chat/components/ScrollToLatestBar.appearance';
 import { scrollToTurnHeaderButtonAppearanceDescriptor } from '@/flow_chat/components/ScrollToTurnHeaderButton.appearance';
 import { tokenUsageIndicatorAppearanceDescriptor } from '@/flow_chat/components/TokenUsageIndicator.appearance';
-import { toolApprovalBarAppearanceDescriptor } from '@/flow_chat/components/ToolApprovalBar.appearance';
 import { smartRecommendationsAppearanceDescriptor } from '@/flow_chat/components/smart-recommendations/SmartRecommendations.appearance';
 import { sessionRuntimeStatusEntryAppearanceDescriptor } from '@/flow_chat/components/usage/SessionRuntimeStatusEntry.appearance';
 import { runtimeStatusSlotAppearanceDescriptor } from '@/flow_chat/components/modern/RuntimeStatusSlot.appearance';
@@ -471,7 +469,6 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(miniAppToolDisplayAppearanceDescriptor)
     .registerComponent(modelThinkingDisplayAppearanceDescriptor)
     .registerComponent(toolTimeoutIndicatorAppearanceDescriptor)
-    .registerComponent(acpPermissionActionsAppearanceDescriptor)
     .registerComponent(acpPlanPanelAppearanceDescriptor)
     .registerComponent(backgroundCommandInputDialogAppearanceDescriptor)
     .registerComponent(chatEmptyStateAppearanceDescriptor)
@@ -485,7 +482,6 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(scrollToLatestBarAppearanceDescriptor)
     .registerComponent(scrollToTurnHeaderButtonAppearanceDescriptor)
     .registerComponent(tokenUsageIndicatorAppearanceDescriptor)
-    .registerComponent(toolApprovalBarAppearanceDescriptor)
     .registerComponent(smartRecommendationsAppearanceDescriptor)
     .registerComponent(sessionRuntimeStatusEntryAppearanceDescriptor)
     .registerComponent(runtimeStatusSlotAppearanceDescriptor)

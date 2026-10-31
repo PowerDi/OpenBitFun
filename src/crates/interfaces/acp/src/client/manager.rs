@@ -24,7 +24,6 @@ use futures::io::{AsyncRead as FuturesAsyncRead, AsyncWrite as FuturesAsyncWrite
 use log::{debug, info, warn};
 use openbitfun_agent_tools::ACP_TOOL_PREFIX;
 use openbitfun_core::agentic::tools::registry::get_global_tool_registry;
-use openbitfun_core::infrastructure::events::{emit_global_event, BackendEvent};
 use openbitfun_core::infrastructure::PathManager;
 use openbitfun_core::service::config::ConfigService;
 use openbitfun_core::service::remote_ssh::workspace_state::get_remote_workspace_manager;
@@ -58,6 +57,10 @@ use super::stream::{
 };
 use super::tool::AcpAgentTool;
 use super::transport::{handle_transport_closed, AcpTransport};
+use openbitfun_core::runtime_ports::PermissionReply;
+use openbitfun_native_agents::interaction::{
+    self as runtime_interaction, ApprovalAsk, InteractionScope, PermissionWaitOutcome,
+};
 use openbitfun_native_agents::process_tree::{
     configure_process_group, terminate_child_process_tree,
 };
@@ -71,7 +74,7 @@ use openbitfun_native_agents::session_options::{
 use openbitfun_native_agents::CreateAcpFlowSessionRecordResponse;
 use openbitfun_native_agents::{
     self as native, AcpSessionConfigValue, AcpSessionPersistence, NativeAgentDriver,
-    NativeAgentOpenContext, NativeAgentSession, SubmitAcpPermissionResponseRequest,
+    NativeAgentOpenContext, NativeAgentSession,
 };
 
 const CONFIG_PATH: &str = "acp_clients";
@@ -88,13 +91,6 @@ const TURN_COMPLETION_DRAIN_MAX_DURATION: Duration = Duration::from_secs(2);
 
 type AcpOutgoingStream = Pin<Box<dyn FuturesAsyncWrite + Send>>;
 type AcpIncomingStream = Pin<Box<dyn FuturesAsyncRead + Send>>;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AcpClientPermissionResponse {
-    pub permission_id: String,
-    pub resolved: bool,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -145,19 +141,26 @@ pub struct AcpClientService {
     clients: DashMap<String, Arc<AcpClientConnection>>,
     native_sessions: DashMap<String, Arc<dyn NativeAgentSession>>,
     native_preparation: Mutex<()>,
-    pending_permissions: DashMap<String, PendingPermission>,
     session_permission_modes: DashMap<String, AcpClientPermissionMode>,
+    /// Agent session id -> the OpenBitFun session that shows its approvals.
+    session_bindings: DashMap<String, AcpSessionBinding>,
 }
 
-struct PendingPermission {
-    sender: oneshot::Sender<RequestPermissionResponse>,
-    options: Vec<PermissionOption>,
+/// Where an agent session's approvals are shown and answered.
+#[derive(Debug, Clone)]
+struct AcpSessionBinding {
+    openbitfun_session_id: String,
+    client_id: String,
+    agent_name: String,
+    workspace_path: String,
+    remote_connection_id: Option<String>,
 }
 
 struct AcpClientConnection {
     id: String,
     client_id: String,
     config: AcpClientConfig,
+    remote_connection_id: Option<String>,
     status: RwLock<AcpClientStatus>,
     connection: RwLock<Option<ConnectionTo<Agent>>>,
     agent_capabilities: RwLock<Option<AgentCapabilities>>,
@@ -223,8 +226,8 @@ impl AcpClientService {
             clients: DashMap::new(),
             native_sessions: DashMap::new(),
             native_preparation: Mutex::new(()),
-            pending_permissions: DashMap::new(),
             session_permission_modes: DashMap::new(),
+            session_bindings: DashMap::new(),
         }))
     }
 
@@ -862,6 +865,7 @@ impl AcpClientService {
                 connection_id.to_string(),
                 client_id.to_string(),
                 config,
+                remote_connection_id.clone(),
             ));
 
             match claim_client_start(&self.clients, connection_id, candidate) {
@@ -1135,6 +1139,7 @@ impl AcpClientService {
                 };
 
                 self.session_permission_modes.remove(&remote_session_id);
+                self.session_bindings.remove(&remote_session_id);
                 let connection = cancel_handle
                     .as_ref()
                     .map(|handle| handle.connection.clone());
@@ -1197,43 +1202,6 @@ impl AcpClientService {
             .await?;
         self.remote_capability_store.clear().await?;
         self.initialize_all().await
-    }
-
-    pub async fn submit_permission_response(
-        &self,
-        request: SubmitAcpPermissionResponseRequest,
-    ) -> OpenBitFunResult<AcpClientPermissionResponse> {
-        let sessions: Vec<_> = self
-            .native_sessions
-            .iter()
-            .map(|entry| entry.value().clone())
-            .collect();
-        for session in sessions {
-            if session.respond_permission(&request).await? {
-                return Ok(AcpClientPermissionResponse {
-                    permission_id: request.permission_id,
-                    resolved: true,
-                });
-            }
-        }
-        let Some((_, pending)) = self.pending_permissions.remove(&request.permission_id) else {
-            return Err(OpenBitFunError::NotFound(format!(
-                "ACP permission request not found: {}",
-                request.permission_id
-            )));
-        };
-
-        let option_id = request
-            .option_id
-            .unwrap_or_else(|| select_permission_option_id(&pending.options, request.approve));
-        let response = RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
-            SelectedPermissionOutcome::new(option_id),
-        ));
-        let _ = pending.sender.send(response);
-        Ok(AcpClientPermissionResponse {
-            permission_id: request.permission_id,
-            resolved: true,
-        })
     }
 
     pub async fn get_session_options(
@@ -1836,6 +1804,7 @@ impl AcpClientService {
             self.attach_remote_session(
                 client,
                 session_key,
+                cwd,
                 openbitfun_session_id,
                 session_storage_path,
                 session,
@@ -1876,10 +1845,12 @@ impl AcpClientService {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn attach_remote_session(
         &self,
         client: &Arc<AcpClientConnection>,
         session_key: &str,
+        cwd: &Path,
         openbitfun_session_id: &str,
         session_storage_path: Option<&Path>,
         session: &mut AcpRemoteSession,
@@ -1903,6 +1874,21 @@ impl AcpClientService {
         );
         self.session_permission_modes
             .insert(remote_session_id.clone(), client.config.permission_mode);
+        self.session_bindings.insert(
+            remote_session_id.clone(),
+            AcpSessionBinding {
+                openbitfun_session_id: openbitfun_session_id.to_string(),
+                client_id: client.client_id.clone(),
+                agent_name: client
+                    .config
+                    .name
+                    .clone()
+                    .filter(|name| !name.trim().is_empty())
+                    .unwrap_or_else(|| client.client_id.clone()),
+                workspace_path: cwd.to_string_lossy().replace('\\', "/"),
+                remote_connection_id: client.remote_connection_id.clone(),
+            },
+        );
         if let Some(session_storage_path) = session_storage_path {
             self.session_persistence
                 .update_remote_session_state(
@@ -1985,44 +1971,45 @@ impl AcpClientService {
             AcpClientPermissionMode::Ask => {}
         }
 
-        let permission_id = format!("acp_permission_{}", uuid::Uuid::new_v4());
-        let (tx, rx) = oneshot::channel();
-        self.pending_permissions.insert(
-            permission_id.clone(),
-            PendingPermission {
-                sender: tx,
-                options: request.options.clone(),
-            },
-        );
-
-        let payload = json!({
-            "permissionId": permission_id,
-            "sessionId": session_id,
-            "toolCall": request.tool_call,
-            "options": request.options,
-        });
-
-        if let Err(error) = emit_global_event(BackendEvent::Custom {
-            event_name: "backend-event-acppermissionrequest".to_string(),
-            payload,
-        })
-        .await
-        {
-            warn!("Failed to emit ACP permission request: {}", error);
-        }
-
-        match tokio::time::timeout(PERMISSION_TIMEOUT, rx).await {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(_)) => Ok(RequestPermissionResponse::new(
+        let Some(binding) = self
+            .session_bindings
+            .get(&session_id)
+            .map(|entry| entry.clone())
+        else {
+            warn!(
+                "ACP permission request for an unbound session; cancelled: session_id={session_id}"
+            );
+            return Ok(RequestPermissionResponse::new(
                 RequestPermissionOutcome::Cancelled,
-            )),
-            Err(_) => {
-                self.pending_permissions.remove(&permission_id);
-                Ok(RequestPermissionResponse::new(
+            ));
+        };
+        let permission_id = format!("acp_permission_{}", uuid::Uuid::new_v4());
+        let (ask, scope) = acp_approval_ask(&permission_id, &binding, &request);
+        let receiver = match runtime_interaction::register_approval(&scope, &ask).await {
+            Ok(receiver) => receiver,
+            Err(error) => {
+                warn!("Failed to publish ACP permission request: {error}");
+                return Ok(RequestPermissionResponse::new(
                     RequestPermissionOutcome::Cancelled,
-                ))
+                ));
             }
-        }
+        };
+        let outcome = match tokio::time::timeout(PERMISSION_TIMEOUT, receiver.wait()).await {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                runtime_interaction::withdraw(&permission_id, None, "ACP permission timed out")
+                    .await;
+                return Ok(RequestPermissionResponse::new(
+                    RequestPermissionOutcome::Cancelled,
+                ));
+            }
+        };
+        Ok(match outcome {
+            PermissionWaitOutcome::Replied(reply) => acp_permission_response(&request, &reply),
+            PermissionWaitOutcome::Cancelled { .. } => {
+                RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
+            }
+        })
     }
 
     fn permission_mode_for_session(&self, session_id: &str) -> AcpClientPermissionMode {
@@ -2299,11 +2286,17 @@ fn current_unix_timestamp_ms() -> u64 {
 }
 
 impl AcpClientConnection {
-    fn new(id: String, client_id: String, config: AcpClientConfig) -> Self {
+    fn new(
+        id: String,
+        client_id: String,
+        config: AcpClientConfig,
+        remote_connection_id: Option<String>,
+    ) -> Self {
         Self {
             id,
             client_id,
             config,
+            remote_connection_id,
             status: RwLock::new(AcpClientStatus::Starting),
             connection: RwLock::new(None),
             agent_capabilities: RwLock::new(None),
@@ -2907,6 +2900,78 @@ fn is_startup_timeout_error(error: &OpenBitFunError) -> bool {
     error.to_string().contains(STARTUP_TIMEOUT_ERROR_PREFIX)
 }
 
+/// Runtime approval for an ACP `session/request_permission`.
+fn acp_approval_ask(
+    permission_id: &str,
+    binding: &AcpSessionBinding,
+    request: &RequestPermissionRequest,
+) -> (ApprovalAsk, InteractionScope) {
+    let tool_call_id = request.tool_call.tool_call_id.to_string();
+    let fields = &request.tool_call.fields;
+    let action = match fields.kind {
+        Some(agent_client_protocol::schema::ToolKind::Execute) => "bash",
+        Some(agent_client_protocol::schema::ToolKind::Edit)
+        | Some(agent_client_protocol::schema::ToolKind::Delete)
+        | Some(agent_client_protocol::schema::ToolKind::Move) => "edit",
+        Some(agent_client_protocol::schema::ToolKind::Read)
+        | Some(agent_client_protocol::schema::ToolKind::Search) => "read",
+        Some(agent_client_protocol::schema::ToolKind::Fetch) => "webfetch",
+        _ => "custom_tool",
+    };
+    let resource = fields
+        .title
+        .clone()
+        .filter(|title| !title.trim().is_empty())
+        .or_else(|| {
+            fields
+                .raw_input
+                .as_ref()
+                .and_then(|input| serde_json::to_string(input).ok())
+        })
+        .unwrap_or_else(|| tool_call_id.clone());
+    let always_offered = request
+        .options
+        .iter()
+        .any(|option| option.kind == PermissionOptionKind::AllowAlways);
+    let ask = ApprovalAsk {
+        permission_id: permission_id.to_string(),
+        session_id: binding.openbitfun_session_id.clone(),
+        // ACP requests carry no OpenBitFun turn; group them per tool call.
+        turn_id: format!("acp:{tool_call_id}"),
+        tool_call_id,
+        action: action.to_string(),
+        resources: vec![resource],
+        agent_always: always_offered.then(|| format!("{} settings", binding.agent_name)),
+        plan: None,
+        delegation: None,
+    };
+    let scope = InteractionScope {
+        client_id: binding.client_id.clone(),
+        agent_name: binding.agent_name.clone(),
+        workspace_path: binding.workspace_path.clone(),
+        remote_connection_id: binding.remote_connection_id.clone(),
+    };
+    (ask, scope)
+}
+
+/// The agent's option for a runtime reply.
+fn acp_permission_response(
+    request: &RequestPermissionRequest,
+    reply: &PermissionReply,
+) -> RequestPermissionResponse {
+    match reply {
+        PermissionReply::Always => {
+            select_permission_by_kind(request, PermissionOptionKind::AllowAlways, true)
+        }
+        PermissionReply::Once | PermissionReply::OnceWithInput { .. } => {
+            select_permission_by_kind(request, PermissionOptionKind::AllowOnce, true)
+        }
+        PermissionReply::Reject { .. } => {
+            select_permission_by_kind(request, PermissionOptionKind::RejectOnce, false)
+        }
+    }
+}
+
 fn select_permission_by_kind(
     request: &RequestPermissionRequest,
     preferred: PermissionOptionKind,
@@ -2979,6 +3044,7 @@ mod tests {
                 subagent: Default::default(),
                 permission_mode: AcpClientPermissionMode::Ask,
             },
+            None,
         ))
     }
 

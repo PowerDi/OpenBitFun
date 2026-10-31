@@ -13,7 +13,7 @@ import { useTranslation } from 'react-i18next';
 import { subscribeOverlayInteraction, createOverlayPortal, Button, Disclosure, Icon, IconButton, Menu, MenuItem, Tooltip } from '@openbitfun/ui';
 import { AmbientToolCard, AmbientToolCardHeader, FlowChatMetric, FlowChatMetricDetails, ToolCardSection, ToolCardText } from '@openbitfun/ui/flow-chat';
 import { CircleAlert, Wifi } from 'lucide-react';
-import type { ModelRound, ModelRoundAttempt, ModelRoundAttemptDiagnostic, FlowItem, FlowTextItem, FlowToolItem, FlowThinkingItem, ToolRejectOptions } from '../../types/flow-chat';
+import type { ModelRound, ModelRoundAttempt, ModelRoundAttemptDiagnostic, FlowItem, FlowTextItem, FlowToolItem, FlowThinkingItem } from '../../types/flow-chat';
 import { useI18n } from '@/infrastructure/i18n';
 import { FlowTextBlock } from '../FlowTextBlock';
 import { FlowToolCard } from '../FlowToolCard';
@@ -885,8 +885,6 @@ const FlowItemRenderer: React.FC<FlowItemRendererProps> = ({
   capsuleRow,
 }) => {
   const {
-    onToolConfirm,
-    onToolReject,
     onFileViewRequest,
     onTabOpen,
     sessionId,
@@ -934,16 +932,6 @@ const FlowItemRenderer: React.FC<FlowItemRendererProps> = ({
               toolItem={toolItem}
               parallel={capsuleRow !== undefined}
               isLastItem={isLastItem}
-              onConfirm={async (toolId: string, permissionOptionId?: string, approve?: boolean) => {
-                if (onToolConfirm) {
-                  await onToolConfirm(toolId, permissionOptionId, approve);
-                }
-              }}
-              onReject={async (_toolId: string, options?: ToolRejectOptions) => {
-                if (onToolReject) {
-                  await onToolReject(item.id, options);
-                }
-              }}
               onOpenInEditor={(filePath: string) => {
                 if (onFileViewRequest) {
                   onFileViewRequest(filePath, filePath.split(/[/\\]/).pop() || filePath);

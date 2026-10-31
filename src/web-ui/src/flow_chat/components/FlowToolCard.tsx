@@ -13,23 +13,17 @@ import { getToolItemCardConfig, isToolCapsule } from '../tool-cards/toolCardMeta
 import { getToolCapsuleSummary, toolCapsuleStateKey } from '../tool-cards/toolCapsuleModel';
 import { ToolCapsuleRecord } from '../tool-cards/ToolCapsuleRecord';
 import { useToolCardHeightContract } from '../tool-cards/useToolCardHeightContract';
-import type { FlowToolItem, ToolCardDisplayContext, ToolRejectOptions } from '../types/flow-chat';
-import { createLogger } from '@/shared/utils/logger';
+import type { FlowToolItem, ToolCardDisplayContext } from '../types/flow-chat';
 import { FlowToolCardErrorBoundary } from './FlowToolCardErrorBoundary';
 import { useI18n } from '@/infrastructure/i18n';
 import { getToolInterruptionNote } from '../utils/toolInterruption';
-import { ToolApprovalBar } from './ToolApprovalBar';
 import { projectEffectiveToolItem } from '../utils/toolInvocationIdentity';
 import { isToolCardVisible } from '../utils/flowItemVisibility';
 import { useFlowChatContext, useFlowChatVolatileContext } from './modern/FlowChatContext';
 import './FlowToolCard.scss';
 
-const log = createLogger('FlowToolCard');
-
 interface FlowToolCardProps {
   toolItem: FlowToolItem;
-  onConfirm?: (toolId: string, permissionOptionId?: string, approve?: boolean) => void;
-  onReject?: (toolId: string, options?: ToolRejectOptions) => void;
   onOpenInEditor?: (filePath: string) => void;
   onOpenInPanel?: (panelType: string, data: any) => void;
   onExpand?: (toolId: string) => void;
@@ -44,8 +38,6 @@ interface FlowToolCardProps {
 
 export const FlowToolCard: React.FC<FlowToolCardProps> = React.memo(({
   toolItem,
-  onConfirm,
-  onReject,
   onOpenInEditor,
   onOpenInPanel,
   onExpand,
@@ -85,20 +77,6 @@ export const FlowToolCard: React.FC<FlowToolCardProps> = React.memo(({
     pendingPermissionToolCallIds?.has(toolItem.toolCall.id) === true);
   const capsuleEligible = !toolItem.importedSource && isToolCapsule(effectiveToolItem.toolName) && !permissionPending;
   const staticAgentWaitCapsule = capsuleEligible && effectiveToolItem.toolName === 'AgentWait';
-
-  const handleConfirm = React.useCallback((permissionOptionId?: string, approve?: boolean) => {
-    log.debug('handleConfirm called', {
-      toolId: toolItem.id,
-      toolName: effectiveToolItem.toolName,
-      hasPermissionOption: Boolean(permissionOptionId),
-      approve
-    });
-    onConfirm?.(toolItem.id, permissionOptionId, approve);
-  }, [effectiveToolItem.toolName, toolItem.id, onConfirm]);
-
-  const handleReject = React.useCallback((options?: ToolRejectOptions) => {
-    onReject?.(toolItem.id, options);
-  }, [toolItem.id, onReject]);
 
   const handleExpand = React.useCallback(() => {
     onExpand?.(toolItem.id);
@@ -164,11 +142,6 @@ export const FlowToolCard: React.FC<FlowToolCardProps> = React.memo(({
           />
         </ToolCapsulePresentationProvider>
       </FlowToolCardErrorBoundary>
-      {!toolItem.importedSource && <ToolApprovalBar
-        toolItem={effectiveToolItem}
-        onConfirm={handleConfirm}
-        onReject={handleReject}
-      />}
       </FlowChatCardReaderProvider>
       {interruptionNote && !cardHandlesInterruptionNote && (
         <div
@@ -197,8 +170,6 @@ export const FlowToolCard: React.FC<FlowToolCardProps> = React.memo(({
     prevProps.sessionId === nextProps.sessionId &&
     prevProps.turnId === nextProps.turnId &&
     prevProps.className === nextProps.className &&
-    prevProps.onConfirm === nextProps.onConfirm &&
-    prevProps.onReject === nextProps.onReject &&
     prevProps.onOpenInEditor === nextProps.onOpenInEditor &&
     prevProps.onOpenInPanel === nextProps.onOpenInPanel &&
     prevProps.onExpand === nextProps.onExpand &&
@@ -207,7 +178,6 @@ export const FlowToolCard: React.FC<FlowToolCardProps> = React.memo(({
     prevProps.toolItem.terminalSessionId === nextProps.toolItem.terminalSessionId &&
     prevProps.toolItem.userConfirmed === nextProps.toolItem.userConfirmed &&
     prevProps.toolItem.requiresConfirmation === nextProps.toolItem.requiresConfirmation &&
-    prevProps.toolItem.acpPermission === nextProps.toolItem.acpPermission &&
     prevProps.toolItem.isParamsStreaming === nextProps.toolItem.isParamsStreaming &&
     prevProps.toolItem.subagentSessionId === nextProps.toolItem.subagentSessionId &&
     prevProps.toolItem.subagentDialogTurnId === nextProps.toolItem.subagentDialogTurnId &&

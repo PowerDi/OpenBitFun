@@ -2,10 +2,10 @@
   "schemaVersion": 2,
   "generatedFrom": "src/shared/interactive-capabilities/catalog.json",
   "catalogDigest": "9ec82305067852766c79ed3d802c3a16f1c4dd992f7d3195f91a2989da32f544",
-  "commandCount": 712,
+  "commandCount": 711,
   "coverage": {
-    "commandCount": 712,
-    "documentedCommandCount": 652,
+    "commandCount": 711,
+    "documentedCommandCount": 651,
     "implementationCommandCount": 60,
     "implementationDigest": "5047b674e890f899e65baf9235e9df4bd912fa28f44eb10a656e079a1b89974d"
   },
@@ -2963,7 +2963,7 @@
       "visibility": "documented",
       "rustPath": "get_acp_session_options",
       "sourceFile": "src/apps/desktop/src/api/acp_client_api.rs",
-      "signature": "fn get_acp_session_options( state: State<'_, AppState>, app_handle: AppHandle, request: GetAcpSessionOptionsRequest, ) -> Result<AcpSessionOptions, String>",
+      "signature": "fn get_acp_session_options( state: State<'_, AppState>, request: GetAcpSessionOptionsRequest, ) -> Result<AcpSessionOptions, String>",
       "remoteWorkspacePolicy": "LegacyUnaudited"
     },
     {
@@ -8636,7 +8636,7 @@
       "visibility": "documented",
       "rustPath": "rollback_acp_session_turn",
       "sourceFile": "src/apps/desktop/src/api/acp_client_api.rs",
-      "signature": "fn rollback_acp_session_turn( state: State<'_, AppState>, app_handle: AppHandle, request: RollbackAcpSessionTurnRequest, ) -> Result<RollbackAcpSessionTurnResponse, String>",
+      "signature": "fn rollback_acp_session_turn( state: State<'_, AppState>, request: RollbackAcpSessionTurnRequest, ) -> Result<RollbackAcpSessionTurnResponse, String>",
       "remoteWorkspacePolicy": "RemoteRouted"
     },
     {
@@ -9150,7 +9150,7 @@
       "visibility": "documented",
       "rustPath": "set_acp_session_model",
       "sourceFile": "src/apps/desktop/src/api/acp_client_api.rs",
-      "signature": "fn set_acp_session_model( state: State<'_, AppState>, app_handle: AppHandle, request: SetAcpSessionModelRequest, ) -> Result<AcpSessionOptions, String>",
+      "signature": "fn set_acp_session_model( state: State<'_, AppState>, request: SetAcpSessionModelRequest, ) -> Result<AcpSessionOptions, String>",
       "remoteWorkspacePolicy": "LegacyUnaudited"
     },
     {
@@ -10472,22 +10472,6 @@
       "rustPath": "stop_mcp_server",
       "sourceFile": "src/apps/desktop/src/api/mcp_api.rs",
       "signature": "fn stop_mcp_server(state: State<'_, AppState>, server_id: String) -> Result<(), String>",
-      "remoteWorkspacePolicy": "LegacyUnaudited"
-    },
-    {
-      "id": "submit_acp_permission_response",
-      "moduleId": "acp_client",
-      "capabilityId": "setting.tools.acp",
-      "capabilityIds": [
-        "setting.tools.acp"
-      ],
-      "documentedItemIds": [
-        "setting.tools.acp:dialog-permissions"
-      ],
-      "visibility": "documented",
-      "rustPath": "submit_acp_permission_response",
-      "sourceFile": "src/apps/desktop/src/api/acp_client_api.rs",
-      "signature": "fn submit_acp_permission_response( state: State<'_, AppState>, request: SubmitAcpPermissionResponseRequest, ) -> Result<AcpClientPermissionResponse, String>",
       "remoteWorkspacePolicy": "LegacyUnaudited"
     },
     {

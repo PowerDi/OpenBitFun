@@ -220,7 +220,7 @@ export function projectImportedToolItem(item: FlowToolItem): FlowToolItem {
       ...item.toolResult, result: nativeResult, error, success: failed ? false : item.toolResult.success,
     } : undefined,
     // An old source permission must never become an actionable native permission.
-    requiresConfirmation: false, acpPermission: undefined,
+    requiresConfirmation: false,
   };
   projections.set(item, projected);
   projections.set(projected, projected);

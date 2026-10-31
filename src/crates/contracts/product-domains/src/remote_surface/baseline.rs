@@ -211,7 +211,6 @@ pub(super) const UNAUDITED_BASELINE: &[&str] = &[
     "start_mcp_server",
     "stop_acp_client",
     "stop_mcp_server",
-    "submit_acp_permission_response",
     "submit_mcp_interaction_response",
     "test_ai_config_connection",
     "test_ai_connection",

@@ -75,22 +75,6 @@ describe('ReadFileDisplay', () => {
           file_path: '/',
         },
       },
-      acpPermission: {
-        permissionId: 'perm-1',
-        requestedAt: Date.now(),
-        options: [
-          {
-            optionId: 'once',
-            name: 'Allow once',
-            kind: 'allow_once',
-          },
-          {
-            optionId: 'reject',
-            name: 'Reject',
-            kind: 'reject_once',
-          },
-        ],
-      },
     };
 
     act(() => {

@@ -1,10 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { agentAPI } from '@/infrastructure/api';
-import {
-  globalEventBus,
-  PERMISSION_REQUEST_NOTIFICATION_EVENT,
-  type PermissionRequestNotificationEvent,
-} from '@/infrastructure/event-bus';
+import type { PermissionRequestNotificationEvent } from '@/infrastructure/event-bus';
 import { systemAPI } from '@/infrastructure/api/service-api/SystemAPI';
 import { configManager } from '@/infrastructure/config/services/ConfigManager';
 import { useI18n } from '@/infrastructure/i18n';
@@ -21,8 +17,9 @@ const PERMISSION_REQUEST_NOTIFY_CONFIG_KEY = 'app.notifications.permission_reque
 
 /**
  * Sends one generic desktop notification for user-actionable permission
- * requests received while OpenBitFun is in the background. Core runtime and ACP
- * requests share the same policy, de-duplication, and round-level batching.
+ * requests received while OpenBitFun is in the background. Local Agent and
+ * external-agent requests share the runtime permission owner, so they share
+ * the same policy, de-duplication, and round-level batching.
  */
 export const usePermissionRequestNotify = () => {
   const { t } = useI18n('common');
@@ -77,10 +74,6 @@ export const usePermissionRequestNotify = () => {
         roundId: event.request.roundId,
       });
     });
-    const unlistenAcpPermissionRequests = globalEventBus.on<PermissionRequestNotificationEvent>(
-      PERMISSION_REQUEST_NOTIFICATION_EVENT,
-      enqueueWhenBackground,
-    );
 
     void (async () => {
       try {
@@ -106,7 +99,6 @@ export const usePermissionRequestNotify = () => {
       window.removeEventListener('focus', handleFocus);
       window.removeEventListener('blur', handleBlur);
       unlistenPermissionRequests();
-      unlistenAcpPermissionRequests();
       batcher.dispose();
     };
   }, [t]);

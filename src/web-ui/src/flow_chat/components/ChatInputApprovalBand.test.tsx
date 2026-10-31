@@ -24,6 +24,10 @@ const TRANSLATIONS: Record<string, string> = {
   'permission.responseFailed': 'The reply could not be delivered.',
   'permission.scopeThis': 'This one',
   'permission.scopeAll': 'All',
+  'permission.planReview.title': "Review Claude's plan",
+  'permission.planReview.keepPlanning': 'Keep planning',
+  'permission.planReview.keepPlanningWithFeedback': 'Keep planning with feedback',
+  'permission.planReview.approve': 'Approve plan',
   'toolCards.common.copy': 'Copy',
   'toolCards.common.copied': 'Copied',
 };
@@ -42,6 +46,10 @@ vi.mock('react-i18next', async importOriginal => ({
       return TRANSLATIONS[key] ?? key;
     },
   }),
+}));
+
+vi.mock('@/infrastructure/markdown', () => ({
+  MarkdownRenderer: ({ content }: { content: string }) => <div data-testid="plan-markdown">{content}</div>,
 }));
 
 vi.mock('@openbitfun/ui', async importOriginal => ({
@@ -412,6 +420,63 @@ describe('ChatInputApprovalBand', () => {
     expect(allow?.disabled).toBe(false);
     expect(allow?.hasAttribute('aria-busy')).toBe(false);
     expect(scopeOption('all')?.disabled).toBe(false);
+  });
+
+  it('reviews a native plan on its own and keeps planning with the typed feedback', async () => {
+    const onRespond = vi.fn(async () => undefined);
+    const onRespondBatch = vi.fn(async () => undefined);
+    const plan = request({
+      action: 'plan_review',
+      resources: ['ExitPlanMode'],
+      saveResources: [],
+      source: { kind: 'provider', identity: 'Claude Code' },
+      displayMetadata: { planReview: '# Plan\n1. Do it' },
+    });
+    await act(async () => {
+      root.render(
+        <ChatInputApprovalBand
+          requests={[plan, request({ requestId: 'request-2', order: 1 })]}
+          totalPendingCount={2}
+          rejectReason="Cover rollback too"
+          onRespond={onRespond}
+          onRespondBatch={onRespondBatch}
+        />
+      );
+    });
+    expect(container.textContent).toContain("Review Claude's plan");
+    expect(container.querySelector('[data-testid="plan-markdown"]')?.textContent).toBe('# Plan\n1. Do it');
+    // A plan is answered on its own: no batch scope, no saved grant.
+    expect(container.querySelector('[data-testid="chat-input-approval-scope"]')).toBeNull();
+    expect(container.querySelector('[data-testid="chat-input-approval-allow-always"]')).toBeNull();
+
+    await click('chat-input-approval-reject-with-reason');
+    expect(onRespond).toHaveBeenCalledWith('request-1', 'reject', 'Cover rollback too');
+    expect(onRespondBatch).not.toHaveBeenCalled();
+
+    await click('chat-input-approval-allow');
+    expect(onRespond).toHaveBeenLastCalledWith('request-1', 'once', undefined);
+  });
+
+  it('offers the agent-owned always scope for native requests without saved grants', async () => {
+    const onRespond = vi.fn(async () => undefined);
+    await act(async () => {
+      root.render(
+        <ChatInputApprovalBand
+          requests={[request({
+            action: 'bash',
+            resources: ['cargo test'],
+            saveResources: [],
+            source: { kind: 'provider', identity: 'Codex' },
+            displayMetadata: { agentAlwaysScope: 'Commands starting with: cargo test' },
+          })]}
+          onRespond={onRespond}
+          onRespondBatch={vi.fn(async () => undefined)}
+        />
+      );
+    });
+    expect(container.textContent).toContain('Codex');
+    await click('chat-input-approval-allow-always');
+    expect(onRespond).toHaveBeenCalledWith('request-1', 'always', undefined);
   });
 
   it('renders nothing when there is nothing to approve', async () => {

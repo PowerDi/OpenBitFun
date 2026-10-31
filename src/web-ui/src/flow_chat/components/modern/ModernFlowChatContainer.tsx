@@ -36,7 +36,6 @@ import { useFlowChatFileActions } from './useFlowChatFileActions';
 import { useFlowChatNavigation } from './useFlowChatNavigation';
 import { useFlowChatCopyDialog } from './useFlowChatCopyDialog';
 import { useFlowChatSync } from './useFlowChatSync';
-import { useFlowChatToolActions } from './useFlowChatToolActions';
 import { useFlowChatSearch } from './useFlowChatSearch';
 import {
   sessionToVirtualItems,
@@ -699,7 +698,6 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     onCollapseGroup: handleCollapseGroup,
   } = useFlowGroupState(virtualItems, undefined, activeSession?.sessionId, undefined,
     surfaceScope.key('flow-group-feedback', surfaceScope.epoch, activeSession?.sessionId ?? ''));
-  const { handleToolConfirm, handleToolReject } = useFlowChatToolActions();
 
   const { handleFileViewRequest } = useFlowChatFileActions({
     sessionId: activeSession?.sessionId,
@@ -1012,8 +1010,6 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     onTabOpen,
     onHttpLinkClick: handleHttpLinkClick,
     onOpenVisualization,
-    onToolConfirm: handleToolConfirm,
-    onToolReject: handleToolReject,
     sessionId: activeSessionId,
     workspaceId: activeSessionWorkspaceId,
     workspacePath: activeSessionWorkspacePath,
@@ -1033,8 +1029,6 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     onTabOpen,
     handleHttpLinkClick,
     onOpenVisualization,
-    handleToolConfirm,
-    handleToolReject,
     activeSessionId,
     activeSessionWorkspaceId,
     activeSessionWorkspacePath,

@@ -108,6 +108,7 @@
     "allowAlwaysTooltip": "在 {{projectPath}} 中记住当前操作的授权，仅对以下范围生效：\n{{resources}}",
     "allowAlwaysTooltipCurrentProject": "在当前项目中记住当前操作的授权，仅对以下范围生效：\n{{resources}}",
     "allowAlwaysTooltipNoGrant": "此请求没有可保存的访问范围；始终允许仅应用于本次请求。",
+    "allowAlwaysAgentTooltip": "{{agent}} 会在自己的设置中记住：{{scope}}",
     "risks": {
       "pageSave": "以{{visibility}}可见性保存“{{slug}}”的新不可变版本，不改变当前生产版本。",
       "pagePublish": "以{{visibility}}可见性保存“{{slug}}”，并切换其生产版本。",
@@ -121,6 +122,14 @@
     "reject": "拒绝",
     "rejectWithReason": "附理由拒绝",
     "rejectWithReasonTooltip": "以输入框中的内容作为拒绝理由，发送后清空输入框。",
+    "planReview": {
+      "title": "审阅 Claude 的计划",
+      "missingPlan": "Claude 未提供计划内容。请继续规划并让 Claude 给出计划。",
+      "keepPlanning": "继续规划",
+      "keepPlanningWithFeedback": "附反馈继续规划",
+      "keepPlanningWithFeedbackTooltip": "继续规划，并把输入框中的内容作为反馈发给智能体，然后清空输入框。",
+      "approve": "批准计划"
+    },
     "scopeLabel": "回复范围",
     "scopeThis": "本次",
     "scopeAll": "全部",
@@ -2478,22 +2487,6 @@
       "textCount": "{{count}} 段文本",
       "imageCount": "{{count}} 张图片",
       "resourceCount": "{{count}} 个资源"
-    },
-    "planReview": {
-      "title": "审阅 Claude 的计划",
-      "missingPlan": "Claude 未提供计划内容。请继续规划并让 Claude 给出计划。",
-      "feedbackPlaceholder": "继续规划时给 Claude 的可选反馈",
-      "keepPlanning": "继续规划",
-      "approve": "批准计划",
-      "approveHint": "退出规划模式，恢复之前的权限模式，并让 Claude 开始实施"
-    },
-    "acpPermission": {
-      "allowSession": "本会话允许",
-      "allowOnce": "允许一次",
-      "allowAlways": "始终允许",
-      "reject": "拒绝一次",
-      "rejectAlways": "始终拒绝",
-      "selectOption": "选择操作"
     },
     "default": {
       "waitingConfirm": "等待确认",

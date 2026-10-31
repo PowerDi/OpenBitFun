@@ -122,7 +122,6 @@ async fn permission_scopes_split_suggestions_by_destination() {
         "rules":[{"toolName":"Bash"}]});
     let suggestions = json!([session_rule, local_rule]);
     for (id, option) in [
-        ("p1", "allow_session"),
         ("p2", "allow_always"),
         ("p3", "allow_once"),
         ("p4", "reject_once"),
@@ -144,14 +143,13 @@ async fn permission_scopes_split_suggestions_by_destination() {
             .unwrap();
     }
     let mut lines = BufReader::new(output).lines();
-    let scoped = next_reply(&mut lines).await;
-    assert_eq!(scoped["behavior"], "allow");
-    assert_eq!(scoped["updatedPermissions"], json!([session_rule]));
-    assert_eq!(scoped["updatedInput"]["command"], "echo test");
-    assert_eq!(scoped["toolUseID"], "tool-123");
-    assert_eq!(scoped["decisionClassification"], "user_permanent");
     let always = next_reply(&mut lines).await;
+    assert_eq!(always["behavior"], "allow");
+    // Only the persisted settings scope; the session-only rule is not applied.
     assert_eq!(always["updatedPermissions"], json!([local_rule]));
+    assert_eq!(always["updatedInput"]["command"], "echo test");
+    assert_eq!(always["toolUseID"], "tool-123");
+    assert_eq!(always["decisionClassification"], "user_permanent");
     let once = next_reply(&mut lines).await;
     assert_eq!(once["behavior"], "allow");
     assert!(once.get("updatedPermissions").is_none());
@@ -178,19 +176,19 @@ async fn permission_scopes_split_suggestions_by_destination() {
         .is_err());
     assert!(session.permissions.contains_key("p5"));
 
-    let payload = permission_payload(
-        "p",
-        "s1",
-        &json!({"tool_use_id":"tu1", "tool_name":"Bash", "input":{},
-            "permission_suggestions":[session_rule]}),
+    // Session-only suggestions offer no "always"; settings rules are named.
+    let request = json!({"tool_use_id":"tu1", "tool_name":"Bash", "input":{"command":"ls"},
+        "permission_suggestions":[session_rule]});
+    assert_eq!(approval_ask("p", "s1", "t1", &request).agent_always, None);
+    let request = json!({"tool_use_id":"tu1", "tool_name":"Bash", "input":{"command":"ls"},
+        "permission_suggestions":[session_rule, json!({"type":"addRules",
+            "destination":"localSettings", "rules":[{"toolName":"Bash", "ruleContent":"ls:*"}]})]});
+    assert_eq!(
+        approval_ask("p", "s1", "t1", &request)
+            .agent_always
+            .as_deref(),
+        Some("Bash(ls:*)")
     );
-    let ids: Vec<_> = payload["options"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|option| option["optionId"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids, ["allow_once", "allow_session", "reject_once"]);
 }
 
 #[tokio::test]
@@ -293,13 +291,34 @@ async fn exit_plan_mode_approval_restores_mode_and_keep_planning_denies() {
     assert_eq!(approved["behavior"], "allow");
     assert_eq!(approved["updatedInput"], input);
     assert!(approved.get("updatedPermissions").is_none());
-    let payload = permission_payload(
+    let ask = approval_ask(
         "p",
         "s1",
-        &json!({"tool_name":"ExitPlanMode", "input":input}),
+        "t1",
+        &json!({"tool_name":"ExitPlanMode", "tool_use_id":"tu9", "input":input}),
     );
-    assert_eq!(payload["options"][0]["optionId"], APPROVE_PLAN_OPTION);
-    assert_eq!(payload["options"][1]["optionId"], KEEP_PLANNING_OPTION);
+    assert_eq!(ask.action, "plan_review");
+    assert_eq!(ask.plan.as_deref(), Some("# Plan\n1. Do it"));
+    assert_eq!(ask.agent_always, None);
+    // The runtime band answers once / reject-with-reason; both map back.
+    let mut keep = decision("e3", false, Some("reject_once"));
+    keep.feedback = Some("More tests".into());
+    session.permissions.insert(
+        "e3".into(),
+        pending(
+            &process,
+            "e3",
+            PermissionKind::PlanReview,
+            input.clone(),
+            Value::Null,
+        ),
+    );
+    session.submit_permission(&keep).await.unwrap().unwrap();
+    let denied = next_reply(&mut lines).await;
+    assert!(denied["message"]
+        .as_str()
+        .unwrap()
+        .ends_with("User feedback: More tests"));
 }
 
 #[test]
@@ -445,25 +464,19 @@ async fn cancellation_routes_interrupt_then_closes_turn_without_kill() {
 }
 
 #[test]
-fn permission_card_matches_existing_acp_frontend_contract() {
-    let payload = permission_payload(
+fn approval_ask_names_the_native_tool_call() {
+    let ask = approval_ask(
         "p1",
         "s1",
+        "t1",
         &json!({"tool_use_id":"tu1", "tool_name":"Bash", "input":{"command":"echo test"}}),
     );
-    assert_eq!(payload["sessionId"], "s1");
-    assert_eq!(payload["toolCall"]["toolCallId"], "tu1");
-    assert_eq!(payload["toolCall"]["kind"], "execute");
-    assert_eq!(payload["options"][0]["optionId"], "allow_once");
-    // Deserialize using the actual ACP schema, not a hand-maintained approximation.
-    serde_json::from_value::<agent_client_protocol::schema::ToolCallUpdate>(
-        payload["toolCall"].clone(),
-    )
-    .unwrap();
-    serde_json::from_value::<Vec<agent_client_protocol::schema::PermissionOption>>(
-        payload["options"].clone(),
-    )
-    .unwrap();
+    assert_eq!(ask.session_id, "s1");
+    assert_eq!(ask.turn_id, "t1");
+    assert_eq!(ask.tool_call_id, "tu1");
+    assert_eq!(ask.action, "bash");
+    assert_eq!(ask.resources, ["echo test"]);
+    assert_eq!(ask.plan, None);
 }
 
 #[test]
