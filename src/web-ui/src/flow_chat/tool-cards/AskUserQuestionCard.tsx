@@ -38,7 +38,6 @@ import { usePeerDeviceModeOptional } from '@/infrastructure/peer-device/peerDevi
 import { createLogger } from '@/shared/utils/logger';
 import type { FlowToolItem, ToolCardProps } from '../types/flow-chat';
 import { FlowChatManager } from '../services/FlowChatManager';
-import { flowChatStore } from '../store/FlowChatStore';
 import {
   askUserQuestionDraftKey,
   askUserQuestionFollowUpDraftKey,
@@ -122,22 +121,6 @@ function normalizeToolAnswer(input: unknown): ToolAnswer | undefined {
   return undefined;
 }
 
-/** Settle an answered external-agent question card in the store. */
-function markAcpQuestionAnswered(sessionId: string | undefined, toolId: string): void {
-  if (!sessionId) return;
-  const session = flowChatStore.getState().sessions.get(sessionId);
-  const turn = session?.dialogTurns.find(candidate => candidate.modelRounds.some(round => (
-    round.items.some(item => item.type === 'tool' && item.id === toolId)
-  )));
-  if (!turn) return;
-  flowChatStore.updateModelRoundItem(sessionId, turn.id, toolId, {
-    status: 'running',
-    userConfirmed: true,
-    requiresConfirmation: false,
-    acpPermission: undefined,
-  } as Partial<FlowToolItem>);
-}
-
 /** Same source as FileOperationToolCard: partial JSON while streaming, then final toolCall.input. */
 function isAwaitingQuestionPayload(
   isParamsStreaming: boolean | undefined,
@@ -185,8 +168,6 @@ export const AskUserQuestionCard: React.FC<ToolCardProps> = ({
   );
 
   const toolId = toolItem.id ?? toolCall?.id;
-  // External agents (Claude native) ask through an ACP permission request.
-  const acpPermissionId = toolItem.acpPermission?.permissionId;
   const draftToolId = toolCall?.id || toolId;
   const activeSurfaceId = activeSurfaceScope.surfaceId;
   const canSubmitUserAnswers = canSubmitUserQuestionsOnSurface(
@@ -201,7 +182,7 @@ export const AskUserQuestionCard: React.FC<ToolCardProps> = ({
   const deadline = toolItem.userQuestionWait?.deadlineMs;
   const [interactionAcknowledged, setInteractionAcknowledged] = useState(false);
   const [clockNow, setClockNow] = useState(() => performance.now());
-  const showTimer = canAnswer && !acpPermissionId && !interactionAcknowledged
+  const showTimer = canAnswer && !interactionAcknowledged
     && !toolItem.userQuestionWait?.interactionStarted && typeof deadline === 'number';
   useEffect(() => {
     setInteractionAcknowledged(false);
@@ -263,7 +244,7 @@ export const AskUserQuestionCard: React.FC<ToolCardProps> = ({
   const [interactionFailed, setInteractionFailed] = useState(false);
   const interactionAttempt = useRef<number | null>(null);
   const startInteraction = useCallback(() => {
-    if (!canAnswer || !sessionId || acpPermissionId
+    if (!canAnswer || !sessionId
       || interactionAttempt.current === submissionScope.current) return;
     const scope = submissionScope.current;
     if (peerDevice?.peerMode.active && peerDevice.currentPeerCapabilities?.userQuestionInteraction !== true) {
@@ -280,7 +261,7 @@ export const AskUserQuestionCard: React.FC<ToolCardProps> = ({
       setInteractionFailed(true);
       log.error('Failed to acknowledge user question interaction', { toolId, sessionId, error });
     });
-  }, [acpPermissionId, canAnswer, peerDevice, sessionId, toolId]);
+  }, [canAnswer, peerDevice, sessionId, toolId]);
   const handleInteraction = useCallback((event: React.SyntheticEvent) => {
     const target = event.target;
     if (target instanceof Element && target.closest('input, [data-openbitfun-part="option"], [data-openbitfun-part="custom-option"]')) {
@@ -456,14 +437,6 @@ export const AskUserQuestionCard: React.FC<ToolCardProps> = ({
         await FlowChatManager.getInstance().sendMessage(
           message, sessionId, message, undefined, undefined, { sendImmediately: true },
         );
-      } else if (acpPermissionId) {
-        await ACPClientAPI.submitPermissionResponse({
-          permissionId: acpPermissionId,
-          approve: true,
-          optionId: 'allow_once',
-          answers: processedAnswers,
-        });
-        markAcpQuestionAnswered(sessionId, toolId);
       } else {
         await toolAPI.submitUserAnswers(toolId, processedAnswers, sessionId);
       }
@@ -519,7 +492,6 @@ export const AskUserQuestionCard: React.FC<ToolCardProps> = ({
       if (submissionInFlight.current === scope) submissionInFlight.current = null;
     }
   }, [
-    acpPermissionId,
     activeSurfaceScope,
     alreadyResolved,
     answers,

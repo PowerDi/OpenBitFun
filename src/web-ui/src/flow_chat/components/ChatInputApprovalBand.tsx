@@ -33,6 +33,7 @@ import type {
   PermissionReplyKind,
   PermissionRequest,
 } from '@/infrastructure/api/service-api/AgentAPI';
+import { MarkdownRenderer } from '@/infrastructure/markdown';
 import { useCopyTextAction } from '../hooks/useCopyTextAction';
 import { CopyableTextPreview } from './CopyableTextPreview';
 import type { PermissionAnswerHooks } from './modern/usePermissionRequests';
@@ -136,6 +137,20 @@ function permissionRisk(
   );
 }
 
+/**
+ * Native agents (Claude Code, Codex, Pi) remember "always allow" in their own
+ * settings; the request then names that scope instead of OpenBitFun grants.
+ */
+function agentAlwaysScope(request: PermissionRequest): string | undefined {
+  return metadataString(request.displayMetadata, 'agentAlwaysScope');
+}
+
+/** Plan text of a native plan review (Claude `ExitPlanMode`). */
+function planReviewText(request: PermissionRequest): string | undefined {
+  const value = request.displayMetadata?.planReview;
+  return typeof value === 'string' ? value : undefined;
+}
+
 type ApprovalScope = 'this' | 'all';
 type ApprovalAnswer = PermissionReplyKind | 'rejectWithReason';
 
@@ -173,6 +188,8 @@ export const ChatInputApprovalBand: React.FC<ChatInputApprovalBandProps> = ({
 
   if (!request) return null;
 
+  const plan = planReviewText(request);
+  const agentAlways = agentAlwaysScope(request);
   const risk = permissionRisk(request, t);
   // Built-in tool names repeat the action. External identities and delegated
   // owners provide additional context that the action label cannot express.
@@ -184,6 +201,8 @@ export const ChatInputApprovalBand: React.FC<ChatInputApprovalBandProps> = ({
     ? t('permission.subagentOwner', { subagent: request.delegation.subagentType })
     : showSourceIdentity ? request.source.identity : undefined;
   const saveResources = request.saveResources ?? [];
+  // A plan review is decided on its own; it never joins a batch answer.
+  const canAlwaysAllow = saveResources.length > 0 || agentAlways !== undefined;
   const isContextCommandGrant = request.action === 'process.execute'
     && request.resources.length === 1
     && saveResources.length === 1
@@ -199,7 +218,12 @@ export const ChatInputApprovalBand: React.FC<ChatInputApprovalBandProps> = ({
     ? [resourceSummary, metadataString(request.displayMetadata, 'shellPath'), metadataString(request.displayMetadata, 'workdir')]
       .filter(Boolean).join('\n')
     : saveResources.join('\n');
-  const alwaysAllowTooltip = saveResources.length
+  const alwaysAllowTooltip = agentAlways !== undefined
+    ? t('permission.allowAlwaysAgentTooltip', {
+      agent: request.source.identity,
+      scope: agentAlways,
+    })
+    : saveResources.length
     ? request.projectPath?.trim()
       ? t('permission.allowAlwaysTooltip', {
         projectPath: request.projectPath.trim(),
@@ -214,8 +238,8 @@ export const ChatInputApprovalBand: React.FC<ChatInputApprovalBandProps> = ({
     const feedback = reply === 'reject' && withReason && reason ? reason : undefined;
     const hooks: PermissionAnswerHooks = { onConfirming: () => setConfirming(true) };
     try {
-      // 'always' is deliberately never batched: see the button's comment.
-      const outcome = effectiveScope === 'all' && reply !== 'always'
+      // 'always' and plan reviews are deliberately never batched.
+      const outcome = effectiveScope === 'all' && reply !== 'always' && plan === undefined
         ? await onRespondBatch(request.requestId, reply, feedback, hooks)
         : await onRespond(request.requestId, reply, feedback, hooks);
       if (outcome === 'already_resolved') {
@@ -235,7 +259,7 @@ export const ChatInputApprovalBand: React.FC<ChatInputApprovalBandProps> = ({
     }
   };
 
-  const answersAll = effectiveScope === 'all';
+  const answersAll = effectiveScope === 'all' && plan === undefined;
   const allowLabel = answersAll
     ? t('permission.allowCurrentAndFollowing')
     : t('permission.allowOnce');
@@ -271,7 +295,9 @@ export const ChatInputApprovalBand: React.FC<ChatInputApprovalBandProps> = ({
             title={
               <Stack direction="horizontal" align="center" gap="2">
                 <span className="openbitfun-chat-input-approval__title">
-                  {permissionActionLabel(request.action, t)}
+                  {plan !== undefined
+                    ? t('permission.planReview.title')
+                    : permissionActionLabel(request.action, t)}
                 </span>
                 {ownerLabel ? (
                   <OverflowText className="openbitfun-chat-input-approval__owner">
@@ -292,6 +318,18 @@ export const ChatInputApprovalBand: React.FC<ChatInputApprovalBandProps> = ({
           />
         </div>
 
+        {plan !== undefined ? (
+          <div
+            data-openbitfun-component="permission-request-panel"
+            data-openbitfun-part="plan"
+            className="openbitfun-chat-input-approval__plan"
+            data-testid="chat-input-approval-plan"
+          >
+            {plan.trim()
+              ? <MarkdownRenderer content={plan} />
+              : <Alert tone="warning" message={t('permission.planReview.missingPlan')} />}
+          </div>
+        ) : (
         <Card appearance="neutral" padding="sm" radius="sm">
           <Stack direction="horizontal" align="center" gap="2">
             <ScrollArea className="openbitfun-chat-input-approval__resource" tabIndex={0}>
@@ -317,6 +355,7 @@ export const ChatInputApprovalBand: React.FC<ChatInputApprovalBandProps> = ({
             ) : null}
           </Stack>
         </Card>
+        )}
 
         {/* Keep the risk visible while a failed response is retried. */}
         {risk ? (
@@ -366,7 +405,7 @@ export const ChatInputApprovalBand: React.FC<ChatInputApprovalBandProps> = ({
           data-openbitfun-part="actions"
         >
           <CardFooter align="between" className="openbitfun-chat-input-approval__actions">
-            {canAnswerAll ? (
+            {canAnswerAll && plan === undefined ? (
               <div
                 data-openbitfun-component="permission-request-panel"
                 data-openbitfun-part="scope"
@@ -398,11 +437,16 @@ export const ChatInputApprovalBand: React.FC<ChatInputApprovalBandProps> = ({
                 data-testid="chat-input-approval-reject"
                 onClick={() => void answer('reject', false)}
               >
-                {rejectLabel}
+                {plan !== undefined ? t('permission.planReview.keepPlanning') : rejectLabel}
               </Button>
               {/* A draft becomes a reason only through this explicit action. */}
               {reason ? (
-                <Tooltip content={t('permission.rejectWithReasonTooltip')} placement="top">
+                <Tooltip
+                  content={plan !== undefined
+                    ? t('permission.planReview.keepPlanningWithFeedbackTooltip')
+                    : t('permission.rejectWithReasonTooltip')}
+                  placement="top"
+                >
                   <Button
                     variant="outline"
                     size="sm"
@@ -411,12 +455,14 @@ export const ChatInputApprovalBand: React.FC<ChatInputApprovalBandProps> = ({
                     data-testid="chat-input-approval-reject-with-reason"
                     onClick={() => void answer('reject', true)}
                   >
-                    {t('permission.rejectWithReason')}
+                    {plan !== undefined
+                      ? t('permission.planReview.keepPlanningWithFeedback')
+                      : t('permission.rejectWithReason')}
                   </Button>
                 </Tooltip>
               ) : null}
               {/* Saved grants apply only to the request the reader has seen. */}
-              {saveResources.length > 0 && !answersAll ? (
+              {canAlwaysAllow && !answersAll && plan === undefined ? (
                 <Tooltip content={alwaysAllowTooltip} placement="top">
                   <Button
                     variant="outline"
@@ -435,12 +481,13 @@ export const ChatInputApprovalBand: React.FC<ChatInputApprovalBandProps> = ({
                 variant="primary"
                 size="sm"
                 leadingIcon={<Icon name="check-line" size="sm" />}
-                disabled={responding}
                 loading={pendingAnswer === 'once'}
+                // Claude cannot implement a plan it did not present.
+                disabled={responding || (plan !== undefined && !plan.trim())}
                 data-testid="chat-input-approval-allow"
                 onClick={() => void answer('once', false)}
               >
-                {allowLabel}
+                {plan !== undefined ? t('permission.planReview.approve') : allowLabel}
               </Button>
             </div>
           </CardFooter>

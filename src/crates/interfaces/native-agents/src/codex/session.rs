@@ -11,7 +11,6 @@ use std::time::Duration;
 
 use dashmap::DashMap;
 use openbitfun_core::agentic::events::EventQueue;
-use openbitfun_core::infrastructure::events::{emit_global_event, BackendEvent};
 use openbitfun_core::util::errors::{OpenBitFunError, OpenBitFunResult};
 use openbitfun_events::AgenticEvent;
 use serde_json::{json, Value};
@@ -28,6 +27,7 @@ use super::super::{
 };
 use super::history::{CodexHistory, PendingFork, TurnAnchor};
 use super::projector::CodexTurnProjector;
+use crate::interaction::{self, ApprovalAsk, InteractionScope, QuestionAsk};
 use crate::questions::{self, CardOutcome, Decision, Elicitation, Question};
 use crate::remote_shell::{remote_user_shell_command, shell_escape};
 use crate::session_persistence::AcpSessionPersistence;
@@ -75,7 +75,6 @@ const INTERRUPT_GRACE: Duration = Duration::from_secs(5);
 /// Stop an idle app-server (no turn or approval) after this long; the next
 /// turn relaunches it and resumes the thread.
 const IDLE_RELEASE_AFTER: Duration = Duration::from_secs(30 * 60);
-const ALLOW_SESSION_OPTION: &str = "allow_session";
 
 pub(super) struct RpcProcess {
     pub(super) id: String,
@@ -1389,6 +1388,7 @@ impl CodexNativeSession {
             .collect();
         for id in ids {
             if let Some((_, pending)) = self.approvals.remove(&id) {
+                withdraw(&id, &pending, "The Codex turn ended").await;
                 self.cancel_pending(pending, "The turn ended before the question was answered")
                     .await;
             }
@@ -1399,7 +1399,17 @@ impl CodexNativeSession {
         if let Some(process) = self.process.lock().await.take() {
             process.kill().await;
         }
-        self.approvals.clear();
+        let pending: Vec<(String, PendingApproval)> = self
+            .approvals
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .filter_map(|id| self.approvals.remove(&id))
+            .collect();
+        for (id, approval) in pending {
+            withdraw(&id, &approval, "The Codex session closed").await;
+        }
     }
 
     async fn read_loop(
@@ -1455,7 +1465,9 @@ impl CodexNativeSession {
             .map(|entry| entry.key().clone())
             .collect();
         for id in stale {
-            self.approvals.remove(&id);
+            if let Some((_, pending)) = self.approvals.remove(&id) {
+                withdraw(&id, &pending, "The Codex process exited").await;
+            }
         }
         {
             let mut state = self.state.lock().await;
@@ -1518,9 +1530,19 @@ impl CodexNativeSession {
             return Ok(());
         }
         if method == "serverRequest/resolved" {
+            // Codex settled the request itself (e.g. the turn moved on).
             let request = &params["requestId"];
-            self.approvals
-                .retain(|_, pending| pending.request_id != *request);
+            let resolved: Vec<String> = self
+                .approvals
+                .iter()
+                .filter(|entry| entry.request_id == *request)
+                .map(|entry| entry.key().clone())
+                .collect();
+            for id in resolved {
+                if let Some((_, pending)) = self.approvals.remove(&id) {
+                    withdraw(&id, &pending, "Codex resolved the request").await;
+                }
+            }
             return Ok(());
         }
         let mut state = self.state.lock().await;
@@ -1720,7 +1742,7 @@ impl CodexNativeSession {
         params: &Value,
     ) -> OpenBitFunResult<()> {
         let item_id = params["itemId"].as_str().unwrap_or_default().to_string();
-        let (tool_name, card_params, kind) = approval_card(method, params);
+        let (tool_name, card_params) = approval_card(method, params);
         // A subagent thread's request belongs to its child session's turn.
         let current_thread = self.thread_id();
         let target = {
@@ -1756,16 +1778,15 @@ impl CodexNativeSession {
             return process.respond(&request_id, cancelled_reply(method)).await;
         };
         let permission_id = format!("codex_native_permission_{}", uuid::Uuid::new_v4());
-        let payload = permission_payload(
+        let mut ask = approval_ask(
             &permission_id,
             &card_session,
+            &turn_id,
             method,
             &item_id,
-            tool_name,
-            kind,
-            &card_params,
             params,
         );
+        ask.delegation = self.child_delegation(params).await;
         self.approvals.insert(
             permission_id.clone(),
             PendingApproval {
@@ -1777,12 +1798,7 @@ impl CodexNativeSession {
                 interaction: None,
             },
         );
-        if let Err(error) = emit_global_event(BackendEvent::Custom {
-            event_name: "backend-event-acppermissionrequest".into(),
-            payload,
-        })
-        .await
-        {
+        if let Err(error) = self.ask_approval(ask).await {
             if let Some((_, pending)) = self.approvals.remove(&permission_id) {
                 let _ = pending
                     .process
@@ -1794,6 +1810,54 @@ impl CodexNativeSession {
             )));
         }
         Ok(())
+    }
+
+    fn interaction_scope(&self) -> InteractionScope {
+        InteractionScope {
+            client_id: CLIENT_ID.to_string(),
+            agent_name: "Codex".to_string(),
+            workspace_path: self.workspace_path.clone(),
+            remote_connection_id: self.remote_connection_id.clone(),
+        }
+    }
+
+    /// Parent task of a subagent thread's request, so the parent session
+    /// shows and answers it.
+    async fn child_delegation(
+        &self,
+        params: &Value,
+    ) -> Option<openbitfun_core::runtime_ports::PermissionDelegationContext> {
+        let thread = params["threadId"].as_str()?;
+        if self.thread_id().as_deref() == Some(thread) {
+            return None;
+        }
+        let state = self.state.lock().await;
+        let child = state.threads.children.get(thread)?;
+        Some(
+            openbitfun_core::runtime_ports::PermissionDelegationContext {
+                parent_session_id: self.session_id.clone(),
+                parent_dialog_turn_id: Some(child.parent_turn_id.clone()),
+                parent_tool_call_id: child.parent_tool_id.clone(),
+                subagent_type: "Codex".to_string(),
+            },
+        )
+    }
+
+    async fn ask_approval(&self, ask: ApprovalAsk) -> OpenBitFunResult<()> {
+        let session = self.weak_self.clone();
+        interaction::ask_approval(&self.interaction_scope(), ask, move |decision| {
+            let session = session.clone();
+            async move { session.upgrade()?.submit_permission(&decision).await }
+        })
+        .await
+    }
+
+    fn ask_question(&self, ask: QuestionAsk) {
+        let session = self.weak_self.clone();
+        interaction::ask_question(ask, move |decision| {
+            let session = session.clone();
+            async move { session.upgrade()?.submit_permission(&decision).await }
+        });
     }
 
     /// Project a driver-owned card into the turn (or child turn) a request
@@ -1896,11 +1960,8 @@ impl CodexNativeSession {
                 .await;
         };
         let permission_id = format!("codex_native_permission_{}", uuid::Uuid::new_v4());
-        let payload = if tool_name == questions::QUESTION_TOOL {
-            questions::question_payload(&permission_id, &card_session, &card_id, &title, &input)
-        } else {
-            questions::confirm_payload(&permission_id, &card_session, &card_id, &title, &input)
-        };
+        let is_question = tool_name == questions::QUESTION_TOOL;
+        let delegation = self.child_delegation(params).await;
         self.approvals.insert(
             permission_id.clone(),
             PendingApproval {
@@ -1908,20 +1969,38 @@ impl CodexNativeSession {
                 request_id,
                 method: method.to_string(),
                 params: params.clone(),
-                turn_id,
+                turn_id: turn_id.clone(),
                 interaction: Some(Interaction {
-                    card_id,
+                    card_id: card_id.clone(),
                     child_thread,
                     kind,
                 }),
             },
         );
-        if let Err(error) = emit_global_event(BackendEvent::Custom {
-            event_name: "backend-event-acppermissionrequest".into(),
-            payload,
-        })
-        .await
-        {
+        let published = if is_question {
+            self.ask_question(QuestionAsk {
+                permission_id: permission_id.clone(),
+                card_id,
+                session_id: card_session,
+                turn_id,
+                input,
+            });
+            Ok(())
+        } else {
+            self.ask_approval(ApprovalAsk {
+                permission_id: permission_id.clone(),
+                session_id: card_session,
+                turn_id,
+                tool_call_id: card_id,
+                action: "mcp".to_string(),
+                resources: vec![title],
+                agent_always: None,
+                plan: None,
+                delegation,
+            })
+            .await
+        };
+        if let Err(error) = published {
             if let Some((_, pending)) = self.approvals.remove(&permission_id) {
                 self.cancel_pending(pending, "The question could not be shown")
                     .await;
@@ -2222,81 +2301,110 @@ fn plan_entries(params: &Value) -> Vec<AcpPlanEntry> {
         .collect()
 }
 
-/// Card name, params and ACP tool kind of an approval request.
-fn approval_card(method: &str, params: &Value) -> (&'static str, Value, &'static str) {
+/// Card name and params of an approval request.
+fn approval_card(method: &str, params: &Value) -> (&'static str, Value) {
     match method {
         "item/commandExecution/requestApproval" => (
             "ExecCommand",
             json!({"command": params["command"], "cwd": params["cwd"], "reason": params["reason"]}),
-            "execute",
         ),
         "item/fileChange/requestApproval" => (
             "Edit",
             json!({"file_path": params["grantRoot"], "reason": params["reason"]}),
-            "edit",
         ),
         _ => (
             "RequestPermissions",
             json!({"permissions": params["permissions"], "reason": params["reason"], "cwd": params["cwd"]}),
-            "other",
         ),
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn permission_payload(
+/// Runtime approval for a Codex approval request.
+fn approval_ask(
     permission_id: &str,
     session_id: &str,
+    turn_id: &str,
     method: &str,
     item_id: &str,
-    tool_name: &str,
-    kind: &str,
-    card_params: &Value,
     params: &Value,
-) -> Value {
-    let option =
-        |id: &str, name: &str, kind: &str| json!({"optionId": id, "name": name, "kind": kind});
-    // `availableDecisions` (when sent) is the server's list for this prompt;
-    // e.g. Codex omits `acceptForSession` for commands it cannot cache.
+) -> ApprovalAsk {
+    // `availableDecisions` (when sent) is the server's list for this prompt.
     let offered = |decision: &str| match params["availableDecisions"].as_array() {
         Some(decisions) => decisions.iter().any(|d| {
             d.as_str() == Some(decision) || d.as_object().is_some_and(|o| o.contains_key(decision))
         }),
         None => true,
     };
-    let mut options = vec![option("allow_once", "Allow once", "allow_once")];
-    if offered("acceptForSession") {
-        options.push(option(
-            ALLOW_SESSION_OPTION,
-            "Allow for this session",
-            "allow_session",
-        ));
-    }
-    if method == "item/commandExecution/requestApproval"
-        && !params["proposedExecpolicyAmendment"].is_null()
-        && offered("acceptWithExecpolicyAmendment")
-    {
-        options.push(option("allow_always", "Always allow", "allow_always"));
-    }
-    options.push(option("reject_once", "Reject", "reject_once"));
-    let title = match method {
-        "item/commandExecution/requestApproval" => params["command"]
+    let text = |value: &Value| {
+        value
             .as_str()
-            .unwrap_or("Run command")
-            .to_string(),
-        "item/fileChange/requestApproval" => params["reason"]
-            .as_str()
-            .unwrap_or("Apply file changes")
-            .to_string(),
-        _ => params["reason"]
-            .as_str()
-            .unwrap_or("Grant additional permissions")
-            .to_string(),
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
     };
-    json!({"permissionId": permission_id, "sessionId": session_id, "toolCall": {
-        "toolCallId": item_id, "title": title, "kind": kind, "toolName": tool_name,
-        "status": "pending", "rawInput": card_params, "content": []},
-        "options": options})
+    let (action, resource, agent_always) = match method {
+        "item/commandExecution/requestApproval" => {
+            let amendment = params["proposedExecpolicyAmendment"]
+                .as_array()
+                .filter(|_| offered("acceptWithExecpolicyAmendment"))
+                .map(|parts| {
+                    parts
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .filter(|prefix| !prefix.is_empty());
+            (
+                "bash",
+                text(&params["command"]).unwrap_or_else(|| "Run command".to_string()),
+                amendment.map(|prefix| format!("Commands starting with: {prefix}")),
+            )
+        }
+        "item/fileChange/requestApproval" => (
+            "edit",
+            text(&params["grantRoot"])
+                .or_else(|| text(&params["reason"]))
+                .unwrap_or_else(|| "Apply file changes".to_string()),
+            None,
+        ),
+        _ => (
+            "custom_tool",
+            text(&params["reason"]).unwrap_or_else(|| {
+                serde_json::to_string(&params["permissions"])
+                    .unwrap_or_else(|_| "Grant additional permissions".to_string())
+            }),
+            None,
+        ),
+    };
+    ApprovalAsk {
+        permission_id: permission_id.to_string(),
+        session_id: session_id.to_string(),
+        turn_id: turn_id.to_string(),
+        tool_call_id: item_id.to_string(),
+        action: action.to_string(),
+        resources: vec![resource],
+        agent_always,
+        plan: None,
+        delegation: None,
+    }
+}
+
+/// Withdraw the runtime ask of a request the driver settled itself.
+async fn withdraw(permission_id: &str, pending: &PendingApproval, reason: &str) {
+    let card = pending
+        .interaction
+        .as_ref()
+        // Confirm elicitations are approvals; every other interaction is a
+        // question card in the runtime question mailbox.
+        .filter(|interaction| {
+            !matches!(
+                interaction.kind,
+                InteractionKind::Elicitation(Elicitation::Confirm)
+            )
+        })
+        .map(|interaction| interaction.card_id.clone());
+    interaction::withdraw(permission_id, card.as_deref(), reason).await;
 }
 
 /// Codex reply for a user decision (see `CommandExecutionApprovalDecision`,
@@ -2309,13 +2417,11 @@ pub(super) fn approval_reply(
     #[derive(PartialEq)]
     enum Choice {
         Once,
-        Session,
         Always,
         Deny,
     }
     let choice = match request.option_id.as_deref() {
         Some("allow_once") => Choice::Once,
-        Some(ALLOW_SESSION_OPTION) => Choice::Session,
         Some("allow_always") => Choice::Always,
         Some("reject_once") => Choice::Deny,
         None if request.approve => Choice::Once,
@@ -2341,7 +2447,7 @@ pub(super) fn approval_reply(
                     Value::Object(granted)
                 }
             };
-            let scope = if matches!(choice, Choice::Session | Choice::Always) {
+            let scope = if choice == Choice::Always {
                 "session"
             } else {
                 "turn"
@@ -2351,7 +2457,6 @@ pub(super) fn approval_reply(
         _ => {
             let decision = match choice {
                 Choice::Once => json!("accept"),
-                Choice::Session => json!("acceptForSession"),
                 Choice::Always => match &params["proposedExecpolicyAmendment"] {
                     amendment
                         if !amendment.is_null()

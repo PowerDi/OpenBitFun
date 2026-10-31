@@ -2,9 +2,9 @@
 //!
 //! Codex `request_user_input`, MCP elicitation forms and Pi extension dialogs
 //! have no native card. The drivers project a synthetic `AskUserQuestion`
-//! card, ask through `backend-event-acppermissionrequest` (the same event as
-//! Claude's question tool), and settle the card themselves once answered.
-//! The card answers with `answers` keyed by question index; "Skip" rejects.
+//! card, publish it to the runtime user-question mailbox (see
+//! `interaction.rs`), and settle the card themselves once answered. The card
+//! answers with `answers` keyed by question index; dismissing skips.
 use openbitfun_core::util::errors::{OpenBitFunError, OpenBitFunResult};
 use serde_json::{json, Value};
 
@@ -61,42 +61,6 @@ pub(crate) fn card_input(questions: &[Question]) -> Value {
             .map(|(label, description)| json!({"label": label, "description": description}))
             .collect::<Vec<_>>(),
     })).collect::<Vec<_>>()})
-}
-
-fn option(id: &str, name: &str, kind: &str) -> Value {
-    json!({"optionId": id, "name": name, "kind": kind})
-}
-
-/// Permission request for a question card: the card submits the answers, the
-/// approval bar only skips (same options as Claude's question tool).
-pub(crate) fn question_payload(
-    permission_id: &str,
-    session_id: &str,
-    card_id: &str,
-    title: &str,
-    input: &Value,
-) -> Value {
-    json!({"permissionId": permission_id, "sessionId": session_id, "toolCall": {
-        "toolCallId": card_id, "title": title, "kind": "other", "toolName": QUESTION_TOOL,
-        "status": "pending", "rawInput": input, "content": []},
-        "options": [option("reject_once", "Skip", "reject_once")]})
-}
-
-/// Permission request for a yes/no interaction (e.g. an MCP confirmation).
-pub(crate) fn confirm_payload(
-    permission_id: &str,
-    session_id: &str,
-    card_id: &str,
-    title: &str,
-    input: &Value,
-) -> Value {
-    json!({"permissionId": permission_id, "sessionId": session_id, "toolCall": {
-    "toolCallId": card_id, "title": title, "kind": "other", "toolName": INTERACTION_TOOL,
-    "status": "pending", "rawInput": input, "content": []},
-    "options": [
-        option("allow_once", "Accept", "allow_once"),
-        option("reject_once", "Decline", "reject_once"),
-    ]})
 }
 
 /// Approve (`true`) or reject from the selected option.

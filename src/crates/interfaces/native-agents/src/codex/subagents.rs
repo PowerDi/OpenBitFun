@@ -27,6 +27,9 @@ const ORPHAN_THREADS: usize = 8;
 /// One spawned Codex agent thread projected as a child session.
 pub(super) struct CodexChild {
     pub(super) session_id: String,
+    /// Parent `spawnAgent` tool call and turn that own this thread.
+    pub(super) parent_tool_id: String,
+    pub(super) parent_turn_id: String,
     /// App-server process running the thread.
     process_id: Option<String>,
     prompt: String,
@@ -220,6 +223,8 @@ impl CodexNativeSession {
                 thread.clone(),
                 CodexChild {
                     session_id,
+                    parent_tool_id: tool_id.to_string(),
+                    parent_turn_id: parent_turn_id.clone(),
                     process_id: state.process_id.clone(),
                     prompt: prompt.clone(),
                     description,

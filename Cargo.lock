@@ -6436,6 +6436,7 @@ dependencies = [
  "dashmap",
  "dirs 6.0.0",
  "log",
+ "openbitfun-agent-runtime",
  "openbitfun-core",
  "openbitfun-events",
  "semver",

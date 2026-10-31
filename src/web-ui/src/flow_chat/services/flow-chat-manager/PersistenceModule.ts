@@ -564,7 +564,6 @@ export function convertDialogTurnToBackendFormat(dialogTurn: DialogTurn, turnInd
               aiIntent: toolItem.aiIntent,
               requiresConfirmation: toolItem.requiresConfirmation,
               userConfirmed: toolItem.userConfirmed,
-              acpPermission: toolItem.acpPermission,
               startTime: toolItem.startTime || item.timestamp,
               endTime: toolItem.endTime,
               status: item.status || 'completed',

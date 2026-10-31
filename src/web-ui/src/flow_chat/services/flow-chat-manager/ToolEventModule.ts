@@ -8,7 +8,6 @@ import { extractFilePathFromJsonBuffer, parsePartialJson, splitFilePathAndConten
 import { createLogger } from '@/shared/utils/logger';
 import type { FlowChatContext, FlowToolItem, ToolEventOptions, DialogTurn, ModelRound } from './types';
 import { immediateSaveDialogTurn } from './PersistenceModule';
-import { applyPendingAcpPermissionForTool } from './AcpPermissionToolCardModule';
 import { normalizeParamsPartialFragment } from '../EventBatcher';
 import { effectiveToolInvocation } from '../../utils/toolInvocationIdentity';
 import { requestRuntimeProjectionRepair } from './PeerSessionRefreshModule';
@@ -407,7 +406,6 @@ function applyParamsPartial(
       _contentSize: isWriteTool && hasContentField ? ((effectiveParams.content || effectiveParams.contents || '').length) : undefined
     }, silent);
     applyPendingTerminalSessionId(store, sessionId, turnId, toolEvent.tool_id, silent);
-    applyPendingAcpPermissionForTool(store, toolEvent.tool_id);
   }
 }
 
@@ -614,7 +612,6 @@ function handleEarlyDetected(
   }
 
   store.addModelRoundItem(sessionId, turnId, preparingToolItem, targetRoundId);
-  applyPendingAcpPermissionForTool(store, toolEvent.tool_id);
 }
 
 /**
@@ -703,7 +700,6 @@ function handleStarted(
       attemptIndex,
     } as any);
     applyPendingTerminalSessionId(store, sessionId, turnId, toolEvent.tool_id);
-    applyPendingAcpPermissionForTool(store, toolEvent.tool_id);
   } else {
     const toolItem: FlowToolItem = {
       id: toolEvent.tool_id,
@@ -723,7 +719,6 @@ function handleStarted(
     if (targetRoundId) {
       store.addModelRoundItem(sessionId, turnId, toolItem, targetRoundId);
       pendingTerminalSessionIds.delete(toolEvent.tool_id);
-      applyPendingAcpPermissionForTool(store, toolEvent.tool_id);
     } else {
       requestRuntimeProjectionRepair(sessionId);
       log.error('Tool Started event references missing round (backend bug)', {
@@ -766,7 +761,6 @@ function handleCompleted(
     },
     status: 'completed' as const,
     requiresConfirmation: false,
-    acpPermission: undefined,
     isParamsStreaming: false,
     endTime: Date.now(),
     durationMs: toolEvent.duration_ms,
@@ -825,7 +819,6 @@ function handleFailed(
     },
     status: 'error' as const,
     requiresConfirmation: false,
-    acpPermission: undefined,
     endTime: Date.now(),
     durationMs: toolEvent.duration_ms,
     queueWaitMs: toolEvent.queue_wait_ms,
@@ -889,7 +882,6 @@ function handleCancelled(
     },
     status: finalStatus,
     requiresConfirmation: false,
-    acpPermission: undefined,
     endTime: Date.now(),
     durationMs: toolEvent.duration_ms,
     queueWaitMs: toolEvent.queue_wait_ms,
@@ -945,7 +937,6 @@ function handleRejected(
     status: 'rejected' as const,
     userConfirmed: false,
     requiresConfirmation: false,
-    acpPermission: undefined,
     isParamsStreaming: false,
     endTime: Date.now(),
   };

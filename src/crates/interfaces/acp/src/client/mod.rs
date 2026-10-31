@@ -24,16 +24,11 @@ pub use config::{
 pub use execution::{
     AcpEventCursor, AcpEventProjectionSnapshot, AcpExecutionSnapshot, AcpProjectionJournal,
 };
-pub use manager::{
-    AcpClientPermissionResponse, AcpClientService, SetAcpSessionConfigOptionRequest,
-    SetAcpSessionModelRequest,
-};
+pub use manager::{AcpClientService, SetAcpSessionConfigOptionRequest, SetAcpSessionModelRequest};
 pub use openbitfun_native_agents::session_options::{
     AcpAvailableCommand, AcpPlanEntry, AcpSessionConfigKind, AcpSessionConfigOption,
     AcpSessionConfigSelectOption, AcpSessionConfigValue, AcpSessionContextUsage,
     AcpSessionModelOption, AcpSessionOptions,
 };
-pub use openbitfun_native_agents::{
-    CreateAcpFlowSessionRecordResponse, SubmitAcpPermissionResponseRequest,
-};
+pub use openbitfun_native_agents::CreateAcpFlowSessionRecordResponse;
 pub use stream::AcpClientStreamEvent;

@@ -9,7 +9,7 @@ import React, { useMemo, useCallback, useDeferredValue, useEffect, useLayoutEffe
 import { DeferredContent } from '@openbitfun/flow-chat-presentation/deferred-content';
 
 import { useI18n } from '@/infrastructure/i18n';
-import type { FlowItem, FlowToolItem, FlowTextItem, FlowThinkingItem, ToolRejectOptions } from '../../types/flow-chat';
+import type { FlowItem, FlowToolItem, FlowTextItem, FlowThinkingItem } from '../../types/flow-chat';
 import { getFlowGroupCategory, getFlowGroupDisclosureChoice, isFlowGroupExpanded, type FlowGroupCategory, type FlowGroupData } from '../../grouping/types';
 import { TypewriterRevealGateProvider } from '../../hooks/TypewriterRevealGate';
 import { useCreateTypewriterRevealGate, useTypewriterRevealGate } from '../../hooks/typewriterRevealGateContext';
@@ -287,24 +287,10 @@ interface FlowGroupItemRendererProps {
 
 export const FlowGroupItemRenderer = React.memo<FlowGroupItemRendererProps>(({ item, turnId, roundId, withinGroup = true, isLastItem, forceThinkingExpanded, revealStreamingContent, retainForGroupCollapse, hidden, capsuleRow, Item, markdownSection }) => {
   const {
-    onToolConfirm,
-    onToolReject,
     onFileViewRequest,
     onTabOpen,
     sessionId,
   } = useFlowChatContext();
-
-  const handleConfirm = useCallback(async (toolId: string, permissionOptionId?: string, approve?: boolean) => {
-    if (onToolConfirm) {
-      await onToolConfirm(toolId, permissionOptionId, approve);
-    }
-  }, [onToolConfirm]);
-
-  const handleReject = useCallback(async (toolId: string, options?: ToolRejectOptions) => {
-    if (onToolReject) {
-      await onToolReject(toolId, options);
-    }
-  }, [onToolReject]);
 
   const handleOpenInEditor = useCallback((filePath: string) => {
     if (onFileViewRequest) {
@@ -348,8 +334,6 @@ export const FlowGroupItemRenderer = React.memo<FlowGroupItemRendererProps>(({ i
               toolItem={item as FlowToolItem}
               parallel={capsuleRow !== undefined}
               isLastItem={isLastItem}
-              onConfirm={handleConfirm}
-              onReject={handleReject}
               onOpenInEditor={handleOpenInEditor}
               onOpenInPanel={handleOpenInPanel}
               sessionId={sessionId}

@@ -91,34 +91,26 @@ impl ApprovalRequest {
         }
     }
 
-    /// `backend-event-acppermissionrequest` payload (same card as the other
-    /// native agents).
-    pub(super) fn permission_payload(&self, permission_id: &str, session_id: &str) -> Value {
+    /// Runtime approval for this call (same request as the other native agents).
+    pub(super) fn approval_ask(
+        &self,
+        permission_id: &str,
+        session_id: &str,
+        turn_id: &str,
+    ) -> crate::interaction::ApprovalAsk {
         let (card_name, params) = card_input(&self.tool_name, &self.input);
-        let option =
-            |id: &str, name: &str, kind: &str| json!({"optionId": id, "name": name, "kind": kind});
-        let title = match card_name.as_str() {
-            "ExecCommand" => self.input["command"].as_str().map(str::to_string),
-            "Edit" | "Write" => self.input["path"]
-                .as_str()
-                .map(|p| format!("{card_name} {p}")),
-            _ => None,
+        crate::interaction::ApprovalAsk {
+            permission_id: permission_id.to_string(),
+            session_id: session_id.to_string(),
+            turn_id: turn_id.to_string(),
+            tool_call_id: self.tool_call_id.clone(),
+            action: crate::interaction::action_for_card(&card_name).to_string(),
+            resources: crate::interaction::resources_for_card(&card_name, &params),
+            // Pi has no persistent rules of its own.
+            agent_always: None,
+            plan: None,
+            delegation: None,
         }
-        .unwrap_or_else(|| self.tool_name.clone());
-        let kind = match card_name.as_str() {
-            "ExecCommand" => "execute",
-            "Edit" | "Write" => "edit",
-            "Read" | "Grep" | "Glob" | "LS" => "read",
-            _ => "other",
-        };
-        json!({"permissionId": permission_id, "sessionId": session_id, "toolCall": {
-        "toolCallId": self.tool_call_id, "title": title, "kind": kind,
-        "toolName": card_name, "status": "pending", "rawInput": params, "content": []},
-        "options": [
-            option(ALLOW_ONCE, "Allow once", "allow_once"),
-            option(ALLOW_SESSION, "Allow for this session", "allow_session"),
-            option(REJECT_ONCE, "Reject", "reject_once"),
-        ]})
     }
 }
 

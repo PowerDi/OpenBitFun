@@ -48,23 +48,8 @@ export const ReadFileDisplay: React.FC<ToolCardProps> = React.memo(({
     return filePath.split(/[/\\]/).pop() || filePath;
   }, [filePath, t]);
 
-  const permissionTargetPath = useMemo(() => {
-    const rawInput = toolItem.acpPermission?.toolCall?.rawInput as Record<string, unknown> | undefined;
-    const acpFilePath =
-      typeof rawInput?.filepath === 'string' && rawInput.filepath.trim().length > 0
-        ? rawInput.filepath
-        : typeof rawInput?.filePath === 'string' && rawInput.filePath.trim().length > 0
-          ? rawInput.filePath
-          : typeof rawInput?.parentDir === 'string' && rawInput.parentDir.trim().length > 0
-            ? rawInput.parentDir
-            : null;
-
-    if (acpFilePath) {
-      return acpFilePath;
-    }
-
-    return filePath;
-  }, [filePath, toolItem.acpPermission?.toolCall?.rawInput]);
+  // The card input carries the path the agent asked to read.
+  const permissionTargetPath = filePath;
 
   const lineRange = useMemo(() => {
     // Keep legacy `start_line` so older persisted tool calls still render.

@@ -13,6 +13,9 @@ name = "openbitfun_native_agents"
 # workspace transport; Agent Runtime and SSH are the only Core slices used.
 openbitfun-core = { path = "../../assembly/core", features = ["agent-runtime", "ssh-remote"] }
 openbitfun-events = { path = "../../contracts/events" }
+# Approvals and questions are registered with the runtime permission and
+# user-question owners, the same mailboxes local Agent turns use.
+openbitfun-agent-runtime = { path = "../../execution/agent-runtime", features = ["agent-runtime"] }
 
 # Session option DTOs keep their ACP-schema conversions for the ACP client,
 # and context usage cost keeps the same wire shape.

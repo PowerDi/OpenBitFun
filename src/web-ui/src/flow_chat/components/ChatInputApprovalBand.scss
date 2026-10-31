@@ -42,6 +42,16 @@
     overflow-wrap: anywhere;
   }
 
+  // A native plan review shows the whole plan; it scrolls inside the band so
+  // the decision buttons stay in view.
+  &__plan {
+    max-height: min(360px, 45vh);
+    overflow: auto;
+    padding: var(--openbitfun-space-2) var(--openbitfun-space-3);
+    border-radius: var(--openbitfun-radius-sm);
+    background: var(--openbitfun-color-surface-raised);
+  }
+
   &__grant-note {
     margin: 0;
     color: var(--openbitfun-color-content-secondary);

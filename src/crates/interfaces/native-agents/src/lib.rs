@@ -11,7 +11,7 @@ pub mod cli_probe;
 pub mod cli_status;
 pub mod codex;
 mod events;
-mod interaction;
+pub mod interaction;
 pub mod notifications;
 pub mod pi;
 pub(crate) mod preferences;

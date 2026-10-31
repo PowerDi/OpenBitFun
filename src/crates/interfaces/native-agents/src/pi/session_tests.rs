@@ -334,25 +334,12 @@ async fn approval_dialog_becomes_a_card_and_the_answer_reaches_pi() {
     assert_eq!(session.approvals.len(), 1);
     let permission_id = session.approvals.iter().next().unwrap().key().clone();
     let pending = session.approvals.get(&permission_id).unwrap();
-    let payload = pending.request.permission_payload(&permission_id, "s1");
+    let ask = pending.request.approval_ask(&permission_id, "s1", "t1");
     drop(pending);
-    assert_eq!(payload["toolCall"]["toolCallId"], "c1");
-    assert_eq!(payload["toolCall"]["kind"], "execute");
-    assert_eq!(payload["toolCall"]["title"], "rm -rf build");
-    let options: Vec<_> = payload["options"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|o| o["optionId"].clone())
-        .collect();
-    assert_eq!(
-        options,
-        [
-            json!("allow_once"),
-            json!("allow_session"),
-            json!("reject_once")
-        ]
-    );
+    assert_eq!(ask.tool_call_id, "c1");
+    assert_eq!(ask.action, "bash");
+    assert_eq!(ask.resources, ["rm -rf build"]);
+    assert_eq!(ask.agent_always, None);
     // Another session's permission is left alone.
     let foreign = SubmitAcpPermissionResponseRequest {
         permission_id: "other".into(),

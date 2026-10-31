@@ -28,7 +28,7 @@ export function awaitsApproval(item: FlowToolItem): boolean {
   if (item.status === 'pending_confirmation') return true;
   const settled = ['completed', 'error', 'cancelled', 'rejected'].includes(item.status);
   return !settled && item.userConfirmed !== true
-    && (item.requiresConfirmation === true || item.acpPermission !== undefined);
+    && item.requiresConfirmation === true;
 }
 
 /** A Shell run is an adjacent transcript segment, not a process/session id. */

@@ -7,10 +7,9 @@ use openbitfun_acp::client::native::{
     NativeTurnInput,
 };
 use openbitfun_acp::client::{
-    AcpAvailableCommand, AcpClientInfo, AcpClientPermissionResponse, AcpClientRequirementProbe,
-    AcpClientStreamEvent, AcpSessionOptions, CreateAcpFlowSessionRecordResponse,
-    SetAcpSessionConfigOptionRequest, SetAcpSessionModelRequest,
-    SubmitAcpPermissionResponseRequest,
+    AcpAvailableCommand, AcpClientInfo, AcpClientRequirementProbe, AcpClientStreamEvent,
+    AcpSessionOptions, CreateAcpFlowSessionRecordResponse, SetAcpSessionConfigOptionRequest,
+    SetAcpSessionModelRequest,
 };
 use openbitfun_core::agentic::image_analysis::ImageContextData;
 use openbitfun_core::service::workspace::WorkspaceInfo;
@@ -1207,20 +1206,6 @@ pub async fn save_acp_json_config(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub async fn submit_acp_permission_response(
-    state: State<'_, AppState>,
-    request: SubmitAcpPermissionResponseRequest,
-) -> Result<AcpClientPermissionResponse, String> {
-    let service = state
-        .acp_client_service
-        .as_ref()
-        .ok_or_else(|| "ACP client service not initialized".to_string())?;
-    service
-        .submit_permission_response(request)
-        .await
-        .map_err(|e| e.to_string())
-}
 
 #[cfg(test)]
 mod tests {

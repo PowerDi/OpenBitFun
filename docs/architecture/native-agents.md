@@ -63,12 +63,41 @@ and waits on a private oneshot with a timeout. Only the Desktop WebView and
 Peer Mode fan-out receive it; the permission mailbox used by mobile web
 (`get_session_interaction_mailbox`, `respond_permission`) and IM bots does not.
 
-After: drivers register approvals with `PermissionRequestManager` and
-questions with `UserInputManager`, then await the returned receiver. All
-surfaces read and answer through the existing mailbox. The old event and the
-`submit_acp_permission_response` path are removed; Desktop and Web UI are
-updated in the same change. The product is upgraded as a whole, so no
-old-client fallback is kept (see Compatibility).
+After (step 3, done): `native-agents/src/interaction.rs` is the single bridge.
+Drivers keep their wire state and publish each ask:
+
+- Approvals go to `PermissionRequestManager` with `source.kind = provider`,
+  `source.identity` = agent name, `tool_call_id` = native tool id,
+  `round_id` = turn id, and the workspace permission project (remote
+  workspaces use host + POSIX root). Subagent asks carry `delegation`, so the
+  parent session shows them.
+- Questions (Claude `AskUserQuestion`, Codex `requestUserInput`, MCP forms,
+  Pi dialogs) go to the user-question mailbox under the card id; an answer the
+  driver rejects as incomplete re-opens the question.
+- MCP confirm elicitations are approvals with action `mcp`.
+- When the driver settles an ask itself (turn ended, process exit, Codex
+  `serverRequest/resolved`), it withdraws the runtime request. A runtime
+  cancellation answers the agent with a rejection, so the agent never waits on
+  a request nobody can see.
+
+Reply mapping (user decision: approvals use the composer band, "allow for
+this session" is dropped):
+
+| Runtime reply | Native answer |
+|---|---|
+| `once` | allow once |
+| `always` | the agent's own persistent rule (Claude settings rule, Codex exec-policy amendment); offered only when the agent suggests one and named in `displayMetadata.agentAlwaysScope`. `save_resources` is empty, so OpenBitFun stores no grant |
+| `reject` + feedback | deny; Claude receives the feedback text |
+| plan review (`displayMetadata.planReview`) | `once` approves the plan; `reject` + feedback keeps planning |
+
+The generic ACP client uses the same bridge, so the old per-card path was
+removed entirely: `backend-event-acppermissionrequest`, the
+`submit_acp_permission_response` command and registry row, the Web UI
+`AcpPermissionToolCardModule`, `ToolApprovalBar`, `AcpPermissionActions`, the
+`acpPermission` tool-item field, and the dead tool-card confirm/reject
+callbacks. Desktop shows every request in the composer approval band, which
+gained the plan view. The product is upgraded as a whole, so no old-client
+fallback is kept (see Compatibility).
 
 ### D6: backend persistence
 
@@ -102,6 +131,8 @@ open window, and a turn lost when the window closes mid-turn.
   and the persisted mode is rewritten. **Needs a live check before the fix.**
 - `remote_surface/table.rs` lists `create_acp_flow_session` and
   `start_acp_dialog_turn` as `Unaudited` / `CLI_NOT_IMPLEMENTED`.
+- Native approvals and questions are in the runtime mailbox (step 3), so mobile
+  web and Peer controllers can see and answer them; live check still owed.
 - Native CLI processes run over `open_workspace_stdio` for SSH and container
   workspaces, so remote workspaces already work for an attached Desktop.
   Claude CLI update on a remote host is refused.
@@ -118,7 +149,7 @@ Each step merges on its own.
    Done: `notifications::global_notification_sink` publishes through
    `emit_global_event`; Desktop adds the events to the Peer Mode fan-out list.
 3. **Interactions (D5).** Register approvals and questions with the runtime
-   managers; remove the custom event and its Web UI handling.
+   managers; remove the custom event and its Web UI handling. Done; see D5.
 4. **Runtime port (D4).**
    - Add an external-session port in `runtime-ports`; the native crate
      implements it and every host registers it at startup (same pattern as
@@ -175,6 +206,6 @@ background tasks. Missing pieces, to add when a consumer needs them:
 
 - Confirm live what mobile web and IM bots do today when sending to a native
   session (expected: silent local fallback, see Current state).
-- Confirm the mobile question card renders a native question once it is
-  registered with `UserInputManager` (mobile answers through
-  `submit_user_answers`, which is `HANDLED` for runtime-owned questions).
+- Confirm live that mobile web shows and answers a native approval and a
+  native question (mailbox and `submit_user_answers`), and that a Peer
+  controller sees the band. Step 3 was verified with unit tests only.
