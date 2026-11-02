@@ -15971,7 +15971,18 @@ impl openbitfun_runtime_ports::RemoteControlStatePort for ConversationCoordinato
         Option<openbitfun_runtime_ports::RemoteControlStateSnapshot>,
     > {
         let Some(session) = self.get_session_manager().get_session(&request.session_id) else {
-            return Ok(None);
+            // External Sessions are owned by the scheduler, not loaded here.
+            let active_turn_id = super::scheduler::get_global_scheduler()
+                .and_then(|scheduler| scheduler.external_session_active_turn(&request.session_id));
+            return Ok(active_turn_id.map(|turn_id| {
+                openbitfun_runtime_ports::RemoteControlStateSnapshot {
+                    session_id: request.session_id.clone(),
+                    state: openbitfun_runtime_ports::RemoteControlSessionState::Processing,
+                    active_turn_id: Some(turn_id),
+                    queue_depth: 0,
+                    metadata: serde_json::Map::new(),
+                }
+            }));
         };
 
         let mut metadata = serde_json::Map::new();

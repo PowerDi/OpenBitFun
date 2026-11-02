@@ -3143,6 +3143,21 @@ impl CoreRemoteInteractionRuntimeHost {
 }
 
 #[cfg(feature = "remote-connect")]
+async fn session_is_externally_driven(storage: &std::path::Path, session_id: &str) -> bool {
+    let Some(coordinator) = get_global_coordinator() else {
+        return false;
+    };
+    matches!(
+        coordinator
+            .get_session_manager()
+            .persistence_manager()
+            .load_session_metadata(storage, session_id)
+            .await,
+        Ok(Some(metadata)) if metadata.is_externally_driven()
+    )
+}
+
+#[cfg(feature = "remote-connect")]
 fn generate_remote_turn_id() -> String {
     format!("turn_{}", uuid::Uuid::new_v4())
 }
@@ -3190,6 +3205,15 @@ impl RemoteDialogRuntimeHost for CoreRemoteDialogRuntimeHost<'_> {
         session_id: &str,
         workspace: RemoteDialogWorkspaceBinding,
     ) -> Result<(), String> {
+        if let Some(storage) =
+            CoreServiceAgentRuntime::resolve_session_storage_dir(session_id).await
+        {
+            if session_is_externally_driven(&storage, session_id).await {
+                // The scheduler routes external sessions without a local
+                // restore, which would replace their agent mode.
+                return Ok(());
+            }
+        }
         // The binding's workspace ID selects the record, its runtime scope, and
         // its storage; the legacy path fields only serve pre-ID bindings.
         self.coordinator
@@ -3925,8 +3949,13 @@ impl RemoteCancelRuntimeHost for CoreRemoteCancelRuntimeHost {
     async fn restore_remote_session(
         &self,
         session_id: &str,
-        _restore_path_hint: &str,
+        restore_path_hint: &str,
     ) -> Result<(), String> {
+        if session_is_externally_driven(std::path::Path::new(restore_path_hint), session_id).await {
+            // Nothing to restore locally: an idle external session has no
+            // running task, which the cancel flow reports as such.
+            return Ok(());
+        }
         let binding = CoreServiceAgentRuntime::resolve_session_workspace_binding(session_id)
             .await
             .ok_or_else(|| {

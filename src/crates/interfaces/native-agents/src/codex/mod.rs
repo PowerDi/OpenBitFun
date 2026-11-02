@@ -66,7 +66,7 @@ impl NativeAgentDriver for CodexNativeDriver {
             input: super::capabilities::NativeInputCapabilities {
                 images: true,
                 steering: true,
-                queue: false,
+                queue: true,
             },
             // OpenBitFun-managed worktrees; the thread keeps its first cwd.
             worktree: true,

@@ -152,6 +152,13 @@ impl AppState {
                     ))
                 })?,
         );
+        if let Some(service) = acp_client_service.as_ref() {
+            // Native agent sessions run behind the runtime scheduler, so mobile,
+            // IM bots and Peer controllers drive them like the desktop does.
+            openbitfun_core::agentic::coordination::set_external_session_port(Arc::new(
+                openbitfun_acp::client::NativeExternalSessionPort::new(service.clone()),
+            ));
+        }
 
         let miniapp_manager = Arc::new(MiniAppManager::new(path_manager.clone()));
         initialize_global_miniapp_manager(miniapp_manager.clone());

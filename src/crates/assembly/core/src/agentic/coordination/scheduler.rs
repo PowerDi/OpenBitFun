@@ -130,6 +130,8 @@ pub(crate) enum QueuedTurnExecution {
     Standard,
     FreshExternalSubagent(ExternalSubagentDelegationQueuedExecution),
     HiddenSubagent(HiddenSubagentQueuedExecution),
+    /// A Session driven by an external agent process (`provider: "acp"`).
+    ExternalSession(openbitfun_runtime_ports::ExternalSessionScope),
 }
 
 #[derive(Debug, Clone)]
@@ -288,6 +290,8 @@ pub(crate) struct HiddenSubagentQueueCancelHandle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActiveInternalTurn {
     HiddenSubagent,
+    /// A turn of a Session driven by an external agent process.
+    ExternalSession,
 }
 
 #[derive(Clone)]
@@ -379,6 +383,15 @@ pub struct DialogScheduler {
     /// Currently active turn metadata keyed by target session ID
     active_turns: Arc<ActiveDialogTurnStore>,
     active_internal_turns: Arc<dashmap::DashMap<String, ActiveInternalTurn>>,
+    /// Sessions admitted through the external-session path. Kept for the
+    /// process so queued follow-ups dispatch without a local restore.
+    external_sessions: Arc<dashmap::DashSet<String>>,
+    #[cfg(test)]
+    test_external_port:
+        std::sync::Mutex<Option<Arc<dyn openbitfun_runtime_ports::ExternalSessionPort>>>,
+    /// Running external-session turn and scope, keyed by session id.
+    external_scopes:
+        Arc<dashmap::DashMap<String, (String, openbitfun_runtime_ports::ExternalSessionScope)>>,
     /// Turns whose cancelled auto-reply should be suppressed because the source
     /// agent explicitly cancelled its own outstanding SessionMessage request.
     suppressed_cancelled_replies: Arc<DialogReplySuppressionSet>,
@@ -504,6 +517,10 @@ impl DialogScheduler {
             session_operation_locks: KeyedAsyncLock::default(),
             active_turns: Arc::new(ActiveDialogTurnStore::default()),
             active_internal_turns: Arc::new(dashmap::DashMap::new()),
+            external_scopes: Arc::new(dashmap::DashMap::new()),
+            external_sessions: Arc::new(dashmap::DashSet::new()),
+            #[cfg(test)]
+            test_external_port: std::sync::Mutex::new(None),
             suppressed_cancelled_replies: Arc::new(DialogReplySuppressionSet::default()),
             retired_maintenance_outcomes: Arc::new(DialogReplySuppressionSet::default()),
             goal_continuation_abort: Arc::new(SessionAbortFlags::default()),
@@ -1313,6 +1330,22 @@ impl DialogScheduler {
         mut queued_turn: QueuedTurn,
         reject_if_busy: bool,
     ) -> Result<DialogSubmitOutcome, SchedulerSubmitError> {
+        if matches!(queued_turn.execution, QueuedTurnExecution::Standard) {
+            if let Some(scope) = self
+                .resolve_external_session_scope(&session_id, &queued_turn)
+                .await?
+            {
+                queued_turn.execution = QueuedTurnExecution::ExternalSession(scope);
+                return self
+                    .submit_external_session_turn_locked(
+                        session_id,
+                        resolved_turn_id,
+                        queued_turn,
+                        reject_if_busy,
+                    )
+                    .await;
+            }
+        }
         if !self
             .host_queue
             .lock()
@@ -1670,7 +1703,9 @@ impl DialogScheduler {
                 .cancelled(session_id, id);
         }
         match removed_turn.execution {
-            QueuedTurnExecution::Standard | QueuedTurnExecution::FreshExternalSubagent(_) => {
+            QueuedTurnExecution::Standard
+            | QueuedTurnExecution::FreshExternalSubagent(_)
+            | QueuedTurnExecution::ExternalSession(_) => {
                 if let Some(turn_id) = removed_turn.turn_id {
                     self.coordinator
                         .emit_event(AgenticEvent::DialogTurnCancelled {
@@ -1704,6 +1739,12 @@ impl DialogScheduler {
         session_id: &str,
         turn_id: &str,
     ) -> Result<bool, String> {
+        if let Some(result) = self
+            .cancel_external_session_turn(session_id, Some(turn_id))
+            .await
+        {
+            return result;
+        }
         self.cancel_queued_or_active_turn_with_descendant_policy(session_id, turn_id, true)
             .await
     }
@@ -1907,6 +1948,16 @@ impl DialogScheduler {
         wait_timeout: Duration,
         cancel_descendants: bool,
     ) -> OpenBitFunResult<Option<String>> {
+        if let Some(turn_id) = self.external_session_active_turn(session_id) {
+            return match self
+                .cancel_external_session_turn(session_id, Some(&turn_id))
+                .await
+            {
+                Some(Ok(_)) => Ok(Some(turn_id)),
+                Some(Err(error)) => Err(OpenBitFunError::service(error)),
+                None => Ok(None),
+            };
+        }
         let _operation_guard = self.lock_session_operation(session_id).await;
         abort_thread_goal_continuation_for_session(session_id);
         self.coordinator
@@ -2061,6 +2112,492 @@ impl DialogScheduler {
         Some(turn_id)
     }
 
+    /// Registered external-session driver (tests may install their own).
+    fn external_session_port(
+        &self,
+    ) -> Option<Arc<dyn openbitfun_runtime_ports::ExternalSessionPort>> {
+        #[cfg(test)]
+        if let Some(port) = self
+            .test_external_port
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
+            return Some(port);
+        }
+        super::external_sessions::external_session_port()
+    }
+
+    /// Scope of an externally driven Session, read from its persisted
+    /// metadata without loading it into the Session manager (a local restore
+    /// would replace its `acp:<client>` mode with a local fallback).
+    async fn resolve_external_session_scope(
+        &self,
+        session_id: &str,
+        queued_turn: &QueuedTurn,
+    ) -> Result<Option<openbitfun_runtime_ports::ExternalSessionScope>, SchedulerSubmitError> {
+        if self.session_manager.get_session(session_id).is_some() {
+            // Loaded Sessions are local; external ones are never loaded.
+            return Ok(None);
+        }
+        let storage_path = match self
+            .session_manager
+            .require_session_storage_path(session_id)
+            .await
+        {
+            Ok(path) => Some(path),
+            Err(OpenBitFunError::NotFound(_)) => {
+                if let Some(workspace_id) = queued_turn
+                    .workspace_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                {
+                    Some(
+                        CoreSessionStorePort::with_path_manager(
+                            self.session_manager.path_manager(),
+                        )
+                        .resolve_workspace_storage(workspace_id)
+                        .await
+                        .map(|resolution| resolution.effective_storage_path)
+                        .map_err(SchedulerSubmitError::Port)?,
+                    )
+                } else if let Some(path) = queued_turn.workspace_path.as_deref() {
+                    Some(
+                        self.resolve_session_restore_path(
+                            path,
+                            queued_turn.remote_connection_id.as_deref(),
+                            queued_turn.remote_ssh_host.as_deref(),
+                        )
+                        .await?,
+                    )
+                } else {
+                    None
+                }
+            }
+            Err(error) => return Err(SchedulerSubmitError::Core(error)),
+        };
+        let Some(storage_path) = storage_path else {
+            return Ok(None);
+        };
+        let metadata = self
+            .session_manager
+            .persistence_manager()
+            .load_session_metadata(&storage_path, session_id)
+            .await
+            .map_err(SchedulerSubmitError::Core)?;
+        let Some(metadata) = metadata.filter(|metadata| metadata.is_externally_driven()) else {
+            return Ok(None);
+        };
+        let client_id = metadata
+            .external_client_id()
+            .map(str::to_string)
+            .ok_or_else(|| {
+                SchedulerSubmitError::Core(OpenBitFunError::Validation(format!(
+                    "External session has no client id in its agent type: session_id={session_id}, agent_type={}",
+                    metadata.agent_type
+                )))
+            })?;
+        // The workspace record is authoritative for the host and execution
+        // root; the request only carries a projection of them.
+        let binding = self
+            .session_manager
+            .resolve_session_workspace_binding(session_id)
+            .await;
+        let workspace_path = binding
+            .as_ref()
+            .map(|binding| binding.root_path.to_string_lossy().into_owned())
+            .or_else(|| metadata.workspace_path.clone())
+            .or_else(|| queued_turn.workspace_path.clone())
+            .ok_or_else(|| {
+                SchedulerSubmitError::Core(OpenBitFunError::Validation(format!(
+                    "External session has no workspace path: session_id={session_id}"
+                )))
+            })?;
+        let remote_connection_id = match binding.as_ref() {
+            Some(binding) => binding.connection_id().map(ToOwned::to_owned),
+            None => queued_turn.remote_connection_id.clone(),
+        };
+        Ok(Some(openbitfun_runtime_ports::ExternalSessionScope {
+            session_id: session_id.to_string(),
+            client_id,
+            workspace_path,
+            remote_connection_id,
+            session_storage_path: storage_path.to_string_lossy().into_owned(),
+        }))
+    }
+
+    /// Admission for externally driven Sessions: same queue, busy and
+    /// settlement semantics as local turns, without loading the Session.
+    async fn submit_external_session_turn_locked(
+        &self,
+        session_id: String,
+        resolved_turn_id: String,
+        queued_turn: QueuedTurn,
+        reject_if_busy: bool,
+    ) -> Result<DialogSubmitOutcome, SchedulerSubmitError> {
+        let QueuedTurnExecution::ExternalSession(scope) = &queued_turn.execution else {
+            unreachable!("external admission requires an external execution");
+        };
+        self.external_sessions.insert(session_id.clone());
+        let port = self.external_session_port()
+            .filter(|port| port.supports_client(&scope.client_id))
+            .ok_or_else(|| {
+                SchedulerSubmitError::Port(PortError::new(
+                    PortErrorKind::NotAvailable,
+                    format!(
+                        "This host cannot run {} sessions; open the session on the desktop that created it",
+                        scope.client_id
+                    ),
+                ))
+            })?;
+        drop(port);
+        let busy = self.active_turns.contains(&session_id);
+        let queue_has_items = self.queues.has_items(&session_id);
+        let state_fact = if busy {
+            DialogSessionStateFact::Processing
+        } else {
+            DialogSessionStateFact::Idle
+        };
+        let action = resolve_dialog_submit_queue_action(DialogSubmitQueueFacts {
+            session_state: state_fact,
+            queue_has_items,
+            policy: queued_turn.policy,
+        });
+        if reject_if_busy
+            && matches!(
+                action,
+                DialogSubmitQueueAction::EnqueueThenStartNext
+                    | DialogSubmitQueueAction::EnqueueForActiveTurn
+            )
+        {
+            return Err(SchedulerSubmitError::Message(
+                "Session state does not allow starting new dialog: Processing".to_string(),
+            ));
+        }
+        match action {
+            DialogSubmitQueueAction::StartImmediately
+            | DialogSubmitQueueAction::ClearQueueAndStartImmediately => {
+                if matches!(
+                    action,
+                    DialogSubmitQueueAction::ClearQueueAndStartImmediately
+                ) {
+                    let _ = self.clear_queue(&session_id).await;
+                }
+                let tid = self.start_turn(&session_id, &queued_turn).await?;
+                queued_turn.accept_settlement();
+                Ok(DialogSubmitOutcome::Started {
+                    session_id,
+                    turn_id: tid,
+                })
+            }
+            DialogSubmitQueueAction::EnqueueThenStartNext => {
+                self.enqueue(&session_id, queued_turn.clone())?;
+                queued_turn.accept_settlement();
+                let started_tid = self.try_start_next_external_locked(&session_id).await?;
+                Ok(queued_submission_outcome(
+                    session_id,
+                    resolved_turn_id,
+                    started_tid,
+                ))
+            }
+            DialogSubmitQueueAction::EnqueueForActiveTurn => {
+                self.enqueue(&session_id, queued_turn.clone())?;
+                queued_turn.accept_settlement();
+                Ok(DialogSubmitOutcome::Queued {
+                    session_id,
+                    turn_id: resolved_turn_id,
+                })
+            }
+        }
+    }
+
+    /// Dispatch the next queued turn of an idle external Session.
+    async fn try_start_next_external_locked(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<String>, SchedulerSubmitError> {
+        if self.active_turns.contains(session_id) {
+            return Ok(None);
+        }
+        let Some(next_turn) = self.dequeue_next(session_id) else {
+            return Ok(None);
+        };
+        match self.start_turn(session_id, &next_turn).await {
+            Ok(tid) => Ok(Some(tid)),
+            Err(err) => {
+                if !self
+                    .host_queue
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .hold(session_id, &next_turn, &err.to_string())
+                {
+                    self.requeue_front(session_id, next_turn);
+                }
+                Err(err)
+            }
+        }
+    }
+
+    /// Start a turn through the external-session port and own its slot; the
+    /// port reports the outcome on the scheduler's outcome channel.
+    async fn start_external_session_turn(
+        &self,
+        session_id: &str,
+        queued_turn: &QueuedTurn,
+        scope: &openbitfun_runtime_ports::ExternalSessionScope,
+    ) -> Result<String, SchedulerSubmitError> {
+        let port = self
+            .external_session_port()
+            .filter(|port| port.supports_client(&scope.client_id))
+            .ok_or_else(|| {
+                SchedulerSubmitError::Port(PortError::new(
+                    PortErrorKind::NotAvailable,
+                    format!("This host cannot run {} sessions", scope.client_id),
+                ))
+            })?;
+        let turn_id = queued_turn.turn_id.clone().ok_or_else(|| {
+            format!("Scheduled external session turn is missing turn_id: session_id={session_id}")
+        })?;
+        let attachments = queued_turn
+            .image_contexts
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .map(external_attachment_from_image_context)
+            .collect();
+        // Own the slot before the agent can report its first event.
+        self.active_turns.insert(
+            session_id,
+            ActiveDialogTurn::new(
+                turn_id.clone(),
+                Some(scope.workspace_path.clone()),
+                scope.remote_connection_id.clone(),
+                None,
+                queued_turn.agent_type.clone(),
+                queued_turn
+                    .original_user_input
+                    .clone()
+                    .unwrap_or_else(|| queued_turn.user_input.clone()),
+                queued_turn.user_message_metadata.clone(),
+                queued_turn.policy,
+                queued_turn.reply_route.clone(),
+            ),
+        );
+        self.active_internal_turns
+            .insert(session_id.to_string(), ActiveInternalTurn::ExternalSession);
+        self.external_scopes
+            .insert(session_id.to_string(), (turn_id.clone(), scope.clone()));
+        let outcome_tx = self.outcome_tx.clone();
+        let outcome_session = session_id.to_string();
+        let outcome_turn = turn_id.clone();
+        let started = port
+            .start_turn(
+                openbitfun_runtime_ports::ExternalTurnStartRequest {
+                    scope: scope.clone(),
+                    turn_id: turn_id.clone(),
+                    message: queued_turn.user_input.clone(),
+                    display_message: queued_turn.original_user_input.clone(),
+                    attachments,
+                },
+                Box::new(move |outcome| {
+                    let outcome = match outcome {
+                        openbitfun_runtime_ports::ExternalTurnOutcome::Completed => {
+                            TurnOutcome::Completed {
+                                turn_id: outcome_turn,
+                                final_response: String::new(),
+                            }
+                        }
+                        openbitfun_runtime_ports::ExternalTurnOutcome::Cancelled => {
+                            TurnOutcome::Cancelled {
+                                turn_id: outcome_turn,
+                            }
+                        }
+                        openbitfun_runtime_ports::ExternalTurnOutcome::Failed { error } => {
+                            TurnOutcome::Failed {
+                                turn_id: outcome_turn,
+                                error,
+                            }
+                        }
+                    };
+                    let _ = outcome_tx.send((outcome_session, outcome));
+                }),
+            )
+            .await;
+        if let Err(error) = started {
+            let _ = self.active_turns.take_for_outcome(session_id, &turn_id);
+            self.active_internal_turns.remove(session_id);
+            self.external_scopes.remove(session_id);
+            self.active_turn_retired.notify_waiters();
+            return Err(SchedulerSubmitError::Port(error));
+        }
+        Ok(turn_id)
+    }
+
+    /// Steering for a running external turn.
+    async fn steer_external_session_turn(
+        &self,
+        request: AgentDialogSteerRequest,
+    ) -> Option<PortResult<DialogSteerOutcome>> {
+        let scope = {
+            let _operation_guard = self.lock_session_operation(&request.session_id).await;
+            if !matches!(
+                self.active_internal_turns
+                    .get(&request.session_id)
+                    .map(|entry| *entry.value()),
+                Some(ActiveInternalTurn::ExternalSession)
+            ) {
+                return None;
+            }
+            if !self
+                .active_turns
+                .matches_turn(&request.session_id, &request.turn_id)
+            {
+                return Some(Err(PortError::new(
+                    PortErrorKind::SessionInUse,
+                    "The target turn is not running",
+                )));
+            }
+            match self.external_scope_for_active_session(&request.session_id) {
+                Some(scope) => scope,
+                None => return None,
+            }
+        };
+        let port = self.external_session_port()?;
+        let attachments = request.attachments;
+        Some(
+            port.steer_turn(
+                scope,
+                request.turn_id.clone(),
+                request.content,
+                request.display_content,
+                attachments,
+            )
+            .await
+            .map(|steering_id| DialogSteerOutcome::Buffered {
+                session_id: request.session_id,
+                turn_id: request.turn_id,
+                steering_id,
+            }),
+        )
+    }
+
+    /// Steer the running external turn while the session operation lock is
+    /// already held (queue promotion).
+    pub(super) async fn steer_external_turn_now(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        content: String,
+        display_content: Option<String>,
+        attachments: Vec<AgentInputAttachment>,
+    ) -> PortResult<String> {
+        let scope = self
+            .external_scope_for_active_session(session_id)
+            .ok_or_else(|| {
+                PortError::new(
+                    PortErrorKind::SessionInUse,
+                    "The target turn is not running",
+                )
+            })?;
+        let port = self.external_session_port().ok_or_else(|| {
+            PortError::new(
+                PortErrorKind::NotAvailable,
+                "External agents are unavailable on this host",
+            )
+        })?;
+        port.steer_turn(
+            scope,
+            turn_id.to_string(),
+            content,
+            display_content,
+            attachments,
+        )
+        .await
+    }
+
+    /// Scope recorded when the active external turn started.
+    fn external_scope_for_active_session(
+        &self,
+        session_id: &str,
+    ) -> Option<openbitfun_runtime_ports::ExternalSessionScope> {
+        self.external_scopes
+            .get(session_id)
+            .map(|entry| entry.value().1.clone())
+    }
+
+    /// Cancel an external Session's queued or running turn. `None` when the
+    /// Session is not externally driven by this scheduler.
+    async fn cancel_external_session_turn(
+        &self,
+        session_id: &str,
+        turn_id: Option<&str>,
+    ) -> Option<Result<bool, String>> {
+        let _operation_guard = self.lock_session_operation(session_id).await;
+        if let Some(turn_id) = turn_id {
+            if let Some(removed) = remove_queued_turn_by_id(&self.queues, session_id, turn_id) {
+                if matches!(removed.execution, QueuedTurnExecution::ExternalSession(_)) {
+                    self.finish_removed_queued_turn(session_id, removed).await;
+                    return Some(Ok(true));
+                }
+                self.requeue_front(session_id, removed);
+                return None;
+            }
+        }
+        if !matches!(
+            self.active_internal_turns
+                .get(session_id)
+                .map(|entry| *entry.value()),
+            Some(ActiveInternalTurn::ExternalSession)
+        ) {
+            return None;
+        }
+        if let Some(turn_id) = turn_id {
+            if !self.active_turns.matches_turn(session_id, turn_id) {
+                return Some(Ok(false));
+            }
+        }
+        let port = self.external_session_port()?;
+        Some(
+            port.cancel_turn(session_id)
+                .await
+                .map(|()| false)
+                .map_err(|error| error.message),
+        )
+    }
+
+    /// True for a Session admitted through, or persisted for, the external
+    /// path. Unloaded Sessions are checked against their stored metadata.
+    pub(crate) async fn is_external_session(&self, session_id: &str) -> bool {
+        if self.external_sessions.contains(session_id) {
+            return true;
+        }
+        if self.session_manager.get_session(session_id).is_some() {
+            return false;
+        }
+        let Ok(storage) = self
+            .session_manager
+            .require_session_storage_path(session_id)
+            .await
+        else {
+            return false;
+        };
+        matches!(
+            self.session_manager
+                .persistence_manager()
+                .load_session_metadata(&storage, session_id)
+                .await,
+            Ok(Some(metadata)) if metadata.is_externally_driven()
+        )
+    }
+
+    /// Running external turn of a Session, for remote control state.
+    pub(crate) fn external_session_active_turn(&self, session_id: &str) -> Option<String> {
+        self.external_scopes
+            .get(session_id)
+            .map(|entry| entry.value().0.clone())
+    }
+
     // ── Private helpers ──────────────────────────────────────────────────────
 
     fn enqueue(&self, session_id: &str, queued_turn: QueuedTurn) -> Result<(), String> {
@@ -2116,7 +2653,9 @@ impl DialogScheduler {
                 continue;
             }
             match queued_turn.execution {
-                QueuedTurnExecution::Standard | QueuedTurnExecution::FreshExternalSubagent(_) => {
+                QueuedTurnExecution::Standard
+                | QueuedTurnExecution::FreshExternalSubagent(_)
+                | QueuedTurnExecution::ExternalSession(_) => {
                     if let Some(turn_id) = queued_turn.turn_id {
                         retired_turn_ids.push(turn_id.clone());
                         self.coordinator
@@ -2177,6 +2716,11 @@ impl DialogScheduler {
         &self,
         session_id: &str,
     ) -> Result<Option<String>, SchedulerSubmitError> {
+        if self.session_manager.get_session(session_id).is_none()
+            && self.external_sessions.contains(session_id)
+        {
+            return self.try_start_next_external_locked(session_id).await;
+        }
         let state = self
             .session_manager
             .get_session(session_id)
@@ -2337,6 +2881,11 @@ impl DialogScheduler {
                     ),
                 );
                 return Ok(resolved);
+            }
+            QueuedTurnExecution::ExternalSession(scope) => {
+                return self
+                    .start_external_session_turn(session_id, queued_turn, scope)
+                    .await;
             }
             QueuedTurnExecution::Standard => {}
         }
@@ -2798,6 +3347,9 @@ impl DialogScheduler {
                         .remove(&session_id)
                         .map(|(_, turn)| turn)
                 });
+                if active_internal_turn == Some(ActiveInternalTurn::ExternalSession) {
+                    self.external_scopes.remove(&session_id);
+                }
                 let lifecycle_plan =
                     resolve_turn_outcome_lifecycle_plan(&outcome, active_turn.is_some());
                 if active_turn.is_some() && lifecycle_plan.status == TurnOutcomeStatus::Completed {
@@ -3065,6 +3617,42 @@ fn image_context_metadata(attachment: &AgentInputAttachment) -> Option<serde_jso
     }
 }
 
+/// External agents read images inline from stdin, so a file attachment on
+/// this host becomes a data URL here (remote workspaces never read it).
+fn external_attachment_from_image_context(image: ImageContextData) -> AgentInputAttachment {
+    let mut metadata = serde_json::Map::new();
+    let data_url = image
+        .data_url
+        .filter(|url| !url.trim().is_empty())
+        .or_else(|| {
+            use base64::Engine as _;
+            let path = image.image_path.as_deref()?;
+            match std::fs::read(path) {
+                Ok(bytes) => Some(format!(
+                    "data:{};base64,{}",
+                    image.mime_type,
+                    base64::engine::general_purpose::STANDARD.encode(bytes)
+                )),
+                Err(error) => {
+                    warn!("Failed to read image attachment for external agent: {error}");
+                    None
+                }
+            }
+        });
+    if let Some(data_url) = data_url {
+        metadata.insert("dataUrl".into(), serde_json::Value::String(data_url));
+    }
+    metadata.insert(
+        "mimeType".into(),
+        serde_json::Value::String(image.mime_type),
+    );
+    AgentInputAttachment {
+        kind: "remote_image".to_string(),
+        id: image.id,
+        metadata,
+    }
+}
+
 pub(crate) fn agent_dialog_turn_image_contexts(
     attachments: &[AgentInputAttachment],
 ) -> PortResult<Option<Vec<ImageContextData>>> {
@@ -3276,6 +3864,9 @@ impl AgentDialogTurnPort for DialogScheduler {
         &self,
         request: AgentDialogSteerRequest,
     ) -> PortResult<DialogSteerOutcome> {
+        if let Some(result) = self.steer_external_session_turn(request.clone()).await {
+            return result;
+        }
         DialogScheduler::buffer_steering(
             self,
             request.session_id,
@@ -3775,6 +4366,148 @@ mod tests {
             event_queue,
             root,
         )
+    }
+
+    /// External-session driver double: records starts, finishes on demand.
+    #[derive(Default)]
+    struct RecordingExternalPort {
+        starts: std::sync::Mutex<Vec<(String, String)>>,
+        sinks: std::sync::Mutex<Vec<openbitfun_runtime_ports::ExternalTurnOutcomeSink>>,
+        cancels: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl openbitfun_runtime_ports::ExternalSessionPort for RecordingExternalPort {
+        fn supports_client(&self, client_id: &str) -> bool {
+            client_id == "claude-native"
+        }
+        async fn start_turn(
+            &self,
+            request: openbitfun_runtime_ports::ExternalTurnStartRequest,
+            on_outcome: openbitfun_runtime_ports::ExternalTurnOutcomeSink,
+        ) -> PortResult<()> {
+            self.starts
+                .lock()
+                .unwrap()
+                .push((request.turn_id, request.message));
+            self.sinks.lock().unwrap().push(on_outcome);
+            Ok(())
+        }
+        async fn steer_turn(
+            &self,
+            _scope: openbitfun_runtime_ports::ExternalSessionScope,
+            _turn_id: String,
+            _message: String,
+            _display_message: Option<String>,
+            _attachments: Vec<AgentInputAttachment>,
+        ) -> PortResult<String> {
+            Ok("steer-1".to_string())
+        }
+        async fn cancel_turn(&self, session_id: &str) -> PortResult<()> {
+            self.cancels.lock().unwrap().push(session_id.to_string());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn external_sessions_queue_behind_the_driver_without_a_local_restore() {
+        let (scheduler, session_manager, _, root) = test_scheduler_with_persistence(true);
+        let port = Arc::new(RecordingExternalPort::default());
+        *scheduler.test_external_port.lock().unwrap() = Some(port.clone());
+        let workspace = fixture_workspace_dir(root.path().join("native-workspace"));
+        let session_id = "acp_claude-native_test";
+        let storage = scheduler
+            .resolve_session_restore_path(&workspace.to_string_lossy(), None, None)
+            .await
+            .expect("storage path");
+        let mut metadata = openbitfun_services_core::session::SessionMetadata::new(
+            session_id.to_string(),
+            "Claude".to_string(),
+            "acp:claude-native".to_string(),
+            "primary".to_string(),
+        );
+        metadata.workspace_path = Some(workspace.to_string_lossy().into_owned());
+        metadata.custom_metadata = Some(serde_json::json!({"provider": "acp"}));
+        session_manager
+            .persistence_manager()
+            .save_session_metadata(&storage, &metadata)
+            .await
+            .expect("metadata");
+
+        let submit = |turn: &str, text: &str| AgentDialogTurnRequest {
+            session_id: session_id.to_string(),
+            message: text.to_string(),
+            output_schema: None,
+            original_message: None,
+            turn_id: Some(turn.to_string()),
+            execution: Default::default(),
+            agent_type: "Standard".to_string(),
+            workspace_path: Some(workspace.to_string_lossy().into_owned()),
+            workspace_id: None,
+            remote_connection_id: None,
+            remote_ssh_host: None,
+            policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::RemoteRelay),
+            reply_route: None,
+            prepended_reminders: Vec::new(),
+            attachments: Vec::new(),
+            metadata: serde_json::Map::new(),
+        };
+        let first =
+            AgentDialogTurnPort::submit_dialog_turn(scheduler.as_ref(), submit("t1", "one"))
+                .await
+                .expect("first");
+        assert!(matches!(first, DialogSubmitOutcome::Started { .. }));
+        let second =
+            AgentDialogTurnPort::submit_dialog_turn(scheduler.as_ref(), submit("t2", "two"))
+                .await
+                .expect("second");
+        assert!(matches!(second, DialogSubmitOutcome::Queued { .. }));
+        // The session never entered the local session manager (no mode rewrite).
+        assert!(session_manager.get_session(session_id).is_none());
+        let reloaded = session_manager
+            .persistence_manager()
+            .load_session_metadata(&storage, session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reloaded.agent_type, "acp:claude-native");
+        assert_eq!(
+            scheduler
+                .external_session_active_turn(session_id)
+                .as_deref(),
+            Some("t1")
+        );
+
+        // Cancelling targets the driver; the queued turn stays.
+        scheduler
+            .cancel_queued_or_active_turn(session_id, "t1")
+            .await
+            .expect("cancel");
+        assert_eq!(port.cancels.lock().unwrap().as_slice(), [session_id]);
+
+        // The driver's outcome dispatches the queued turn.
+        let sink = port.sinks.lock().unwrap().remove(0);
+        sink(openbitfun_runtime_ports::ExternalTurnOutcome::Cancelled);
+        for _ in 0..200 {
+            if port.starts.lock().unwrap().len() == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let starts = port.starts.lock().unwrap().clone();
+        assert_eq!(
+            starts,
+            [
+                ("t1".to_string(), "one".to_string()),
+                ("t2".to_string(), "two".to_string())
+            ]
+        );
+        assert_eq!(
+            scheduler
+                .external_session_active_turn(session_id)
+                .as_deref(),
+            Some("t2")
+        );
     }
 
     #[test]

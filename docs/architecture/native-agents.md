@@ -150,7 +150,27 @@ Each step merges on its own.
    `emit_global_event`; Desktop adds the events to the Peer Mode fan-out list.
 3. **Interactions (D5).** Register approvals and questions with the runtime
    managers; remove the custom event and its Web UI handling. Done; see D5.
-4. **Runtime port (D4).**
+4. **Runtime port (D4).** Done (user decision: desktop also submits through
+   the scheduler, so a message sent while the agent is busy queues).
+   - `runtime-ports::ExternalSessionPort` (start / steer / cancel, one outcome
+     callback per turn); `openbitfun_acp::client::NativeExternalSessionPort`
+     implements it for the native drivers; Desktop registers it in
+     `AppState` via `set_external_session_port`. A host without it answers
+     with an explicit "cannot run <client> sessions" error.
+   - The scheduler recognizes `provider: "acp"` from persisted metadata
+     before any restore, never loads the session into the Session manager,
+     owns the active-turn slot and queue, and dispatches the next queued turn
+     on the driver outcome (reported from `native-agents/src/events.rs` when
+     the turn's terminal event is queued).
+   - Session restore skips mode, model and reasoning fallback for these
+     sessions, so a stray restore can no longer rewrite `acp:<client>`.
+   - Remote cancel, remote control state, the host dialog queue (list,
+     cancel, promote-to-steer) and steering work on unloaded external
+     sessions.
+   - Native drivers advertise `input.queue`, so the Web UI sends through the
+     host queue like local turns. The old `start_acp_dialog_turn` path stays
+     for generic ACP clients.
+   Original plan items:
    - Add an external-session port in `runtime-ports`; the native crate
      implements it and every host registers it at startup (same pattern as
      `set_openbitfun_control_port`).
@@ -202,7 +222,15 @@ background tasks. Missing pieces, to add when a consumer needs them:
 - Tauri command names are kept unless a step removes the command entirely;
   any added or removed command updates its Product Operation Registry row.
 
-## Open checks before step 4
+## Open checks (live, not yet run)
+
+- Step 4: send from mobile web and an IM bot to a native session (start,
+  queue a second message, cancel, steer); desktop send while busy queues;
+  SSH workspace session from mobile.
+- CLI does not register the port yet; CLI-hosted runtimes answer native
+  sessions with the explicit unsupported error.
+
+## Open checks before step 4 (historical)
 
 - Confirm live what mobile web and IM bots do today when sending to a native
   session (expected: silent local fallback, see Current state).

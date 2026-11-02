@@ -6264,8 +6264,14 @@ impl SessionManager {
         let mut should_persist_restored_session = false;
         let mut fallback_previous_model_id = None;
         let mut auto_cleared_reasoning_preset = None;
+        // An external agent (`provider: "acp"`) owns this conversation. Its
+        // `acp:<client>` mode is not a local agent and must never be replaced
+        // by a local fallback mode or model.
+        let externally_driven = session_metadata
+            .as_ref()
+            .is_some_and(SessionMetadata::is_externally_driven);
 
-        if !include_internal {
+        if !include_internal && !externally_driven {
             let external_sources_supported =
                 cfg!(feature = "external-sources") && !session.config.is_remote_workspace();
             #[cfg(feature = "external-sources")]
@@ -6347,7 +6353,12 @@ impl SessionManager {
         // Restore fallback: if the persisted model_id is no longer usable
         // (model deleted, disabled, or from a retired selector), repoint it to
         // the primary selector before the session re-enters memory.
-        if let Some(persisted_model_id) = session.config.model_id.as_deref() {
+        if let Some(persisted_model_id) = session
+            .config
+            .model_id
+            .as_deref()
+            .filter(|_| !externally_driven)
+        {
             let trimmed = persisted_model_id.trim();
             let needs_fallback = if trimmed.is_empty()
                 || !session_model_allows_fallback(session.config.model_binding_policy)
@@ -6373,7 +6384,10 @@ impl SessionManager {
             }
         }
 
-        if let Some(ai_config) = ai_config_for_restore.as_ref() {
+        if let Some(ai_config) = ai_config_for_restore
+            .as_ref()
+            .filter(|_| !externally_driven)
+        {
             let previous_reasoning_preset = session.config.reasoning_preset.clone();
             session.config.reasoning_preset =
                 Self::normalize_session_reasoning_preset(&session, ai_config).await;

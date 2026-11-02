@@ -1313,6 +1313,25 @@ impl SessionMetadata {
         self.session_name.starts_with("Subagent: ")
     }
 
+    /// True when an external agent process (native driver or ACP client),
+    /// marked by `custom_metadata.provider == "acp"`, owns the conversation.
+    pub fn is_externally_driven(&self) -> bool {
+        self.custom_metadata
+            .as_ref()
+            .and_then(|custom| custom.get(openbitfun_core_types::SESSION_PROVIDER_METADATA_KEY))
+            .and_then(serde_json::Value::as_str)
+            == Some(openbitfun_core_types::SESSION_PROVIDER_ACP)
+    }
+
+    /// External client id from an `acp:<client>` agent type.
+    pub fn external_client_id(&self) -> Option<&str> {
+        self.is_externally_driven()
+            .then(|| self.agent_type.strip_prefix("acp:"))
+            .flatten()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+    }
+
     pub fn should_hide_from_user_lists(&self) -> bool {
         self.is_internal_hidden() || self.is_legacy_leaked_subagent_candidate()
     }

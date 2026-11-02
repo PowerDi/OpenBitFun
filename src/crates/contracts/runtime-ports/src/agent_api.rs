@@ -2125,6 +2125,79 @@ pub struct RemoteControlStateSnapshot {
     pub metadata: serde_json::Map<String, serde_json::Value>,
 }
 
+/// Where an externally driven Session (`provider: "acp"`) runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalSessionScope {
+    pub session_id: String,
+    /// Driver id from the persisted agent type (`acp:<client_id>`).
+    pub client_id: String,
+    /// Execution root (POSIX for remote workspaces).
+    pub workspace_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_connection_id: Option<String>,
+    /// Session storage directory of the owning workspace.
+    pub session_storage_path: String,
+}
+
+/// One user turn submitted to an external agent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalTurnStartRequest {
+    pub scope: ExternalSessionScope,
+    pub turn_id: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<AgentInputAttachment>,
+}
+
+/// How an external turn ended, reported once per started turn.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum ExternalTurnOutcome {
+    Completed,
+    Cancelled,
+    Failed { error: String },
+}
+
+/// One-shot receiver of an external turn's outcome.
+pub type ExternalTurnOutcomeSink = Box<dyn FnOnce(ExternalTurnOutcome) + Send + 'static>;
+
+/// Runtime owner for Sessions driven by an external agent process (native
+/// Claude Code / Codex / Pi drivers, generic ACP clients). The scheduler owns
+/// admission, queueing and the active-turn slot; the port only drives the
+/// agent. Hosts register one implementation at startup.
+#[async_trait::async_trait]
+pub trait ExternalSessionPort: Send + Sync {
+    /// Whether this port drives `client_id` (the scheduler fails closed
+    /// with an explicit unsupported error otherwise).
+    fn supports_client(&self, client_id: &str) -> bool;
+
+    /// Start a turn. `on_outcome` is called exactly once when the turn ends,
+    /// and never when this returns an error.
+    async fn start_turn(
+        &self,
+        request: ExternalTurnStartRequest,
+        on_outcome: ExternalTurnOutcomeSink,
+    ) -> PortResult<()>;
+
+    /// Deliver a steering message to the running turn; returns the steering id.
+    async fn steer_turn(
+        &self,
+        scope: ExternalSessionScope,
+        turn_id: String,
+        message: String,
+        display_message: Option<String>,
+        attachments: Vec<AgentInputAttachment>,
+    ) -> PortResult<String>;
+
+    /// Request cancellation of the running turn; the outcome still arrives
+    /// through the sink given to `start_turn`.
+    async fn cancel_turn(&self, session_id: &str) -> PortResult<()>;
+}
+
 #[async_trait::async_trait]
 pub trait RemoteControlStatePort: Send + Sync {
     async fn read_remote_control_state(
