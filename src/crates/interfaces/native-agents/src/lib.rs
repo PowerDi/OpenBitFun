@@ -35,6 +35,20 @@ use openbitfun_core::util::errors::OpenBitFunResult;
 
 pub use cli_status::{AcpRequirementProbeItem, NativeCliInstallMethod, NativeCliStatus};
 pub use interaction::SubmitAcpPermissionResponseRequest;
+
+/// Report the end of a runtime-started turn (see `events.rs`).
+pub fn watch_external_turn(
+    session_id: &str,
+    turn_id: &str,
+    sink: openbitfun_core::runtime_ports::ExternalTurnOutcomeSink,
+) {
+    events::watch_turn(session_id, turn_id, sink);
+}
+
+/// Drop a watch registered by [`watch_external_turn`]; true when it existed.
+pub fn unwatch_external_turn(session_id: &str, turn_id: &str) -> bool {
+    events::unwatch_turn(session_id, turn_id)
+}
 pub use session_options::{
     AcpAvailableCommand, AcpPlanEntry, AcpSessionConfigKind, AcpSessionConfigOption,
     AcpSessionConfigSelectOption, AcpSessionConfigValue, AcpSessionContextUsage,

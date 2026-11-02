@@ -73,12 +73,12 @@ impl NativeAgentDriver for ClaudeNativeDriver {
                 fork: true,
                 import_transcripts: true,
             },
-            // `queue` stays off: the host dialog queue drives OpenBitFun
-            // turns only; queued Claude messages drain from the composer queue.
+            // Turns run behind the runtime scheduler, so the host dialog
+            // queue (shared with mobile and IM bots) drives them.
             input: super::capabilities::NativeInputCapabilities {
                 images: true,
                 steering: true,
-                queue: false,
+                queue: true,
             },
             // OpenBitFun-managed worktrees only (never `claude --worktree`);
             // the cwd is fixed once the first turn creates a transcript.

@@ -314,7 +314,8 @@ impl DialogScheduler {
                     current_turn_id, ..
                 } => Some(current_turn_id.clone()),
                 _ => None,
-            });
+            })
+            .or_else(|| self.external_session_active_turn(session));
         if s.active_turn_id != active_turn_id {
             s.active_turn_id = active_turn_id.clone();
             s.revision += 1;
@@ -373,9 +374,8 @@ impl DialogScheduler {
         //
         // A mutation is user intent. An idle session may have been released
         // from memory while a remote controller still shows it, so load it
-        // back from persistence first. Only a session this runtime cannot
-        // restore is refused — accepting user work against a session it cannot
-        // vouch for would silently lose it.
+        // back from persistence first. Native external sessions are owned by
+        // their session port and do not require a core SessionState.
         if !matches!(
             request.action,
             DialogQueueAction::List | DialogQueueAction::Get { .. }
@@ -391,12 +391,14 @@ impl DialogScheduler {
                     session, restore_error
                 );
             }
-            if self.session_manager.get_session(session).is_none() {
-                return Err(PortError::new(
-                    PortErrorKind::NotFound,
-                    "Session is not loaded on the execution host",
-                ));
-            }
+        }
+        if self.session_manager.get_session(session).is_none()
+            && !self.is_external_session(session).await
+        {
+            return Err(PortError::new(
+                PortErrorKind::NotFound,
+                "Session is not loaded on the execution host",
+            ));
         }
         let snapshot = self.queue_snapshot(session, None);
         if !matches!(request.action, DialogQueueAction::List)
@@ -447,12 +449,11 @@ impl DialogScheduler {
             }
             // Accepted duplicates remain readable/idempotent. A new message
             // must be rejected before creating a durable queue receipt.
-            let binding = self
-                .session_manager
-                .get_session(session)
-                .ok_or_else(|| error("Session was removed"))?;
-            ensure_session_accepts_conversation(&binding)
-                .map_err(|failure| error(failure.to_string()))?;
+            // External sessions are not loaded; the scheduler admits them.
+            if let Some(binding) = self.session_manager.get_session(session) {
+                ensure_session_accepts_conversation(&binding)
+                    .map_err(|failure| error(failure.to_string()))?;
+            }
             if s.entries.len() + s.operations.len() >= RECEIPT_LIMIT {
                 return Err(error("Queue receipt budget exhausted; start a new session"));
             }
@@ -492,10 +493,17 @@ impl DialogScheduler {
             );
             s.order.push(message.turn_id.clone());
         }
-        let binding = self
-            .session_manager
-            .get_session(session)
-            .ok_or_else(|| error("Session was removed"))?;
+        let binding = self.session_manager.get_session(session);
+        let (workspace_path, remote_connection_id, remote_ssh_host) = match binding.as_ref() {
+            Some(binding) => (
+                binding.config.workspace_path.clone(),
+                binding.config.remote_connection_id.clone(),
+                binding.config.remote_ssh_host.clone(),
+            ),
+            // The scheduler resolves an external session from its metadata.
+            None if self.is_external_session(session).await => (None, None, None),
+            None => return Err(error("Session was removed")),
+        };
         let mut metadata = message.metadata;
         for key in [
             "acp_transport",
@@ -514,10 +522,10 @@ impl DialogScheduler {
             original_message: message.display_content,
             turn_id: Some(message.turn_id.clone()),
             agent_type: message.agent_type,
-            workspace_path: binding.config.workspace_path.clone(),
+            workspace_path,
             workspace_id: None,
-            remote_connection_id: binding.config.remote_connection_id.clone(),
-            remote_ssh_host: binding.config.remote_ssh_host.clone(),
+            remote_connection_id,
+            remote_ssh_host,
             policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopUi),
             execution: Default::default(),
             output_schema: None,
@@ -709,6 +717,57 @@ impl DialogScheduler {
                     .unwrap()
                     .view
                     .status = DialogQueueStatus::Cancelled;
+            }
+            DialogQueueAction::Promote {
+                expected_active_turn_id: Some(target),
+                ..
+            } if self.external_session_active_turn(session).as_deref() == Some(target.as_str()) => {
+                // External agents take steering through their own driver.
+                let attachments = turn
+                    .image_contexts
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|image| {
+                        AgentInputAttachment::image_context(
+                            image.id,
+                            image.image_path,
+                            image.data_url,
+                            image.mime_type,
+                            image.metadata,
+                        )
+                    })
+                    .collect();
+                let steered = self
+                    .steer_external_turn_now(
+                        session,
+                        target,
+                        turn.user_input.clone(),
+                        turn.original_user_input.clone(),
+                        attachments,
+                    )
+                    .await;
+                match steered {
+                    Ok(steering_id) => {
+                        let mut state = self.queue_state();
+                        let e = state
+                            .sessions
+                            .get_mut(session)
+                            .unwrap()
+                            .entries
+                            .get_mut(&id)
+                            .unwrap();
+                        e.view.status = DialogQueueStatus::SteeringPending;
+                        e.view.reason = None;
+                        e.view.target_turn_id = Some(target.clone());
+                        e.view.steering_id = Some(steering_id);
+                        e.held = Some(turn);
+                    }
+                    Err(failure) => {
+                        self.queue_state().hold(session, &turn, &failure.message);
+                        return Err(failure);
+                    }
+                }
             }
             DialogQueueAction::Promote {
                 expected_active_turn_id: Some(target),

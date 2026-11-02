@@ -150,7 +150,7 @@ pub(crate) fn capabilities() -> NativeAgentCapabilities {
         input: super::capabilities::NativeInputCapabilities {
             images: true,
             steering: true,
-            queue: false,
+            queue: true,
         },
         // OpenBitFun-managed worktrees; the cwd is fixed once Pi has a transcript.
         worktree: true,
@@ -413,6 +413,6 @@ mod tests {
         assert!(caps.history.rollback_last_turn && caps.history.fork);
         assert!(!caps.history.import_transcripts);
         assert!(caps.select_model && caps.thinking && caps.compact && caps.context_usage);
-        assert!(caps.input.images && caps.input.steering && !caps.input.queue);
+        assert!(caps.input.images && caps.input.steering && caps.input.queue);
     }
 }

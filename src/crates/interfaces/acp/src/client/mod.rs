@@ -2,6 +2,7 @@ mod builtin_clients;
 mod config;
 mod dsh_profile;
 mod execution;
+mod external_session_port;
 mod manager;
 mod prompt;
 mod remote_capability_store;
@@ -24,6 +25,7 @@ pub use config::{
 pub use execution::{
     AcpEventCursor, AcpEventProjectionSnapshot, AcpExecutionSnapshot, AcpProjectionJournal,
 };
+pub use external_session_port::NativeExternalSessionPort;
 pub use manager::{AcpClientService, SetAcpSessionConfigOptionRequest, SetAcpSessionModelRequest};
 pub use openbitfun_native_agents::session_options::{
     AcpAvailableCommand, AcpPlanEntry, AcpSessionConfigKind, AcpSessionConfigOption,
