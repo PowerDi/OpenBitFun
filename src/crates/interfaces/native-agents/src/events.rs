@@ -78,6 +78,11 @@ pub(super) async fn enqueue(
     for event in events {
         let terminal = terminal_outcome(&event)
             .map(|(session, turn, outcome)| (session.to_string(), turn.to_string(), outcome));
+        // Persist from the backend before publishing, so the turn file exists
+        // whenever a client observes the event (no window needs to be open).
+        crate::turn_recorder::NativeTurnPersistence::global()
+            .observe(&event)
+            .await;
         // A native stream is already causally ordered. The legacy priority
         // heap must not put tool/terminal events ahead of their turn/round.
         queue

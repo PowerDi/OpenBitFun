@@ -25,6 +25,7 @@ pub mod session_options;
 pub mod session_persistence;
 pub(crate) mod title;
 pub mod tool_card;
+mod turn_recorder;
 
 use std::path::PathBuf;
 use std::sync::Arc;

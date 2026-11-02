@@ -32,7 +32,7 @@ pub struct CreateAcpFlowSessionRecordResponse {
 }
 
 pub struct AcpSessionPersistence {
-    manager: PersistenceManager,
+    manager: Arc<PersistenceManager>,
     native_preferences: NativeAgentPreferencesStore,
 }
 
@@ -40,8 +40,19 @@ impl AcpSessionPersistence {
     pub fn new(path_manager: Arc<PathManager>) -> OpenBitFunResult<Self> {
         Ok(Self {
             native_preferences: NativeAgentPreferencesStore::new(&path_manager.user_config_dir()),
-            manager: PersistenceManager::new(path_manager)?,
+            manager: Arc::new(PersistenceManager::new(path_manager)?),
         })
+    }
+
+    /// Save this session's native turns from the backend (see `turn_recorder.rs`).
+    pub(crate) fn record_turns(&self, session_storage_path: &Path, session_id: &str) {
+        crate::turn_recorder::NativeTurnPersistence::global().register(
+            session_id,
+            crate::turn_recorder::TurnSink {
+                manager: self.manager.clone(),
+                storage: session_storage_path.to_path_buf(),
+            },
+        );
     }
 
     /// Session preferences fall back to this client's global choice per field.
@@ -174,6 +185,7 @@ impl AcpSessionPersistence {
         self.manager
             .create_session_metadata_if_absent(session_storage_path, &metadata)
             .await?;
+        self.record_turns(session_storage_path, child_session_id);
         Ok(())
     }
 

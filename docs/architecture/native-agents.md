@@ -182,8 +182,16 @@ Each step merges on its own.
      when the driver emits its terminal event. Busy, queue, steer, and cancel
      reuse scheduler semantics.
    - Desktop Tauri commands become thin calls into the port.
-5. **Persistence (D6).** Runtime-owned slot allocation and turn save for
-   native sessions; remove the frontend writer.
+5. **Persistence (D6).** Done: `native-agents/src/turn_recorder.rs` folds the
+   drivers' canonical events into `DialogTurnData` and saves it through
+   `PersistenceManager` when the turn starts, at each model-round end and
+   when it settles, before the event is published. Sessions and subagent
+   child records register their storage on open. The slot is the driver's
+   own `turn_index` (from metadata `turn_count`), so the frontend no longer
+   allocates it for native turns (they take the host-queue path since step
+   4). The Web UI may still save the same turn file; both writers use the
+   same identity and atomic writes, last write wins. The frontend writer is
+   kept for generic ACP clients, which have no backend owner yet.
 
 Per-surface result after step 5:
 
