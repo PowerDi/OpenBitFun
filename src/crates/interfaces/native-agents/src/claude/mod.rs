@@ -119,6 +119,7 @@ impl NativeAgentDriver for ClaudeNativeDriver {
             notifier,
             persistence,
         } = context;
+        persistence.record_turns(&session_storage_path, &session_id);
         let metadata = persistence
             .load_metadata(&session_storage_path, &session_id)
             .await?
