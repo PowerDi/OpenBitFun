@@ -34,7 +34,7 @@ dependencies:
 | D5 | Native approvals and questions use the runtime `PermissionRequestManager` and `UserInputManager`. The custom `backend-event-acppermissionrequest` path is removed, not kept in parallel. | Accepted |
 | D6 | The backend persists native turns. Frontend persistence of native turns is removed. | Accepted |
 | D7 | Persisted identifiers stay unchanged: `acp:<client>` agent types, `acp_<client>_<uuid>` session ids, `provider: "acp"` metadata, driver metadata keys (`claudeNativeHistory`, ...). | Accepted |
-| D8 | Delegation is built on top of D4, following the codex-host semantics (non-blocking start, independent writable child session, read/wait/send/cancel/watch). | Planned |
+| D8 | Delegation is built on top of D4, following the codex-host semantics (non-blocking start, independent writable child session, read/wait/send/cancel/watch). See "D8: delegation". | Accepted, in progress |
 
 ### D3: crate split
 
@@ -112,6 +112,56 @@ persists the turn from the native event stream. The frontend allocation
 (`nextStorageTurnIndex`) and frontend saves for `provider: "acp"` sessions are
 removed. Effects of the current gap that this closes: no history without an
 open window, and a turn lost when the window closes mid-turn.
+
+### D8: delegation
+
+What is followed from codex-host (behavior and output shapes, so later
+codex-host changes can be mirrored): `delegate start` returns immediately with
+the child session; the child is an ordinary writable session in the session
+list; the delegator chooses `read` (result view by default, no tool traces),
+bounded `wait` (a timeout is a running checkpoint, not a failure), `send`,
+`cancel`, one-shot `watch`, and `list`; idempotent retry by request id; no
+depth limit; the host never re-delegates from task text.
+
+What is not followed: the transport. codex-host gives each harness a
+`codexhost` CLI plus a loopback endpoint and token, which needs a second
+install and a reverse connection on SSH hosts. OpenBitFun instead exposes the
+delegation tools on the protocol pipe each driver already owns, so local and
+SSH workspaces behave the same and the remote host needs only the agent CLI:
+
+| Agent | Tool channel | Note |
+|---|---|---|
+| Claude Code | SDK MCP server declared in `initialize` (`sdkMcpServers`), calls arrive as `control_request` `mcp_message` | Official SDK channel |
+| Codex | `dynamicTools` on `thread/start`, calls arrive as `item/tool/call` | Experimental API (`experimentalApi: true`); accepted risk, breakage must fail loudly |
+| Pi | Tool registered by the OpenBitFun extension, round trip over the extension UI channel | Same mechanism as approvals |
+
+Product decisions (owner answers, 2026-07):
+
+1. Delegated child sessions run unattended (codex-host behavior): Claude
+   `bypassPermissions`, Codex `approvalPolicy: never` with
+   `danger-full-access`, Pi approval bridge allows every call. Only children
+   created by delegation; ordinary sessions keep their selected mode. Agent
+   questions (not approvals) still reach the driving surface through the D5
+   path.
+2. `send` to a busy child queues through the scheduler (unlike codex-host's
+   `THREAD_BUSY`) and reports `queued` to the caller.
+3. OpenBitFun's own agents: `SessionMessage` today exists only in Claw mode and
+   can target only `Standard` / `Cowork` / `DeepResearch`. The delegation
+   service is shared, so OpenBitFun agents may later target native agents
+   through it; native agents can target each other from the first release.
+4. The Codex experimental API is accepted.
+
+Ownership: one delegation service under the native-agents crate owns tool
+definitions, child creation, the parent link (an additive optional field in
+the child metadata), and watch. Submission, queueing, and cancel go through
+the scheduler (D4); child turns are persisted by D6; `watch` uses the
+scheduler reply route, so a busy parent receives the notice as a queued turn.
+CLI-hosted runtimes answer with an explicit unsupported error until the CLI
+registers the port.
+
+Steps: (0) live probe of the three tool channels, local and SSH; (1) shared
+service and tool set; (2) wire Claude, Codex, Pi; (3) UI: delegated-by label,
+tool card links to the child; (4) tests and this document.
 
 ## Current state (verified in code)
 
@@ -203,7 +253,7 @@ Per-surface result after step 5:
 | Detached Dispatch | Out of scope; explicit unsupported |
 | CLI | Registers the port, so cron and `SessionMessage` work in CLI-hosted runtimes; CLI peer handlers are follow-up work |
 
-Not in this plan: delegation (D8), remote CLI install/update, keeping a turn
+Not in this plan: remote CLI install/update, keeping a turn
 alive across a controller disconnect, new native agents (D1).
 
 ## Driver contract gaps (follow-up)
