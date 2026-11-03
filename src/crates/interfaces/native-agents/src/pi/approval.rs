@@ -13,8 +13,56 @@ use serde_json::{json, Value};
 
 use super::projector::card_input;
 
-pub(super) const EXTENSION_SOURCE: &str = include_str!("approval_extension.ts");
+const EXTENSION_TEMPLATE: &str = include_str!("approval_extension.ts");
+/// Placeholder in the template that receives the delegation tool specs.
+const TOOLS_PLACEHOLDER: &str = "/*OPENBITFUN_TOOLS*/[]";
 pub(super) const MARKER: &str = "openbitfun-approval:";
+/// Title prefix of the `input` dialog that carries a delegation tool call.
+pub(super) const TOOL_MARKER: &str = "openbitfun-tool:";
+
+/// Extension source with the delegation tool catalog filled in.
+pub(super) fn extension_source() -> &'static str {
+    static SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SOURCE.get_or_init(|| {
+        let tools: Vec<Value> = crate::delegation::tool_specs()
+            .into_iter()
+            .map(|spec| {
+                json!({"name": spec.name, "description": spec.description, "inputSchema": spec.input_schema})
+            })
+            .collect();
+        let tools = serde_json::to_string(&tools).unwrap_or_else(|_| "[]".into());
+        EXTENSION_TEMPLATE.replacen(TOOLS_PLACEHOLDER, &tools, 1)
+    })
+}
+
+/// One delegation tool call carried by an extension `input` dialog.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct ToolCallRequest {
+    pub ui_id: Value,
+    pub tool: String,
+    pub arguments: Value,
+}
+
+impl ToolCallRequest {
+    pub(super) fn parse(frame: &Value) -> Option<Self> {
+        if frame["method"] != "input" {
+            return None;
+        }
+        let body = frame["title"].as_str()?.strip_prefix(TOOL_MARKER)?;
+        let call: Value = serde_json::from_str(body).ok()?;
+        Some(Self {
+            ui_id: frame["id"].clone(),
+            tool: call["tool"].as_str()?.to_string(),
+            arguments: call.get("arguments").cloned().unwrap_or_else(|| json!({})),
+        })
+    }
+}
+
+/// `extension_ui_response` carrying a tool result to the extension.
+pub(super) fn tool_response(ui_id: &Value, text: &str, is_error: bool) -> Value {
+    let result = json!({"text": text, "isError": is_error}).to_string();
+    json!({"type": "extension_ui_response", "id": ui_id, "value": result})
+}
 /// Registered by the extension; its presence in `get_commands` proves it loaded.
 pub(super) const BRIDGE_COMMAND: &str = "openbitfun-approvals";
 pub(super) const ALLOW_ONCE: &str = "allow_once";
@@ -154,7 +202,7 @@ pub(super) fn automatic_decision(mode: &str, allowed_for_session: bool) -> Optio
 pub(super) fn extension_file_name() -> String {
     // FNV-1a: stable across builds and platforms.
     let mut hash: u64 = 0xcbf29ce484222325;
-    for byte in EXTENSION_SOURCE.as_bytes() {
+    for byte in extension_source().as_bytes() {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x100000001b3);
     }
@@ -169,7 +217,7 @@ pub(super) async fn install_local_extension() -> OpenBitFunResult<PathBuf> {
         .unwrap_or_else(|_| std::env::temp_dir().join("openbitfun"));
     let dir = base.join("native-agents").join("pi");
     let path = dir.join(extension_file_name());
-    if tokio::fs::read_to_string(&path).await.ok().as_deref() == Some(EXTENSION_SOURCE) {
+    if tokio::fs::read_to_string(&path).await.ok().as_deref() == Some(extension_source()) {
         return Ok(path);
     }
     let error = |e: std::io::Error| {
@@ -184,13 +232,13 @@ pub(super) async fn install_local_extension() -> OpenBitFunResult<PathBuf> {
         extension_file_name(),
         uuid::Uuid::new_v4()
     ));
-    tokio::fs::write(&staging, EXTENSION_SOURCE)
+    tokio::fs::write(&staging, extension_source())
         .await
         .map_err(error)?;
     if let Err(e) = tokio::fs::rename(&staging, &path).await {
         let _ = tokio::fs::remove_file(&staging).await;
         // A concurrent launch may have installed the same content.
-        if tokio::fs::read_to_string(&path).await.ok().as_deref() != Some(EXTENSION_SOURCE) {
+        if tokio::fs::read_to_string(&path).await.ok().as_deref() != Some(extension_source()) {
             return Err(error(e));
         }
     }
@@ -203,10 +251,11 @@ const HEREDOC_DELIMITER: &str = "OPENBITFUN_PI_APPROVAL_EOF";
 /// directory, not the workspace) and leave its path in `$obf_pi_ext`. The
 /// script exits if the file is missing, so Pi never starts without it.
 pub(super) fn remote_install_script() -> String {
-    debug_assert!(!EXTENSION_SOURCE.contains(HEREDOC_DELIMITER));
+    debug_assert!(!extension_source().contains(HEREDOC_DELIMITER));
     format!(
-        "obf_pi_dir=\"${{XDG_CACHE_HOME:-$HOME/.cache}}/openbitfun/pi\"\nobf_pi_ext=\"$obf_pi_dir/{name}\"\nif [ ! -s \"$obf_pi_ext\" ]; then mkdir -p \"$obf_pi_dir\" && cat > \"$obf_pi_ext.$$\" <<'{HEREDOC_DELIMITER}' && mv \"$obf_pi_ext.$$\" \"$obf_pi_ext\"\n{EXTENSION_SOURCE}\n{HEREDOC_DELIMITER}\nfi\n[ -s \"$obf_pi_ext\" ] || {{ echo \"OpenBitFun could not install the Pi approval extension in $obf_pi_dir\" >&2; exit 1; }}",
+        "obf_pi_dir=\"${{XDG_CACHE_HOME:-$HOME/.cache}}/openbitfun/pi\"\nobf_pi_ext=\"$obf_pi_dir/{name}\"\nif [ ! -s \"$obf_pi_ext\" ]; then mkdir -p \"$obf_pi_dir\" && cat > \"$obf_pi_ext.$$\" <<'{HEREDOC_DELIMITER}' && mv \"$obf_pi_ext.$$\" \"$obf_pi_ext\"\n{source}\n{HEREDOC_DELIMITER}\nfi\n[ -s \"$obf_pi_ext\" ] || {{ echo \"OpenBitFun could not install the Pi approval extension in $obf_pi_dir\" >&2; exit 1; }}",
         name = extension_file_name(),
+        source = extension_source(),
     )
 }
 
@@ -253,16 +302,38 @@ mod tests {
     #[test]
     fn extension_options_match_the_driver() {
         for option in [ALLOW_ONCE, ALLOW_SESSION, REJECT_ONCE, REJECT_READ_ONLY] {
-            assert!(EXTENSION_SOURCE.contains(&format!("\"{option}\"")));
+            assert!(EXTENSION_TEMPLATE.contains(&format!("\"{option}\"")));
         }
-        assert!(EXTENSION_SOURCE.contains(&format!("\"{MARKER}\"")));
-        assert!(EXTENSION_SOURCE.contains(&format!("\"{BRIDGE_COMMAND}\"")));
-        assert!(EXTENSION_SOURCE.contains("signal: ctx.signal"));
+        assert!(EXTENSION_TEMPLATE.contains(&format!("\"{MARKER}\"")));
+        assert!(EXTENSION_TEMPLATE.contains(&format!("\"{TOOL_MARKER}\"")));
+        assert!(EXTENSION_TEMPLATE.contains(&format!("\"{BRIDGE_COMMAND}\"")));
+        assert!(EXTENSION_TEMPLATE.contains("signal: ctx.signal"));
         // No dialog timeout: Pi must not resolve a pending decision itself.
-        assert!(!EXTENSION_SOURCE.contains("timeout:"));
+        assert!(!EXTENSION_TEMPLATE.contains("timeout:"));
         let script = remote_install_script();
         assert!(script.contains(&extension_file_name()));
         // Pi never starts without the bridge.
         assert!(script.ends_with("exit 1; }"));
+    }
+
+    #[test]
+    fn extension_carries_the_delegation_tools() {
+        assert!(EXTENSION_TEMPLATE.contains(TOOLS_PLACEHOLDER));
+        let source = extension_source();
+        assert!(!source.contains(TOOLS_PLACEHOLDER));
+        assert!(source.contains("\"delegate_start\""));
+        assert!(!source.contains(HEREDOC_DELIMITER));
+
+        let frame = json!({"type": "extension_ui_request", "id": "u1", "method": "input",
+            "title": format!("{TOOL_MARKER}{}", json!({"toolCallId": "c", "tool": "session_read",
+                "arguments": {"session_id": "s"}}))});
+        let call = ToolCallRequest::parse(&frame).unwrap();
+        assert_eq!(call.tool, "session_read");
+        assert_eq!(call.arguments["session_id"], "s");
+        // An approval dialog is never read as a tool call, nor the reverse.
+        assert!(ApprovalRequest::parse(&frame).is_none());
+        let reply = tool_response(&call.ui_id, "{\"ok\":1}", false);
+        let value: Value = serde_json::from_str(reply["value"].as_str().unwrap()).unwrap();
+        assert_eq!(value, json!({"text": "{\"ok\":1}", "isError": false}));
     }
 }

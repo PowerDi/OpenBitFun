@@ -822,6 +822,9 @@ impl CodexNativeSession {
             }
             (None, Some(thread)) => {
                 let mut params = base;
+                if let Some(object) = params.as_object_mut() {
+                    object.remove("dynamicTools");
+                }
                 params["threadId"] = json!(thread);
                 params["excludeTurns"] = json!(true);
                 ("thread/resume", params)
@@ -898,6 +901,11 @@ impl CodexNativeSession {
 
     fn thread_base_params(&self) -> Value {
         let mut params = json!({"cwd": self.workspace_path});
+        if self.delegation_caller().is_some() {
+            // Codex keeps a thread's dynamic tools across `thread/resume`
+            // (probed), and `thread/resume` does not accept the field.
+            params["dynamicTools"] = delegation_tools();
+        }
         let model = lock(&self.selected_model).clone();
         if model != DEFAULT_ID {
             params["model"] = json!(model);
@@ -1676,6 +1684,10 @@ impl CodexNativeSession {
             | "item/permissions/requestApproval" => {
                 self.handle_approval(process, id, method, params).await
             }
+            "item/tool/call" => {
+                self.handle_tool_call(process, id, params);
+                Ok(())
+            }
             "item/tool/requestUserInput" => {
                 let (ids, questions) = user_input_questions(params);
                 if questions.is_empty() {
@@ -1732,6 +1744,51 @@ impl CodexNativeSession {
                     .await
             }
         }
+    }
+
+    /// The session as a delegation caller; `None` without persistence (tests).
+    pub(super) fn delegation_caller(&self) -> Option<crate::delegation::DelegationCaller> {
+        let (persistence, storage) = self.persistence.as_ref()?;
+        Some(crate::delegation::DelegationCaller {
+            session_id: self.session_id.clone(),
+            client_id: CLIENT_ID.to_string(),
+            workspace_path: self.workspace_path.clone(),
+            remote_connection_id: self.remote_connection_id.clone(),
+            session_storage_path: storage.clone(),
+            persistence: persistence.clone(),
+        })
+    }
+
+    /// Answer a dynamic tool call. Runs detached: `session_wait` may take
+    /// minutes and the read loop must keep routing frames meanwhile.
+    fn handle_tool_call(&self, process: &Arc<RpcProcess>, id: Value, params: &Value) {
+        let process = process.clone();
+        let caller = self.delegation_caller();
+        let namespace = params["namespace"].as_str().map(str::to_string);
+        let tool = params["tool"].as_str().unwrap_or_default().to_string();
+        let arguments = params["arguments"].clone();
+        tokio::spawn(async move {
+            let output = match caller {
+                Some(caller)
+                    if namespace
+                        .as_deref()
+                        .is_none_or(|ns| ns == crate::delegation::TOOL_NAMESPACE) =>
+                {
+                    crate::delegation::call_tool(&caller, &tool, arguments).await
+                }
+                _ => crate::delegation::DelegationToolOutput {
+                    text: format!("OpenBitFun does not provide the tool {tool}"),
+                    is_error: true,
+                },
+            };
+            let reply = json!({
+                "success": !output.is_error,
+                "contentItems": [{"type": "inputText", "text": output.text}],
+            });
+            if let Err(error) = process.respond(&id, reply).await {
+                log::warn!("Codex tool call reply failed: tool={tool}, error={error}");
+            }
+        });
     }
 
     async fn handle_approval(
@@ -2185,10 +2242,29 @@ impl super::super::NativeAgentSession for CodexNativeSession {
     }
 }
 
+/// Delegation tools as Codex `dynamicTools` (function specs).
+fn delegation_tools() -> Value {
+    Value::Array(
+        crate::delegation::tool_specs()
+            .into_iter()
+            .map(|spec| {
+                json!({
+                    "type": "function",
+                    "name": spec.name,
+                    "description": spec.description,
+                    "inputSchema": spec.input_schema,
+                })
+            })
+            .collect(),
+    )
+}
+
 pub(super) fn initialize_params() -> Value {
     json!({
         "clientInfo": {"name": "openbitfun", "title": "OpenBitFun", "version": env!("CARGO_PKG_VERSION")},
-        "capabilities": {"experimentalApi": false, "requestAttestation": false},
+        // `dynamicTools` (delegation, see `crate::delegation`) needs the
+        // experimental API; accepted risk, recorded in native-agents.md D8.
+        "capabilities": {"experimentalApi": true, "requestAttestation": false},
     })
 }
 

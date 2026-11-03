@@ -15,7 +15,37 @@ const OPTIONS = ["allow_once", "allow_session", "reject_once", "reject_read_only
 // other tools, whose calls pass through this handler themselves.
 const READ_ONLY = new Set(["read", "grep", "find", "ls", "codemode", "tool_search"]);
 
+// OpenBitFun delegation tools (`crate::delegation`), filled in by OpenBitFun
+// as JSON: [{name, description, inputSchema}]. Each call travels to
+// OpenBitFun as an RPC `input` dialog titled TOOL_MARKER plus the call as
+// JSON; the answer is the tool result JSON {text, isError}.
+const TOOL_MARKER = "openbitfun-tool:";
+const TOOLS: any[] = /*OPENBITFUN_TOOLS*/[];
+
 export default function (pi: any) {
+  for (const spec of TOOLS) {
+    pi.registerTool({
+      name: spec.name,
+      label: spec.name,
+      description: spec.description,
+      parameters: spec.inputSchema,
+      // Talks to OpenBitFun, not the workspace; skips the approval bridge.
+      annotations: { readOnlyHint: true },
+      async execute(toolCallId: string, params: any, signal: any, _onUpdate: any, ctx: any) {
+        const call = { toolCallId, tool: spec.name, arguments: params ?? {} };
+        const answer = await ctx.ui.input(TOOL_MARKER + JSON.stringify(call), "", { signal });
+        let result: any;
+        try {
+          result = JSON.parse(String(answer ?? ""));
+        } catch {
+          result = { text: "OpenBitFun did not answer the tool call.", isError: true };
+        }
+        if (result.isError) throw new Error(String(result.text));
+        return { content: [{ type: "text", text: String(result.text) }], details: undefined };
+      },
+    });
+  }
+
   // Lets OpenBitFun verify that the bridge loaded (`get_commands`).
   pi.registerCommand("openbitfun-approvals", {
     description: "OpenBitFun approval bridge status",

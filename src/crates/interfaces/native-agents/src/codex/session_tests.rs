@@ -346,13 +346,33 @@ async fn unsupported_server_requests_get_an_error_reply() {
     session
         .route_frame(
             &process,
-            json!({"id": 5, "method": "item/tool/call", "params": {}}),
+            json!({"id": 5, "method": "account/chatgptAuthTokens/refresh", "params": {}}),
         )
         .await
         .unwrap();
     let reply = next_frame(&mut lines).await;
     assert_eq!(reply["id"], 5);
     assert_eq!(reply["error"]["code"], -32601);
+}
+
+#[tokio::test]
+async fn dynamic_tool_calls_get_a_tool_result_reply() {
+    // The fixture has no persistence, so delegation is unavailable; the reply
+    // must still be a well-formed failed tool result, not a protocol error.
+    let (session, process, mut lines) = fixture(Some("th1"));
+    session
+        .route_frame(
+            &process,
+            json!({"id": 6, "method": "item/tool/call", "params": {
+                "threadId": "th1", "turnId": "t", "callId": "c", "namespace": null,
+                "tool": "session_list", "arguments": {}}}),
+        )
+        .await
+        .unwrap();
+    let reply = next_frame(&mut lines).await;
+    assert_eq!(reply["id"], 6);
+    assert_eq!(reply["result"]["success"], false);
+    assert_eq!(reply["result"]["contentItems"][0]["type"], "inputText");
 }
 
 #[tokio::test]

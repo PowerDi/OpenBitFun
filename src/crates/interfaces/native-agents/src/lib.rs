@@ -10,6 +10,7 @@ pub mod claude;
 pub mod cli_probe;
 pub mod cli_status;
 pub mod codex;
+pub mod delegation;
 mod events;
 pub mod interaction;
 pub mod notifications;
