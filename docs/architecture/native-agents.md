@@ -135,6 +135,13 @@ SSH workspaces behave the same and the remote host needs only the agent CLI:
 | Codex | `dynamicTools` on `thread/start`, calls arrive as `item/tool/call` | Experimental API (`experimentalApi: true`); accepted risk, breakage must fail loudly |
 | Pi | Tool registered by the OpenBitFun extension, round trip over the extension UI channel | Same mechanism as approvals |
 
+Live probe (local Windows, model `deepseek-flash` for Claude and Pi): all
+three channels round-trip a model-initiated tool call and the model uses the
+result. Codex keeps the dynamic tools after `thread/resume` in a new
+process. Pi tool results travel as an extension `input` dialog, so the
+driver must tell tool requests apart from approval and user dialogs by
+title prefix. SSH is not probed yet; it uses the same pipes.
+
 Product decisions (owner answers, 2026-07):
 
 1. Delegated child sessions run unattended (codex-host behavior): Claude
