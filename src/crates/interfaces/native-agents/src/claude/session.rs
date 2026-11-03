@@ -1300,6 +1300,13 @@ impl ClaudeNativeSession {
             read_lock(&self.permission_mode),
         );
         args.extend(thinking_cli_args(&read_lock(&self.thinking)));
+        if self.delegation_caller().is_some() {
+            // Host-owned delegation tools never prompt, as with Codex and Pi.
+            args.extend([
+                "--allowedTools".to_string(),
+                format!("mcp__{}", crate::delegation::TOOL_NAMESPACE),
+            ]);
+        }
         let model = self.selected_model();
         if model != DEFAULT_MODEL_ID {
             args.extend(["--model".to_string(), model]);
@@ -1360,10 +1367,7 @@ impl ClaudeNativeSession {
         self.touch();
         self.spawn_idle_release(process.clone(), IDLE_RELEASE_AFTER);
         match process
-            .request(
-                json!({"subtype":"initialize", "hooks":null, "forwardSubagentText":true}),
-                Duration::from_secs(30),
-            )
+            .request(self.initialize_request(), Duration::from_secs(30))
             .await
         {
             Ok(response) => {
@@ -1494,6 +1498,53 @@ impl ClaudeNativeSession {
         }
     }
 
+    /// SDK `initialize`; declares the delegation tools as an in-process
+    /// (SDK) MCP server whose messages travel over this stdio pipe.
+    fn initialize_request(&self) -> Value {
+        let mut request = json!({"subtype":"initialize", "hooks":null, "forwardSubagentText":true});
+        if self.delegation_caller().is_some() {
+            request["sdkMcpServers"] = json!([crate::delegation::TOOL_NAMESPACE]);
+        }
+        request
+    }
+
+    /// The session as a delegation caller; `None` without persistence (tests).
+    fn delegation_caller(&self) -> Option<crate::delegation::DelegationCaller> {
+        let (persistence, storage) = self.persistence.as_ref()?;
+        Some(crate::delegation::DelegationCaller {
+            session_id: self.session_id.clone(),
+            client_id: CLIENT_ID.to_string(),
+            workspace_path: self.workspace_path.clone(),
+            remote_connection_id: self.remote_connection_id.clone(),
+            session_storage_path: storage.clone(),
+            persistence: persistence.clone(),
+        })
+    }
+
+    /// Answer an SDK MCP message for the delegation server. Runs detached:
+    /// a `tools/call` such as `session_wait` may take minutes.
+    fn handle_mcp_message(&self, process: &Arc<NativeProcess>, frame: &Value) {
+        let process = process.clone();
+        let caller = self.delegation_caller();
+        let request_id = frame["request_id"].clone();
+        let server = frame["request"]["server_name"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let message = frame["request"]["message"].clone();
+        tokio::spawn(async move {
+            let reply = match caller.filter(|_| server == crate::delegation::TOOL_NAMESPACE) {
+                Some(caller) => mcp_reply(&caller, &message).await,
+                None => mcp_error(&message, -32601, &format!("Unknown MCP server: {server}")),
+            };
+            let frame = json!({"type":"control_response", "response":{"subtype":"success",
+                "request_id":request_id, "response":{"mcp_response":reply}}});
+            if let Err(error) = process.write(&frame).await {
+                log::warn!("Claude MCP reply failed: server={server}, error={error}");
+            }
+        });
+    }
+
     async fn route_frame(
         &self,
         process: &Arc<NativeProcess>,
@@ -1504,6 +1555,14 @@ impl ClaudeNativeSession {
                 if let Some((_, tx)) = process.controls.remove(id) {
                     let _ = tx.send(frame["response"].clone());
                 }
+            }
+            return Ok(());
+        }
+        if frame["type"] == "control_request" && frame["request"]["subtype"] == "mcp_message" {
+            // Arrives during `initialize`, while launch still holds the
+            // process slot; it needs neither the slot nor turn state.
+            if process.alive.load(Ordering::Acquire) {
+                self.handle_mcp_message(process, &frame);
             }
             return Ok(());
         }
@@ -3171,6 +3230,47 @@ fn set_flag(args: &mut [String], flag: &str, value: String) {
             *slot = value;
         }
     }
+}
+
+/// JSON-RPC reply of the in-process delegation MCP server.
+async fn mcp_reply(caller: &crate::delegation::DelegationCaller, message: &Value) -> Value {
+    let id = message.get("id").cloned();
+    let result = match message["method"].as_str().unwrap_or_default() {
+        "initialize" => json!({
+            "protocolVersion": message["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": crate::delegation::TOOL_NAMESPACE, "version": env!("CARGO_PKG_VERSION")},
+        }),
+        "tools/list" => {
+            json!({"tools": crate::delegation::tool_specs().into_iter().map(|spec| json!({
+            "name": spec.name,
+            "description": spec.description,
+            "inputSchema": spec.input_schema,
+        })).collect::<Vec<_>>()})
+        }
+        "tools/call" => {
+            let output = crate::delegation::call_tool(
+                caller,
+                message["params"]["name"].as_str().unwrap_or_default(),
+                message["params"]["arguments"].clone(),
+            )
+            .await;
+            json!({"content": [{"type": "text", "text": output.text}], "isError": output.is_error})
+        }
+        "ping" => json!({}),
+        method if method.starts_with("notifications/") => json!({}),
+        method => return mcp_error(message, -32601, &format!("Method not found: {method}")),
+    };
+    match id {
+        Some(id) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+        // Notifications get an empty acknowledgement.
+        None => json!({"jsonrpc": "2.0", "result": {}}),
+    }
+}
+
+fn mcp_error(message: &Value, code: i64, text: &str) -> Value {
+    json!({"jsonrpc": "2.0", "id": message.get("id").cloned().unwrap_or(Value::Null),
+        "error": {"code": code, "message": text}})
 }
 
 /// Launch flags for a thinking level. Adaptive thinking uses summarized

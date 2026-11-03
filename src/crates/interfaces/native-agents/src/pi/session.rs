@@ -861,6 +861,10 @@ impl PiNativeSession {
                 if let Some(request) = ApprovalRequest::parse(&frame) {
                     return self.handle_approval(process, request).await;
                 }
+                if let Some(call) = approval::ToolCallRequest::parse(&frame) {
+                    self.handle_tool_call(process, call);
+                    return Ok(());
+                }
                 return self.handle_extension_ui(process, &frame).await;
             }
             Some("extension_error") => {
@@ -1162,6 +1166,44 @@ impl PiNativeSession {
 
     /// Extension UI requests other than the approval bridge. Dialogs go to
     /// the question card; fire-and-forget methods are only logged.
+    /// The session as a delegation caller; `None` without persistence (tests).
+    fn delegation_caller(&self) -> Option<crate::delegation::DelegationCaller> {
+        let (persistence, storage) = self.persistence.as_ref()?;
+        Some(crate::delegation::DelegationCaller {
+            session_id: self.session_id.clone(),
+            client_id: CLIENT_ID.to_string(),
+            workspace_path: self.workspace_path.clone(),
+            remote_connection_id: self.remote_connection_id.clone(),
+            session_storage_path: storage.clone(),
+            persistence: persistence.clone(),
+        })
+    }
+
+    /// Answer a delegation tool call from the extension. Runs detached:
+    /// `session_wait` may take minutes while Pi keeps streaming.
+    fn handle_tool_call(&self, process: &Arc<PiProcess>, call: approval::ToolCallRequest) {
+        let process = process.clone();
+        let caller = self.delegation_caller();
+        tokio::spawn(async move {
+            let output = match caller {
+                Some(caller) => {
+                    crate::delegation::call_tool(&caller, &call.tool, call.arguments).await
+                }
+                None => crate::delegation::DelegationToolOutput {
+                    text: "Delegation is not available in this session".into(),
+                    is_error: true,
+                },
+            };
+            let reply = approval::tool_response(&call.ui_id, &output.text, output.is_error);
+            if let Err(error) = process.write(&reply).await {
+                log::warn!(
+                    "Pi tool call reply failed: tool={}, error={error}",
+                    call.tool
+                );
+            }
+        });
+    }
+
     async fn handle_extension_ui(
         &self,
         process: &Arc<PiProcess>,

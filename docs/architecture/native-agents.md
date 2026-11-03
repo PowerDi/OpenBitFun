@@ -170,6 +170,38 @@ Steps: (0) live probe of the three tool channels, local and SSH; (1) shared
 service and tool set; (2) wire Claude, Codex, Pi; (3) UI: delegated-by label,
 tool card links to the child; (4) tests and this document.
 
+Implemented (steps 1-2, `native-agents/src/delegation/`):
+
+- `tools.rs`: one catalog (`delegate_start`, `session_read`, `session_wait`,
+  `session_send`, `session_cancel`, `session_watch`, `session_list`) and
+  one handler; results are JSON text, errors carry a code.
+- `service.rs`: children are `acp_<client>_<uuid>` records in the caller's
+  workspace storage with `nativeDelegation.parentSessionId`, a fixed title
+  (`titleUserEdited`), and the unattended mode as a session preference
+  (Claude `bypassPermissions`, Codex/Pi `full-access`). Turns go through the
+  scheduler (`AgentSession` source, queued when busy). `watch` waits for the
+  child to go idle and submits one notice turn to the caller (also queued).
+  A start fails before creating anything when the host has no scheduler or
+  no external-session port for the target (`external_sessions_supported`);
+  a failed first submit deletes the child.
+- `snapshot.rs`: read view from persisted turns: final text of the last
+  round with text, no tool traces, messages view, `interrupted` for a turn
+  file left in progress.
+- Drivers: Claude declares `sdkMcpServers: ["openbitfun"]` and answers
+  `mcp_message` off the read loop, and allows `mcp__openbitfun` so the
+  tools never prompt; Codex enables `experimentalApi`, sends `dynamicTools`
+  on `thread/start`/`thread/fork` (not `thread/resume`, which rejects the
+  field) and answers `item/tool/call`; Pi's bridge extension registers the
+  tools and carries calls as `input` dialogs titled `openbitfun-tool:`.
+- Live check (`delegation::live_tests`, `OBF_LIVE_DELEGATION=1`): each real
+  CLI calls `session_list` and `delegate_start` through the real driver and
+  reports the results (local Windows; Claude and Pi on `deepseek-flash`).
+
+Not yet: the full child round trip in a running desktop (create, run,
+read, watch notice), SSH, mobile view of children, UI step 3, request-id
+idempotency across restarts (in memory only), watches across restarts (in
+memory only, same as codex-host).
+
 ## Current state (verified in code)
 
 - Native sessions are prepared and driven only by Desktop Tauri commands in

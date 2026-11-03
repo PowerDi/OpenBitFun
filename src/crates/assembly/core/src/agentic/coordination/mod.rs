@@ -28,5 +28,5 @@ pub(crate) use background_outcomes::{
 pub(crate) use coordination_store::{validate_agent_id, DirectChildAgentRecord};
 
 pub use coordinator::get_global_coordinator;
-pub use external_sessions::set_external_session_port;
+pub use external_sessions::{external_sessions_supported, set_external_session_port};
 pub use scheduler::get_global_scheduler;

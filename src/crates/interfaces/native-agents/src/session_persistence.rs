@@ -32,7 +32,7 @@ pub struct CreateAcpFlowSessionRecordResponse {
 }
 
 pub struct AcpSessionPersistence {
-    manager: Arc<PersistenceManager>,
+    pub(crate) manager: Arc<PersistenceManager>,
     native_preferences: NativeAgentPreferencesStore,
 }
 
