@@ -102,7 +102,11 @@ fn native_input(
                 .map_err(|error| PortError::new(PortErrorKind::InvalidRequest, error.to_string()))
         })
         .collect::<PortResult<Vec<_>>>()?;
-    Ok(NativeTurnInput { text, images })
+    Ok(NativeTurnInput {
+        text,
+        images,
+        metadata: None,
+    })
 }
 
 #[async_trait]
@@ -131,6 +135,10 @@ impl ExternalSessionPort for NativeExternalSessionPort {
             driver.capabilities().input.images,
             driver.session_label(),
         )?;
+        let input = NativeTurnInput {
+            metadata: request.metadata,
+            ..input
+        };
         let session = self.session(&request.scope).await?;
         let session_id = request.scope.session_id.clone();
         let turn_id = request.turn_id.clone();

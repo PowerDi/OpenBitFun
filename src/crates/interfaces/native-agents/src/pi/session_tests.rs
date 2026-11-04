@@ -170,6 +170,7 @@ async fn images_and_steering_reach_pi_and_render_when_taken_in() {
             media_type: "image/png".into(),
             data: "aGk=".into(),
         }],
+        metadata: None,
     };
     session.start_turn("t1".into(), input, None).await.unwrap();
     route(

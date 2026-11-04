@@ -193,10 +193,12 @@ impl NativeImageInput {
 }
 
 /// User input of a native turn or steering message.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct NativeTurnInput {
     pub text: String,
     pub images: Vec<NativeImageInput>,
+    /// Host metadata of the user message, recorded on `DialogTurnStarted`.
+    pub metadata: Option<serde_json::Value>,
 }
 
 impl From<String> for NativeTurnInput {
@@ -204,6 +206,7 @@ impl From<String> for NativeTurnInput {
         Self {
             text,
             images: Vec::new(),
+            metadata: None,
         }
     }
 }

@@ -992,8 +992,13 @@ impl CodexNativeSession {
         let title_message = (self.state.lock().await.index == 0)
             .then(|| title::title_source(&input.text, original.as_deref()))
             .flatten();
-        self.begin_turn(turn_id.clone(), input.text.clone(), original)
-            .await?;
+        self.begin_turn_with(
+            turn_id.clone(),
+            input.text.clone(),
+            original,
+            input.metadata.clone(),
+        )
+        .await?;
         let result = self.submit_turn(&turn_id, &input).await;
         match &result {
             Err(error) => self.fail_turn(&error.to_string()).await,
@@ -1069,6 +1074,7 @@ impl CodexNativeSession {
         params
     }
 
+    #[cfg(test)]
     async fn begin_turn(
         &self,
         turn_id: String,

@@ -322,6 +322,7 @@ fn turn_params_carry_images_and_overrides() {
             media_type: "image/png".into(),
             data: "AAAA".into(),
         }],
+        metadata: None,
     };
     let params = session.turn_params("th1", &input);
     assert_eq!(
