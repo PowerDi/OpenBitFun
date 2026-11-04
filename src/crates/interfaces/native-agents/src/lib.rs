@@ -284,6 +284,34 @@ pub trait NativeAgentDriver: Send + Sync {
         &self,
         context: NativeAgentOpenContext,
     ) -> OpenBitFunResult<Arc<dyn NativeAgentSession>>;
+    /// The agent's own model catalog for `workspace_path` on its host, read
+    /// from a throwaway process that sends no turn and persists nothing
+    /// (codex-host `harness inspect`).
+    async fn inspect_options(
+        &self,
+        _workspace_path: &str,
+        _remote_connection_id: Option<&str>,
+    ) -> OpenBitFunResult<AcpSessionOptions> {
+        Err(openbitfun_core::util::errors::OpenBitFunError::Validation(
+            format!("{} cannot report its models", self.session_label()),
+        ))
+    }
+}
+
+/// Event queue for a throwaway inspection session; nothing consumes it.
+pub(crate) fn inspection_queue() -> Arc<EventQueue> {
+    Arc::new(EventQueue::new(
+        openbitfun_core::agentic::events::EventQueueConfig::default(),
+    ))
+}
+
+/// Warm up a throwaway session, read its options, and always shut it down.
+pub(crate) async fn inspect_session(
+    session: Arc<dyn NativeAgentSession>,
+) -> OpenBitFunResult<AcpSessionOptions> {
+    let result = session.clone().warm_up().await.map(|_| session.options());
+    session.shutdown().await;
+    result
 }
 
 #[async_trait]

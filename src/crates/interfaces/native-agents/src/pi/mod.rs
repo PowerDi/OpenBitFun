@@ -130,6 +130,25 @@ impl NativeAgentDriver for PiNativeDriver {
         );
         Ok(session)
     }
+    async fn inspect_options(
+        &self,
+        workspace_path: &str,
+        remote_connection_id: Option<&str>,
+    ) -> OpenBitFunResult<crate::AcpSessionOptions> {
+        // A fresh session id that no prompt ever uses: Pi writes no file.
+        let session = PiNativeSession::new(
+            "inspect".into(),
+            uuid::Uuid::new_v4().to_string(),
+            workspace_path.into(),
+            remote_connection_id.map(str::to_string),
+            false,
+            crate::inspection_queue(),
+            None,
+            0,
+            None,
+        );
+        crate::inspect_session(session).await
+    }
 }
 
 /// Only what `pi --mode rpc` actually supports. Approvals come from the

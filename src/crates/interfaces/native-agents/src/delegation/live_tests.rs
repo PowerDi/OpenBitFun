@@ -194,3 +194,30 @@ async fn live_pi_delegation_tools() {
     )
     .await;
 }
+
+/// `agent_inspect` path: each real CLI reports its catalog from a throwaway
+/// process (no turn, no persistence) in a fresh workspace.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "spawns the real claude, codex and pi CLIs; set OBF_LIVE_DELEGATION=1"]
+async fn live_inspect_reports_each_agent_catalog() {
+    if !enabled() {
+        return;
+    }
+    let workspace = std::env::temp_dir().join(format!("obf-live-inspect-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&workspace).unwrap();
+    let workspace = workspace.to_string_lossy().to_string();
+    for driver in crate::drivers() {
+        let options = driver.inspect_options(&workspace, None).await.unwrap();
+        let ids: Vec<_> = options
+            .available_models
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect();
+        println!(
+            "{}: default={:?} models={ids:?}",
+            driver.client_id(),
+            options.current_model_id
+        );
+        assert!(!ids.is_empty(), "{} reported no models", driver.client_id());
+    }
+}

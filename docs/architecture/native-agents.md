@@ -172,9 +172,9 @@ tool card links to the child; (4) tests and this document.
 
 Implemented (steps 1-2, `native-agents/src/delegation/`):
 
-- `tools.rs`: one catalog (`delegate_start`, `session_read`, `session_wait`,
-  `session_send`, `session_cancel`, `session_watch`, `session_list`) and
-  one handler; results are JSON text, errors carry a code.
+- `tools.rs`: one catalog (`agent_inspect`, `delegate_start`, `session_read`,
+  `session_wait`, `session_send`, `session_cancel`, `session_watch`,
+  `session_list`) and one handler; results are JSON text, errors carry a code.
 - `service.rs`: children are `acp_<client>_<uuid>` records in the caller's
   workspace storage with `nativeDelegation.parentSessionId`, a fixed title
   (`titleUserEdited`), and the unattended mode as a session preference
@@ -207,10 +207,34 @@ tooltip names the direct delegator. A child whose delegator is gone lists
 top level. Paging counts only top-level sessions. The tool card in the
 conversation still shows the raw result and does not link to the child.
 
+Model selection (owner decision: exactly codex-host `harness inspect` and
+`validateConfiguration`):
+
+- `agent_inspect` returns the target agent's own catalog (`id`, `name`,
+  `provider`, `defaultModel`) for the caller's workspace and host. It comes
+  from a throwaway process of the agent CLI that sends no turn and persists
+  nothing (`NativeAgentDriver::inspect_options`), so remote workspaces read
+  the remote host's catalog and project settings apply. The catalog is not
+  read from or merged with configuration files: Claude's `initialize` list
+  already carries the user's custom models.
+- `delegate_start` takes an optional `model`. Omitted: nothing is written
+  and the child uses the usual default (the user's last choice for that
+  agent, else the CLI default). Given: it must equal a catalog `id` exactly;
+  no case folding, display-name, prefix, or partial matching. Otherwise the
+  start fails with `INVALID_ARGUMENT` and `details.validModelIds`, and the
+  calling agent decides (pick an id, or ask the user). The chosen id is a
+  session preference of the child and is echoed in the result.
+- The host check is a pre-check; the CLI launch is the final confirmation.
+  A catalog entry the user's gateway does not serve fails the child's first
+  turn, which the caller sees through `session_read` (accepted limit; the
+  catalog lists configuration, not gateway support).
+- Live check: `delegation::live_tests::live_inspect_reports_each_agent_catalog`.
+
 Not yet: the full child round trip in a running desktop (create, run,
 read, watch notice), SSH, mobile view of children, tool card link to the
 child, request-id idempotency across restarts (in memory only), watches
-across restarts (in memory only, same as codex-host).
+across restarts (in memory only, same as codex-host), thinking-level
+selection on delegation.
 
 ## Current state (verified in code)
 
