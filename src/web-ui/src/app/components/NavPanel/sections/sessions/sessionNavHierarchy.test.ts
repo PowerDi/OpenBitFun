@@ -77,6 +77,18 @@ describe('workspace-owned navigation counts', () => {
     expect(hierarchy.childrenByParent.get('parent')?.map(row => row.sessionId)).toEqual(['child']);
   });
 
+  it('nests delegated native sessions under their delegator', () => {
+    const records = [
+      session('claude', 'main'),
+      session('codex-child', 'main', { delegatedBy: 'claude' }),
+      session('orphan', 'main', { delegatedBy: 'deleted' }),
+      session('pi-grandchild', 'main', { delegatedBy: 'codex-child' }),
+    ];
+    const hierarchy = getWorkspaceSessionHierarchy(records, ['main']);
+    expect(hierarchy.topLevelSessions.map(row => row.sessionId)).toEqual(['claude', 'orphan']);
+    expect(hierarchy.childrenByParent.get('claude')?.map(row => row.sessionId)).toEqual(['codex-child', 'pi-grandchild']);
+  });
+
   it('honors legacy config ownership and POSIX remote IDs without inferring ownership from paths', () => {
     const records = [
       session('legacy', '', { workspaceId: undefined, projectWorkspaceId: undefined, config: { workspaceId: 'ssh-main' } }),

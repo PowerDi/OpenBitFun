@@ -1396,6 +1396,9 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
           const isArchived = session.persistedStatus === 'archived';
           const relationship = resolveSessionRelationship(session);
           const isChildSession = level === 1 && relationship.displayAsChild;
+          // A delegated native session nests under its delegator but stays an
+          // ordinary session: it keeps its agent icon and opens normally.
+          const isDelegatedChild = level === 1 && !isChildSession && Boolean(session.delegatedBy);
           const childSessionBadge = getChildSessionBadge(relationship.kind);
           const parentReviewActivity = deriveSessionReviewActivity(
             flowChatState,
@@ -1436,7 +1439,7 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
               label={t('nav.scheduledJobs.badgeTooltip', { count: scheduledJobCount })}
             />
           ) : undefined;
-          const parentSessionId = relationship.parentSessionId;
+          const parentSessionId = relationship.parentSessionId ?? (isDelegatedChild ? session.delegatedBy : undefined);
           const parentSession = parentSessionId ? flowChatState.sessions.get(parentSessionId) : undefined;
           const parentTitle = parentSession ? resolveSessionTitle(parentSession) : '';
           const parentTurnIndex = relationship.origin?.parentTurnIndex;
@@ -1490,6 +1493,7 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
             Boolean(sessionWorkspaceScope) ||
             showAssistantInTooltip ||
             isChildSession ||
+            isDelegatedChild ||
             showBackgroundSubagentActivity ||
             worktreeIsolated ||
             isDispatched;
@@ -1507,6 +1511,13 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
               {showAssistantInTooltip ? (
                 <div className="openbitfun-nav-panel__inline-item-tooltip-meta">
                   {t('nav.sessions.assistantOwner', { name: trimmedAssistant })}
+                </div>
+              ) : null}
+              {isDelegatedChild ? (
+                <div className="openbitfun-nav-panel__inline-item-tooltip-meta">
+                  {t('nav.sessions.childSourceWithoutTurn', {
+                    parentTitle: parentTitle || t('nav.sessions.parentSession'),
+                  })}
                 </div>
               ) : null}
               {isChildSession ? (

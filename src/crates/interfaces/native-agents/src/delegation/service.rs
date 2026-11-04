@@ -455,6 +455,7 @@ async fn announce_created(
             .workspace_hostname
             .clone()
             .filter(|_| caller.remote_connection_id.is_some()),
+        delegated_by: Some(caller.session_id.clone()),
     })
     .await;
 }

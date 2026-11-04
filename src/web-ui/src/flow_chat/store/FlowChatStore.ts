@@ -2253,6 +2253,7 @@ function sessionFromPersistedMetadata(metadata: any, context: {
     importedSource: metadata.customMetadata?.importedFrom,
     externalHistory: externalHistoryFromMetadata(metadata.customMetadata),
     externalBranchOf: metadata.customMetadata?.externalBranchOf,
+    delegatedBy: delegatingSessionIdFromMetadata(metadata),
     config: {
       agentType: restoredAgentType,
       modelName: metadata.modelName,
