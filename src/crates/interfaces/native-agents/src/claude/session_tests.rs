@@ -1615,6 +1615,7 @@ fn image_input_becomes_base64_content_blocks_after_text() {
     let input = NativeTurnInput {
         text: "look".into(),
         images: vec![png, jpeg],
+        metadata: None,
     };
     let frame = user_frame("c1", "u1", &input, None);
     assert_eq!(

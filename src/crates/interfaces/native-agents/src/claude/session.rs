@@ -946,12 +946,13 @@ impl ClaudeNativeSession {
         let title_message = (state.index == 0)
             .then(|| title::title_source(&input.text, original.as_deref()))
             .flatten();
-        self.begin_turn(
+        self.begin_turn_with(
             &mut state,
             turn_id.clone(),
             input.text.clone(),
             original,
             false,
+            input.metadata.clone(),
         )
         .await?;
         state.process_id = Some(process.id.clone());

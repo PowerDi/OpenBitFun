@@ -2151,6 +2151,10 @@ pub struct ExternalTurnStartRequest {
     pub display_message: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<AgentInputAttachment>,
+    /// User message metadata (e.g. `triggerSource` of an automatic notice),
+    /// recorded on the turn like a local turn's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// How an external turn ended, reported once per started turn.

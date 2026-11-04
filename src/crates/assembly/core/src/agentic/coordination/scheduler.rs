@@ -2405,6 +2405,7 @@ impl DialogScheduler {
                     message: queued_turn.user_input.clone(),
                     display_message: queued_turn.original_user_input.clone(),
                     attachments,
+                    metadata: queued_turn.user_message_metadata.clone(),
                 },
                 Box::new(move |outcome| {
                     let outcome = match outcome {

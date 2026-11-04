@@ -1006,13 +1006,25 @@ impl PiNativeSession {
         input: String,
         original: Option<String>,
     ) -> OpenBitFunResult<()> {
+        self.begin_turn_with(state, turn_id, input, original, None)
+            .await
+    }
+
+    async fn begin_turn_with(
+        &self,
+        state: &mut TurnState,
+        turn_id: String,
+        input: String,
+        original: Option<String>,
+        metadata: Option<Value>,
+    ) -> OpenBitFunResult<()> {
         self.enqueue(vec![AgenticEvent::DialogTurnStarted {
             session_id: self.session_id.clone(),
             turn_id: turn_id.clone(),
             turn_index: state.index,
             user_input: input,
             original_user_input: original,
-            user_message_metadata: None,
+            user_message_metadata: metadata,
         }])
         .await?;
         state.index += 1;
@@ -1442,11 +1454,12 @@ impl PiNativeSession {
         let title_message = {
             let mut state = self.state.lock().await;
             let first = state.index == 0;
-            self.begin_turn(
+            self.begin_turn_with(
                 &mut state,
                 turn_id.clone(),
                 input.text.clone(),
                 original.clone(),
+                input.metadata.clone(),
             )
             .await?;
             state.process_id = Some(process.id.clone());
