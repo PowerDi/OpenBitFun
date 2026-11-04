@@ -122,6 +122,12 @@ impl CodexTurnProjector {
         self.finished
     }
 
+    /// The thread reported its model after this turn opened (a new thread
+    /// starts inside the first turn); later rounds carry the real name.
+    pub(crate) fn set_model_name(&mut self, model: &str) {
+        self.model_name = model.to_string();
+    }
+
     pub(crate) fn mark_cancel_requested(&mut self) {
         self.cancel_requested = true;
     }

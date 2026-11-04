@@ -114,14 +114,17 @@ const log = createLogger('BtwSessionPanel');
 /**
  * Model a delegated native child actually ran on: the CLI reports it per
  * model round. `config.modelName` holds OpenBitFun's own alias for these
- * sessions, so it is not shown.
+ * sessions, so it is not shown; nor are the drivers' placeholders for a
+ * round whose model was not reported yet.
  */
+const NATIVE_MODEL_PLACEHOLDERS = new Set(['claude', 'codex', 'pi']);
+
 function delegatedChildModelName(session: Session): string | undefined {
   for (let turn = session.dialogTurns.length - 1; turn >= 0; turn -= 1) {
     const rounds = session.dialogTurns[turn].modelRounds;
     for (let round = rounds.length - 1; round >= 0; round -= 1) {
       const name = rounds[round].effectiveModelName?.trim();
-      if (name) return name;
+      if (name && !NATIVE_MODEL_PLACEHOLDERS.has(name)) return name;
     }
   }
   return undefined;
