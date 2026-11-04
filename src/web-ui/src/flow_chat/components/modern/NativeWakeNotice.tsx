@@ -14,6 +14,15 @@ interface NativeWakeMetadata extends NativeWakeTask {
   threads?: NativeWakeTask[];
 }
 
+/** Child status words of a delegation notice (`delegation/snapshot.rs`). */
+const DELEGATION_STATUS_KEYS: Record<string, string> = {
+  completed: 'flowChatHeader.agentTreeStatus.completed',
+  failed: 'flowChatHeader.agentTreeStatus.error',
+  cancelled: 'flowChatHeader.agentTreeStatus.cancelled',
+  idle: 'flowChatHeader.agentTreeStatus.idle',
+  running: 'flowChatHeader.agentTreeStatus.running',
+};
+
 /**
  * A native CLI (Claude Code, Codex) resumed the agent on its own after
  * background work finished. The turn has no user prompt, so it renders as a
@@ -39,6 +48,11 @@ export function NativeWakeNotice({ wake, fallback }: { wake: NativeWakeMetadata;
       ? (failed ? 'nativeWake.agentFailed' : 'nativeWake.agentFinished')
       : (failed ? 'nativeWake.taskFailed' : 'nativeWake.taskFinished'));
     detail = wake.description?.trim() ?? '';
+  } else if (wake.source === 'delegation') {
+    // A delegated session this one watches stopped (`native-agents::delegation`).
+    title = t(wake.status === 'timedOut' ? 'nativeWake.delegationTimedOut' : 'nativeWake.delegationStopped');
+    const status = wake.status ? DELEGATION_STATUS_KEYS[wake.status] : undefined;
+    detail = [wake.description?.trim(), status ? t(status) : undefined].filter(Boolean).join(' · ');
   } else {
     title = fallback;
     detail = '';
