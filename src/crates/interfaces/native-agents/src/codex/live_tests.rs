@@ -328,6 +328,24 @@ async fn live_prompt_resume_fork_rollback() {
     );
     assert_eq!(run.ended_with(), "completed");
     assert!(run.text().to_lowercase().contains("pong"));
+    // A new thread reports its model inside the first turn; the rounds
+    // after that report carry it instead of the placeholder.
+    let round_models: Vec<&str> = run
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            AgenticEvent::ModelRoundCompleted {
+                effective_model_name,
+                ..
+            } => Some(effective_model_name.as_str()),
+            _ => None,
+        })
+        .collect();
+    println!("t1 round models: {round_models:?}");
+    assert!(
+        round_models.last().is_some_and(|m| *m != "codex"),
+        "first turn kept the placeholder model: {round_models:?}"
+    );
     let usage_frames: Vec<Value> = tap(&first)
         .into_iter()
         .filter(|f| f["method"] == "thread/tokenUsage/updated")
