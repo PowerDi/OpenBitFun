@@ -378,13 +378,15 @@ pub(super) fn watch(caller: &DelegationCaller, session_id: &str, timeout: Durati
     let session_id = session_id.to_string();
     tokio::spawn(async move {
         let stopped = wait_idle(&session_id, timeout).await;
-        let status = if stopped {
-            match caller.snapshot(&session_id, false).await {
-                Ok(snapshot) => snapshot.status,
-                Err(_) => "unreadable".to_string(),
-            }
+        let snapshot = if stopped {
+            caller.snapshot(&session_id, false).await.ok()
         } else {
-            "timedOut".to_string()
+            None
+        };
+        let status = match (&snapshot, stopped) {
+            (Some(snapshot), _) => snapshot.status.clone(),
+            (None, true) => "unreadable".to_string(),
+            (None, false) => "timedOut".to_string(),
         };
         let message = format!(
             "Delegated session {session_id} stopped: {status}.\nThis is an automatic notice, not a user message. Use session_read to check the result."
@@ -395,10 +397,22 @@ pub(super) fn watch(caller: &DelegationCaller, session_id: &str, timeout: Durati
             .map(|metadata| metadata.agent_type)
             .unwrap_or_else(|_| format!("acp:{}", caller.client_id));
         let caller_id = caller.session_id.clone();
-        let metadata = serde_json::Map::from_iter([(
-            "triggerSource".to_string(),
-            json!(crate::NATIVE_WAKE_TRIGGER_SOURCE),
-        )]);
+        // Rendered as a system notice, not a user bubble (`NativeWakeNotice`).
+        let metadata = serde_json::Map::from_iter([
+            (
+                "triggerSource".to_string(),
+                json!(crate::NATIVE_WAKE_TRIGGER_SOURCE),
+            ),
+            (
+                "nativeWake".to_string(),
+                json!({
+                    "source": "delegation",
+                    "sessionId": session_id,
+                    "description": snapshot.as_ref().map(|snapshot| snapshot.title.clone()),
+                    "status": status,
+                }),
+            ),
+        ]);
         if let Err(error) = submit_turn(&caller, &caller_id, &agent_type, &message, metadata).await
         {
             log::warn!(

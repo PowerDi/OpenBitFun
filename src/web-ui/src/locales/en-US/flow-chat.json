@@ -3803,7 +3803,9 @@
     "agentFailed": "Background agent failed",
     "taskFinished": "Background task finished",
     "taskFailed": "Background task failed",
-    "agentsFinished": "Background agents finished"
+    "agentsFinished": "Background agents finished",
+    "delegationStopped": "Delegated session stopped",
+    "delegationTimedOut": "Delegated session wait ended"
   },
   "backgroundDelivery": {
     "recoveryCompleted": "This execution recovered and completed.",
