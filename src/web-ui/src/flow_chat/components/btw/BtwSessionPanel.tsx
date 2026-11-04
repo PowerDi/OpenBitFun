@@ -110,6 +110,22 @@ export interface BtwSessionPanelProps {
 const resolveSessionTitle = (session?: Pick<Session, 'title'> | null, fallback = 'Side thread') =>
   session?.title?.trim() || fallback;
 const log = createLogger('BtwSessionPanel');
+
+/**
+ * Model a delegated native child actually ran on: the CLI reports it per
+ * model round. `config.modelName` holds OpenBitFun's own alias for these
+ * sessions, so it is not shown.
+ */
+function delegatedChildModelName(session: Session): string | undefined {
+  for (let turn = session.dialogTurns.length - 1; turn >= 0; turn -= 1) {
+    const rounds = session.dialogTurns[turn].modelRounds;
+    for (let round = rounds.length - 1; round >= 0; round -= 1) {
+      const name = rounds[round].effectiveModelName?.trim();
+      if (name) return name;
+    }
+  }
+  return undefined;
+}
 const REVIEW_ACTION_BOTTOM_BLANK_SPACE_PX = 96;
 const EMPTY_ACTION_ID_SET = new Set<string>();
 const EMPTY_REMEDIATION_ITEMS: ReturnType<typeof buildReviewRemediationItems> = [];
@@ -228,7 +244,9 @@ const BtwSessionPanelContent: React.FC<BtwSessionPanelProps & { viewState: BtwPa
     : childKind === 'subagent'
       ? t(resolveSubagentNameKey(childSessionId ?? ''))
       : displayTitle?.trim() || resolveSessionTitle(childSession, childTitleFallback);
-  const headerModelName = childKind === 'subagent' ? childSession?.config?.modelName?.trim() : undefined;
+  const headerModelName = childKind === 'subagent'
+    ? childSession?.config?.modelName?.trim()
+    : childSession?.delegatedBy ? delegatedChildModelName(childSession) : undefined;
   const sessionVirtualItems = useMemo(
     () => sessionToVirtualItems(childSession ?? null),
     [childSession],

@@ -215,7 +215,11 @@ fn native_turn_input(
             .map_err(|error| error.to_string())
     })
     .collect::<Result<Vec<_>, _>>()?;
-    Ok(NativeTurnInput { text, images })
+    Ok(NativeTurnInput {
+        text,
+        images,
+        metadata: None,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
