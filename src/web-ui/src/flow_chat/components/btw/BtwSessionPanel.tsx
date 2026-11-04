@@ -27,6 +27,8 @@ import { type LineRange } from '@/shared/editor/LineRange';
 import { DEFAULT_RETAINED_MOUNT_MS, RetainedMountBoundary } from '@/shared/presence';
 import {resolveSessionRelationship} from '../../utils/sessionMetadata';
 import {agentAPI} from '@/infrastructure/api';
+import {ACPClientAPI} from '@/infrastructure/api/service-api/ACPClientAPI';
+import {acpClientIdFromAgentType} from '../../utils/acpSession';
 import {globalEventBus} from '@/infrastructure/event-bus';
 import {notificationService} from '@/shared/notification-system';
 import {createLogger} from '@/shared/utils/logger';
@@ -128,6 +130,41 @@ function delegatedChildModelName(session: Session): string | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * Model the delegated child's agent resolves before it reports one (or when
+ * its turn failed before reporting): the same current model the composer's
+ * model selector shows for a native session.
+ */
+function useDelegatedChildOptionsModel(session: Session | undefined): string | undefined {
+  const clientId = session
+    ? acpClientIdFromAgentType(session.config?.agentType) ?? acpClientIdFromAgentType(session.mode)
+    : null;
+  const request = useMemo(
+    () => (session && clientId
+      ? {
+        sessionId: session.sessionId,
+        clientId,
+        workspaceId: session.workspaceId || session.config?.workspaceId,
+        workspacePath: session.workspacePath || session.config?.workspacePath,
+        remoteConnectionId: session.remoteConnectionId,
+        remoteSshHost: session.remoteSshHost,
+      }
+      : null),
+    // Identity fields only; the session object changes on every streamed event.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [session?.sessionId, clientId, session?.remoteConnectionId],
+  );
+  useSyncExternalStore(ACPClientAPI.subscribeCapabilities, ACPClientAPI.getCapabilityRevision);
+  const cached = request ? ACPClientAPI.getCachedSessionOptions(request) : undefined;
+  useEffect(() => {
+    if (!request || ACPClientAPI.getCachedSessionOptions(request)) return;
+    ACPClientAPI.getSessionOptions(request).catch(error => {
+      log.debug('Delegated child model lookup failed', { sessionId: request.sessionId, error });
+    });
+  }, [request]);
+  return cached?.currentModelId?.trim() || undefined;
 }
 const REVIEW_ACTION_BOTTOM_BLANK_SPACE_PX = 96;
 const EMPTY_ACTION_ID_SET = new Set<string>();
@@ -247,9 +284,14 @@ const BtwSessionPanelContent: React.FC<BtwSessionPanelProps & { viewState: BtwPa
     : childKind === 'subagent'
       ? t(resolveSubagentNameKey(childSessionId ?? ''))
       : displayTitle?.trim() || resolveSessionTitle(childSession, childTitleFallback);
+  const delegatedOptionsModel = useDelegatedChildOptionsModel(
+    childSession?.delegatedBy ? childSession : undefined,
+  );
   const headerModelName = childKind === 'subagent'
     ? childSession?.config?.modelName?.trim()
-    : childSession?.delegatedBy ? delegatedChildModelName(childSession) : undefined;
+    : childSession?.delegatedBy
+      ? delegatedChildModelName(childSession) ?? delegatedOptionsModel
+      : undefined;
   const sessionVirtualItems = useMemo(
     () => sessionToVirtualItems(childSession ?? null),
     [childSession],
