@@ -1600,6 +1600,46 @@ impl SessionManager {
         Some(config)
     }
 
+    /// Storage of a persisted Session that was never loaded or restored on
+    /// this host, found in the tracked workspaces and bound for later calls.
+    /// Externally driven Sessions are never loaded, so a freshly created one
+    /// has no committed binding until this finds it.
+    pub(crate) async fn locate_persisted_session_storage_path(
+        &self,
+        session_id: &str,
+    ) -> Option<PathBuf> {
+        openbitfun_core_types::validate_session_id(session_id).ok()?;
+        if let Some(path) =
+            Self::committed_session_storage_path(&self.session_storage_path_index, session_id)
+        {
+            return Some(path);
+        }
+        for workspace in self.tracked_workspace_candidates().await? {
+            let Some(storage) = Self::session_storage_path_for_workspace_info(&workspace).await
+            else {
+                continue;
+            };
+            if !matches!(
+                self.persistence_manager
+                    .load_session_metadata(&storage, session_id)
+                    .await,
+                Ok(Some(_))
+            ) {
+                continue;
+            }
+            match self.ensure_session_storage_path(session_id, &storage) {
+                Ok(()) => return Some(storage),
+                Err(error) => debug!(
+                    "Ignoring conflicting persisted session storage: session_id={}, storage_path={}, error={}",
+                    session_id,
+                    storage.display(),
+                    error
+                ),
+            }
+        }
+        None
+    }
+
     async fn tracked_workspace_candidates(&self) -> Option<Vec<WorkspaceInfo>> {
         let workspace_service = get_global_workspace_service()?;
         let mut workspaces = workspace_service.list_workspace_infos().await;

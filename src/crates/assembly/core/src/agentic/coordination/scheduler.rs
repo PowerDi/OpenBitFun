@@ -2147,7 +2147,13 @@ impl DialogScheduler {
         {
             Ok(path) => Some(path),
             Err(OpenBitFunError::NotFound(_)) => {
-                if let Some(workspace_id) = queued_turn
+                if let Some(path) = self
+                    .session_manager
+                    .locate_persisted_session_storage_path(session_id)
+                    .await
+                {
+                    Some(path)
+                } else if let Some(workspace_id) = queued_turn
                     .workspace_id
                     .as_deref()
                     .map(str::trim)
@@ -2575,9 +2581,11 @@ impl DialogScheduler {
         if self.session_manager.get_session(session_id).is_some() {
             return false;
         }
-        let Ok(storage) = self
+        // A Session created on this host but not yet run has no committed
+        // storage binding; find it in the tracked workspaces.
+        let Some(storage) = self
             .session_manager
-            .require_session_storage_path(session_id)
+            .locate_persisted_session_storage_path(session_id)
             .await
         else {
             return false;
