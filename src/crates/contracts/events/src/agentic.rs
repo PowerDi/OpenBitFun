@@ -119,6 +119,10 @@ pub enum AgenticEvent {
         /// Remote SSH host for sessions bound to remote workspaces.
         #[serde(skip_serializing_if = "Option::is_none")]
         remote_ssh_host: Option<String>,
+        /// Session that delegated this one (native agent delegation); the
+        /// list nests the new session under it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        delegated_by: Option<String>,
     },
 
     SessionStateChanged {

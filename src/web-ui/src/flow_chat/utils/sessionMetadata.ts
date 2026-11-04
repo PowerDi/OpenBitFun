@@ -156,6 +156,14 @@ export function resolveSessionRelationship(
   };
 }
 
+/** Session that delegated this native agent session, if any. */
+export function delegatingSessionIdFromMetadata(
+  metadata?: Pick<SessionMetadata, 'customMetadata'> | null,
+): string | undefined {
+  const parent = metadata?.customMetadata?.nativeDelegation?.parentSessionId;
+  return typeof parent === 'string' && parent.trim() ? parent.trim() : undefined;
+}
+
 export function deriveSessionRelationshipFromMetadata(
   metadata?: Pick<SessionMetadata, 'customMetadata' | 'relationship'> | null
 ): Pick<

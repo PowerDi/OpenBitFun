@@ -41,6 +41,8 @@ export interface SessionCustomMetadata extends Record<string, unknown> {
     contentVersion: string;
   };
   kind?: SessionKind;
+  /** Set by native agent delegation (`native-agents/src/delegation`). */
+  nativeDelegation?: { parentSessionId?: string | null } | null;
   parentSessionId?: string | null;
   parentRequestId?: string | null;
   parentDialogTurnId?: string | null;

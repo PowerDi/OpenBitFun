@@ -167,22 +167,31 @@ impl PreparedSessionCatalog {
             .map(|metadata| metadata.session_id.clone())
             .collect::<HashSet<_>>();
 
+        let parent_ids = visible_sessions
+            .iter()
+            .filter_map(|metadata| {
+                let parent_id = if query.is_some() {
+                    catalog_parent_id(metadata)
+                } else {
+                    session_parent_id(metadata)
+                }?;
+                visible_ids
+                    .contains(&parent_id)
+                    .then(|| (metadata.session_id.clone(), parent_id))
+            })
+            .collect::<HashMap<_, _>>();
+
         let mut top_level_sessions = Vec::new();
         let mut children_by_parent: HashMap<String, Vec<SessionMetadata>> = HashMap::new();
         for metadata in visible_sessions {
-            let parent_id = if query.is_some() {
-                catalog_parent_id(&metadata)
-            } else {
-                session_parent_id(&metadata)
-            };
-            if let Some(parent_id) = parent_id {
-                if visible_ids.contains(&parent_id) {
-                    children_by_parent
-                        .entry(parent_id)
-                        .or_default()
-                        .push(metadata);
-                    continue;
-                }
+            // Nesting is one level: a child of a child lists under the
+            // top-level ancestor so it is never dropped from the page.
+            if let Some(parent_id) = top_level_ancestor(&metadata.session_id, &parent_ids) {
+                children_by_parent
+                    .entry(parent_id)
+                    .or_default()
+                    .push(metadata);
+                continue;
             }
 
             top_level_sessions.push(metadata);
@@ -321,7 +330,38 @@ fn catalog_source_matches(metadata: &SessionMetadata, source: &str) -> bool {
             == source
 }
 
+/// Top-level ancestor of a visible child session, or `None` for a top-level
+/// session. A parent cycle has no top level, so its members stay top level.
+fn top_level_ancestor(session_id: &str, parent_ids: &HashMap<String, String>) -> Option<String> {
+    let mut current = parent_ids.get(session_id)?;
+    let mut seen = HashSet::from([session_id]);
+    while let Some(next) = parent_ids.get(current) {
+        if !seen.insert(current.as_str()) {
+            return None;
+        }
+        current = next;
+    }
+    Some(current.clone())
+}
+
+/// Session that delegated this native agent session
+/// (`customMetadata.nativeDelegation.parentSessionId`).
+fn delegating_session_id(metadata: &SessionMetadata) -> Option<String> {
+    metadata
+        .custom_metadata
+        .as_ref()?
+        .get("nativeDelegation")?
+        .get("parentSessionId")?
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
 fn catalog_parent_id(metadata: &SessionMetadata) -> Option<String> {
+    if let Some(parent) = delegating_session_id(metadata) {
+        return Some(parent);
+    }
     use super::types::SessionRelationshipKind;
     // Match the existing UI projection: structured Btw and Review sessions are
     // children; legacy unstructured Btw and MiniApp records are standalone.
@@ -413,6 +453,9 @@ fn catalog_order(
 }
 
 fn session_parent_id(metadata: &SessionMetadata) -> Option<String> {
+    if let Some(parent_id) = delegating_session_id(metadata) {
+        return Some(parent_id);
+    }
     if let Some(parent_id) = metadata
         .relationship
         .as_ref()
@@ -634,6 +677,38 @@ mod tests {
             build_session_metadata_page_with_query(entries, None, 1, Some(&query("openbitfun")));
         assert_eq!(page.total_top_level_count, 1);
         assert_eq!(page.sessions[0].session_id, "native");
+    }
+
+    #[test]
+    fn delegated_native_sessions_page_with_their_delegator() {
+        let parent = entry("claude", "main", 1);
+        let mut child = entry("codex-child", "main", 9);
+        child.custom_metadata = Some(serde_json::json!({
+            "provider": "acp",
+            "nativeDelegation": {"parentSessionId": "claude"},
+        }));
+        // A delegator that is not visible leaves the child top level.
+        let mut orphan = entry("orphan", "main", 8);
+        orphan.custom_metadata =
+            Some(serde_json::json!({"nativeDelegation": {"parentSessionId": "deleted"}}));
+        // Nesting is one level: a grandchild lists under the top-level session.
+        let mut grandchild = entry("pi-grandchild", "main", 7);
+        grandchild.custom_metadata =
+            Some(serde_json::json!({"nativeDelegation": {"parentSessionId": "codex-child"}}));
+        let entries = vec![parent, child, orphan, grandchild];
+        let page =
+            build_session_metadata_page_with_query(entries.clone(), None, 10, Some(&query("all")));
+        assert_eq!(page.total_top_level_count, 2);
+        let ids: Vec<_> = page
+            .sessions
+            .iter()
+            .map(|m| m.session_id.as_str())
+            .collect();
+        assert!(ids.contains(&"codex-child") && ids.contains(&"orphan"));
+        assert!(ids.contains(&"pi-grandchild"));
+        let page = build_session_metadata_page_with_query(entries, None, 10, None);
+        assert_eq!(page.total_top_level_count, 2);
+        assert_eq!(page.sessions.len(), 4);
     }
 
     #[test]

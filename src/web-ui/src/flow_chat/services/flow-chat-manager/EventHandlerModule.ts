@@ -1040,6 +1040,7 @@ function handleSessionCreated(context: FlowChatContext, event: any): void {
       projectWorkspacePath,
       executionTarget,
       workspaceId,
+      delegatedBy: typeof event.delegatedBy === 'string' && event.delegatedBy ? event.delegatedBy : undefined,
     },
     remoteConnectionId,
     remoteSshHost

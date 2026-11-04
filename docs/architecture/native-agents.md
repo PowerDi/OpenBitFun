@@ -197,10 +197,20 @@ Implemented (steps 1-2, `native-agents/src/delegation/`):
   CLI calls `session_list` and `delegate_start` through the real driver and
   reports the results (local Windows; Claude and Pi on `deepseek-flash`).
 
+Session list (step 3): no dedicated delegation view. A delegated child nests
+under its delegator in the existing session list, reusing the one-level
+nesting of review children. The backend sends `delegatedBy` on
+`SessionCreated`; persisted records carry `nativeDelegation.parentSessionId`.
+Nesting stays one level by owner decision: a child of a child lists under
+the top-level ancestor (Web UI hierarchy and backend paging agree), and its
+tooltip names the direct delegator. A child whose delegator is gone lists
+top level. Paging counts only top-level sessions. The tool card in the
+conversation still shows the raw result and does not link to the child.
+
 Not yet: the full child round trip in a running desktop (create, run,
-read, watch notice), SSH, mobile view of children, UI step 3, request-id
-idempotency across restarts (in memory only), watches across restarts (in
-memory only, same as codex-host).
+read, watch notice), SSH, mobile view of children, tool card link to the
+child, request-id idempotency across restarts (in memory only), watches
+across restarts (in memory only, same as codex-host).
 
 ## Current state (verified in code)
 

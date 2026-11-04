@@ -518,6 +518,12 @@ export interface Session {
   sessionKind: SessionKind;
 
   /**
+   * Native agent session that delegated this one (`nativeDelegation`). The
+   * child stays an ordinary session; the list only nests it under the parent.
+   */
+  delegatedBy?: string;
+
+  /**
    * For hidden subagent sessions, records which parent Task tool launched it.
    * Helps reopen the real child session from parent task cards and header lists.
    */

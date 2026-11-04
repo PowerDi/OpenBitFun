@@ -440,6 +440,7 @@ pub async fn create_acp_flow_session(
                     workspace_id: Some(scope.workspace_id),
                     remote_connection_id: scope.remote_connection_id,
                     remote_ssh_host: scope.remote_ssh_host,
+                    delegated_by: None,
                 },
                 None,
             )

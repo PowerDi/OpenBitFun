@@ -34,6 +34,7 @@ pub fn project_agentic_frontend_event(event: AgenticEvent) -> Option<AgenticFron
             workspace_id,
             remote_connection_id,
             remote_ssh_host,
+            delegated_by,
         } => Some(AgenticFrontendEvent::new(
             "agentic://session-created",
             json!({
@@ -46,6 +47,7 @@ pub fn project_agentic_frontend_event(event: AgenticEvent) -> Option<AgenticFron
                 "workspaceId": workspace_id,
                 "remoteConnectionId": remote_connection_id,
                 "remoteSshHost": remote_ssh_host,
+                "delegatedBy": delegated_by,
             }),
         )),
         AgenticEvent::SessionDeleted { session_id } => Some(AgenticFrontendEvent::new(
@@ -598,6 +600,7 @@ mod tests {
             workspace_id: Some("workspace-wt-1".to_string()),
             remote_connection_id: None,
             remote_ssh_host: None,
+            delegated_by: None,
         })
         .expect("projected");
 

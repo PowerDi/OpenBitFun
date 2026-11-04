@@ -84,6 +84,7 @@ import {
   deriveLastFinishedAtFromMetadata,
   deriveSessionRelationshipFromMetadata,
   normalizeSessionRelationship,
+  delegatingSessionIdFromMetadata,
 } from '../utils/sessionMetadata';
 import { sessionOwningWorkspaceId } from '../utils/sessionOrdering';
 import { sessionProjectWorkspacePath } from '../utils/sessionWorkspace';
@@ -4439,6 +4440,7 @@ export class FlowChatStore {
       projectWorkspaceId?: string;
       executionTarget?: Session['config']['executionTarget'];
       workspaceId?: string;
+      delegatedBy?: string;
     },
     remoteConnectionId?: string,
     remoteSshHost?: string
@@ -4488,6 +4490,7 @@ export class FlowChatStore {
         projectWorkspaceId: meta?.projectWorkspaceId,
         remoteConnectionId,
         remoteSshHost,
+        delegatedBy: meta?.delegatedBy,
         parentSessionId: relationship.parentSessionId,
         sessionKind: relationship.sessionKind,
         parentToolCallId: relationship.parentToolCallId,
@@ -7443,19 +7446,21 @@ export class FlowChatStore {
             const importedSource = metadata.customMetadata?.importedFrom ?? existing.importedSource;
             const externalHistory = externalHistoryFromMetadata(metadata.customMetadata);
             const externalBranchOf = metadata.customMetadata?.externalBranchOf;
+            const delegatedBy = delegatingSessionIdFromMetadata(metadata) ?? existing.delegatedBy;
             const followedFields = externalHistory ? { ...titleState, lastActiveAt: metadata.lastActiveAt } : {};
             if (existing.workspaceId || existing.config.workspaceId || !workspaceId) {
               if (continuationPolicy === existing.continuationPolicy && importedSource === existing.importedSource
+                && delegatedBy === existing.delegatedBy
                 && (!externalHistory || (existing.title === titleState.title && existing.lastActiveAt === metadata.lastActiveAt))
                 && JSON.stringify(externalHistory) === JSON.stringify(existing.externalHistory)
                 && JSON.stringify(externalBranchOf) === JSON.stringify(existing.externalBranchOf)) return prev;
               const sessions = new Map(prev.sessions);
-              sessions.set(metadata.sessionId, { ...existing, ...followedFields, continuationPolicy, importedSource, externalHistory, externalBranchOf });
+              sessions.set(metadata.sessionId, { ...existing, ...followedFields, continuationPolicy, importedSource, externalHistory, externalBranchOf, delegatedBy });
               return { ...prev, sessions };
             }
             const sessions = new Map(prev.sessions);
             sessions.set(metadata.sessionId, {
-              ...existing, ...followedFields, workspaceId, projectWorkspaceId, continuationPolicy, importedSource, externalHistory, externalBranchOf,
+              ...existing, ...followedFields, workspaceId, projectWorkspaceId, continuationPolicy, importedSource, externalHistory, externalBranchOf, delegatedBy,
               workspacePath: metadata.workspacePath || workspacePath,
               projectWorkspacePath: metadata.projectWorkspacePath || workspacePath,
               ...remoteScope,
@@ -7489,6 +7494,7 @@ export class FlowChatStore {
             importedSource: metadata.customMetadata?.importedFrom,
             externalHistory: externalHistoryFromMetadata(metadata.customMetadata),
             externalBranchOf: metadata.customMetadata?.externalBranchOf,
+            delegatedBy: delegatingSessionIdFromMetadata(metadata),
             config: {
               agentType: restoredAgentType,
               modelName: metadata.modelName,
@@ -7944,6 +7950,7 @@ export class FlowChatStore {
               importedSource: metadata.customMetadata?.importedFrom,
               externalHistory: externalHistoryFromMetadata(metadata.customMetadata),
               externalBranchOf: metadata.customMetadata?.externalBranchOf,
+              delegatedBy: delegatingSessionIdFromMetadata(metadata),
               config: {
                 agentType: restoredAgentType,
                 modelName: metadata.modelName,

@@ -2962,6 +2962,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             workspace_id: session.config.workspace_id.clone(),
             remote_connection_id: session.config.remote_connection_id.clone(),
             remote_ssh_host: session.config.remote_ssh_host.clone(),
+            delegated_by: None,
         })
         .await;
         Self::dispatch_session_start_hooks(&session, "startup").await;
