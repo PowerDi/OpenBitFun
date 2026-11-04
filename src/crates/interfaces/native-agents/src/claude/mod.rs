@@ -171,6 +171,25 @@ impl NativeAgentDriver for ClaudeNativeDriver {
         );
         Ok(session)
     }
+    async fn inspect_options(
+        &self,
+        workspace_path: &str,
+        remote_connection_id: Option<&str>,
+    ) -> OpenBitFunResult<crate::AcpSessionOptions> {
+        // A fresh id that no turn ever uses: initialize writes no transcript.
+        let session = ClaudeNativeSession::new(
+            "inspect".into(),
+            uuid::Uuid::new_v4().to_string(),
+            workspace_path.into(),
+            remote_connection_id.map(str::to_string),
+            false,
+            crate::inspection_queue(),
+            None,
+            0,
+            None,
+        );
+        crate::inspect_session(session).await
+    }
 }
 
 /// A transcript-bearing session must launch in the directory it recorded:

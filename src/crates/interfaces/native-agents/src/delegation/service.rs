@@ -98,6 +98,9 @@ pub(super) struct StartRequest {
     pub task_name: Option<String>,
     pub request_id: Option<String>,
     pub watch: bool,
+    /// Model id the caller chose from the agent's catalog; `None` keeps the
+    /// agent's own default (nothing is written).
+    pub model: Option<String>,
 }
 
 pub(super) struct Started {
@@ -128,21 +131,37 @@ pub(super) fn is_running(session_id: &str) -> bool {
     get_global_scheduler().is_some_and(|scheduler| scheduler.is_session_busy_or_queued(session_id))
 }
 
-pub(super) async fn start(
-    caller: &DelegationCaller,
-    request: StartRequest,
-) -> OpenBitFunResult<Started> {
-    let driver = crate::native_driver(&request.client_id).ok_or_else(|| {
+fn driver_for(client_id: &str) -> OpenBitFunResult<&'static dyn crate::NativeAgentDriver> {
+    crate::native_driver(client_id).ok_or_else(|| {
         let known = crate::drivers()
             .iter()
             .map(|driver| driver.client_id())
             .collect::<Vec<_>>()
             .join(", ");
         OpenBitFunError::Validation(format!(
-            "Unknown agent '{}'. Available agents: {known}",
-            request.client_id
+            "Unknown agent '{client_id}'. Available agents: {known}"
         ))
-    })?;
+    })
+}
+
+/// The target agent's model catalog in the caller's workspace and host.
+pub(super) async fn inspect(
+    caller: &DelegationCaller,
+    client_id: &str,
+) -> OpenBitFunResult<crate::AcpSessionOptions> {
+    driver_for(client_id)?
+        .inspect_options(
+            &caller.workspace_path,
+            caller.remote_connection_id.as_deref(),
+        )
+        .await
+}
+
+pub(super) async fn start(
+    caller: &DelegationCaller,
+    request: StartRequest,
+) -> OpenBitFunResult<Started> {
+    let driver = driver_for(&request.client_id)?;
     if request.task.trim().is_empty() {
         return Err(OpenBitFunError::Validation("task must not be empty".into()));
     }
@@ -195,6 +214,7 @@ pub(super) async fn start(
             &child,
             driver.client_id(),
             mode,
+            request.model.as_deref(),
             json!({
                 "parentSessionId": caller.session_id,
                 "parentClientId": caller.client_id,
@@ -509,23 +529,25 @@ impl AcpSessionPersistence {
         session_id: &str,
         client_id: &str,
         permission_mode: Option<&str>,
+        model: Option<&str>,
         link: Value,
     ) -> OpenBitFunResult<()> {
         self.update_metadata(storage, session_id, |metadata| {
-            mark_child(metadata, client_id, permission_mode, link);
+            mark_child(metadata, client_id, permission_mode, model, link);
             Ok(())
         })
         .await
     }
 }
 
-/// Parent link, a fixed title, and the session-scoped permission mode the
-/// driver applies when it opens the child (session preferences win over the
-/// client's global choice, which stays untouched).
+/// Parent link, a fixed title, and the session-scoped permission mode and
+/// model the driver applies when it opens the child (session preferences win
+/// over the client's global choice, which stays untouched).
 fn mark_child(
     metadata: &mut SessionMetadata,
     client_id: &str,
     permission_mode: Option<&str>,
+    model: Option<&str>,
     link: Value,
 ) {
     let mut custom = metadata.custom_metadata.take().unwrap_or_else(|| json!({}));
@@ -534,10 +556,15 @@ fn mark_child(
     }
     custom[CUSTOM_METADATA_DELEGATION_KEY] = link;
     custom["titleUserEdited"] = json!(true);
-    if let Some(mode) = permission_mode {
+    if permission_mode.is_some() || model.is_some() {
         let mut preferences =
             crate::preferences::NativeAgentPreferences::from_metadata(&custom, client_id);
-        preferences.permission_mode = Some(mode.to_string());
+        if let Some(mode) = permission_mode {
+            preferences.permission_mode = Some(mode.to_string());
+        }
+        if let Some(model) = model {
+            preferences.model = Some(model.to_string());
+        }
         custom[crate::preferences::METADATA_KEY] =
             serde_json::to_value(preferences).unwrap_or(Value::Null);
     }
@@ -566,6 +593,7 @@ mod tests {
                 &mut metadata,
                 client,
                 unattended_permission_mode(client),
+                Some("picked-model"),
                 json!({"parentSessionId": "parent"}),
             );
             assert_eq!(delegated_by(&metadata), Some("parent"));
@@ -579,6 +607,7 @@ mod tests {
                 unattended_permission_mode(client)
             );
             assert!(preferences.permission_mode.is_some(), "{client}");
+            assert_eq!(preferences.model.as_deref(), Some("picked-model"));
         }
     }
 

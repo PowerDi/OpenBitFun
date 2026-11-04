@@ -142,6 +142,24 @@ impl NativeAgentDriver for CodexNativeDriver {
         );
         Ok(session)
     }
+    async fn inspect_options(
+        &self,
+        workspace_path: &str,
+        remote_connection_id: Option<&str>,
+    ) -> OpenBitFunResult<crate::AcpSessionOptions> {
+        // No thread: warm-up only runs initialize, model/list and config/read.
+        let session = CodexNativeSession::new(
+            "inspect".into(),
+            None,
+            workspace_path.into(),
+            remote_connection_id.map(str::to_string),
+            crate::inspection_queue(),
+            None,
+            0,
+            None,
+        );
+        crate::inspect_session(session).await
+    }
 }
 
 /// `(thread id to resume, turn count)`. A thread id is only resumed under the
