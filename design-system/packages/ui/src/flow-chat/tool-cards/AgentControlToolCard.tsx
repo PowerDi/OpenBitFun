@@ -25,7 +25,8 @@ export interface AgentControlToolCardProps
   preview?: {
     avatar?: ReactNode;
     agentType: ReactNode;
-    model: ReactNode;
+    /** Omit when the host cannot name the model; the row and preview entry are hidden. */
+    model?: ReactNode;
     labels: { agentType: string; model: string; description: string };
   };
   requiresConfirmation?: boolean;
@@ -83,7 +84,7 @@ export function AgentControlToolCard({
       <dl className={styles.previewMetadata}>
         <dt>{preview.labels.agentType}</dt>
         <dd data-openbitfun-part="previewAgentType">{preview.agentType}</dd>
-        {preview.model && <>
+        {preview.model != null && <>
           <dt>{preview.labels.model}</dt>
           <dd data-openbitfun-part="previewModel">{preview.model}</dd>
         </>}
@@ -157,7 +158,7 @@ export function AgentControlToolCard({
                 <span className={styles.metadata}>
                   <OverflowText className={styles.agentType} data-openbitfun-part="agentType"
                     aria-label={preview.labels.agentType}>{preview.agentType}</OverflowText>
-                  {preview.model && (
+                  {preview.model != null && (
                     <OverflowText className={styles.model} data-openbitfun-part="agentModel"
                       aria-label={preview.labels.model}>{preview.model}</OverflowText>
                   )}

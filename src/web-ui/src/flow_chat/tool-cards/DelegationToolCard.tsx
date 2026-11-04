@@ -50,20 +50,19 @@ function subscribeToFlowChatStore(listener: () => void): () => void {
   return flowChatStore.subscribe(() => listener());
 }
 
-/** Title, model and hydrated lifecycle of the child, when the store has it. */
-function useChildSnapshot(childId: string): { title: string; model: string; lifecycle?: SessionLineageLifecycle } {
+/** Title and hydrated lifecycle of the child, when the store has it. */
+function useChildSnapshot(childId: string): { title: string; lifecycle?: SessionLineageLifecycle } {
   const read = useCallback(() => {
     const session = childId ? flowChatStore.getState().sessions.get(childId) : undefined;
-    if (!session) return '["","",""]';
+    if (!session) return '["",""]';
     return JSON.stringify([
       session.title?.trim() ?? '',
-      session.config?.modelName?.trim() ?? '',
       session.dialogTurns.length ? sessionLineageLifecycleForSession(session) : '',
     ]);
   }, [childId]);
   const snapshot = useSyncExternalStore(subscribeToFlowChatStore, read, read);
-  const [title, model, lifecycle] = JSON.parse(snapshot) as [string, string, SessionLineageLifecycle | ''];
-  return { title, model, lifecycle: lifecycle || undefined };
+  const [title, lifecycle] = JSON.parse(snapshot) as [string, SessionLineageLifecycle | ''];
+  return { title, lifecycle: lifecycle || undefined };
 }
 
 /** Live child state from the session list's status source; it also covers unopened sessions. */
@@ -137,7 +136,7 @@ function useDelegationTarget(call: DelegationCall, parentSessionId: string | und
       openDelegatedSession(call.sessionId, parentSessionId, title, t);
     }
     : undefined;
-  return { title, model: child.model, lifecycle, queued: navStatus.kind === 'queued', onOpen };
+  return { title, lifecycle, queued: navStatus.kind === 'queued', onOpen };
 }
 
 const AgentIcon: React.FC<{ agent: string; size: number }> = ({ agent, size }) => (
@@ -150,8 +149,6 @@ const DelegationStartCard: React.FC<ToolCardProps & { call: DelegationCall }> = 
   const status = getToolCardStatus(toolItem);
   const target = useDelegationTarget(call, sessionId, delegationTaskTitle(call.input));
   const agentName = call.agent ? delegationAgentName(call.agent) : t('toolCards.interaction.unknownAgent');
-  const model = toolString(call.result.model) || toolString(call.input.model) || target.model
-    || t('toolCards.delegation.defaultModel');
   const failed = status === 'error';
   const lifecycle = failed ? undefined : target.lifecycle;
   const displayStatus: FlowToolItem['status'] = failed ? 'error'
@@ -176,10 +173,10 @@ const DelegationStartCard: React.FC<ToolCardProps & { call: DelegationCall }> = 
         agentName={target.title}
         summary={task || target.title}
         avatar={<AgentIcon agent={call.agent} size={24} />}
+        // The agent's CLI chooses the model; the child session shows it when opened.
         preview={{
           avatar: <AgentIcon agent={call.agent} size={24} />,
           agentType: agentName,
-          model,
           labels: {
             agentType: t('toolCards.delegation.previewAgent'),
             model: t('toolCards.delegation.previewModel'),
