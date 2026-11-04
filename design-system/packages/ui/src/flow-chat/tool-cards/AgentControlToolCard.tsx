@@ -25,7 +25,8 @@ export interface AgentControlToolCardProps
   preview?: {
     avatar?: ReactNode;
     agentType: ReactNode;
-    model: ReactNode;
+    /** Omit when the host cannot name the model; the row and preview entry are hidden. */
+    model?: ReactNode;
     labels: { agentType: string; model: string; description: string };
   };
   requiresConfirmation?: boolean;
@@ -82,8 +83,10 @@ export function AgentControlToolCard({
       <dl className={styles.previewMetadata}>
         <dt>{preview.labels.agentType}</dt>
         <dd data-openbitfun-part="previewAgentType">{preview.agentType}</dd>
-        <dt>{preview.labels.model}</dt>
-        <dd data-openbitfun-part="previewModel">{preview.model}</dd>
+        {preview.model != null && <>
+          <dt>{preview.labels.model}</dt>
+          <dd data-openbitfun-part="previewModel">{preview.model}</dd>
+        </>}
       </dl>
       <div className={styles.previewTask}>
         <span className={styles.previewCaption}>{preview.labels.description}</span>
@@ -154,8 +157,10 @@ export function AgentControlToolCard({
                 <span className={styles.metadata}>
                   <OverflowText className={styles.agentType} data-openbitfun-part="agentType"
                     aria-label={preview.labels.agentType}>{preview.agentType}</OverflowText>
-                  <OverflowText className={styles.model} data-openbitfun-part="agentModel"
-                    aria-label={preview.labels.model}>{preview.model}</OverflowText>
+                  {preview.model != null && (
+                    <OverflowText className={styles.model} data-openbitfun-part="agentModel"
+                      aria-label={preview.labels.model}>{preview.model}</OverflowText>
+                  )}
                 </span>
               )}
             </span>

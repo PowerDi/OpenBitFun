@@ -3018,7 +3018,6 @@
     "delegation": {
       "open": "開啟工作階段",
       "untitled": "委派任務",
-      "defaultModel": "Agent 預設模型",
       "previewAgent": "Agent",
       "previewModel": "模型",
       "previewTask": "任務",

@@ -3018,7 +3018,6 @@
     "delegation": {
       "open": "Open session",
       "untitled": "Delegated task",
-      "defaultModel": "Agent default",
       "previewAgent": "Agent",
       "previewModel": "Model",
       "previewTask": "Task",

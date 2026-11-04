@@ -3018,7 +3018,6 @@
     "delegation": {
       "open": "打开会话",
       "untitled": "委派任务",
-      "defaultModel": "Agent 默认模型",
       "previewAgent": "Agent",
       "previewModel": "模型",
       "previewTask": "任务",
