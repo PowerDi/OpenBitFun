@@ -864,7 +864,11 @@ impl CodexNativeSession {
             .to_string();
         if let Some(model) = response["model"].as_str().filter(|m| !m.is_empty()) {
             *lock(&self.active_model) = Some(model.to_string());
-            self.state.lock().await.model = Some(model.to_string());
+            let mut state = self.state.lock().await;
+            state.model = Some(model.to_string());
+            if let Some(projector) = state.projector.as_mut() {
+                projector.set_model_name(model);
+            }
         }
         if let Some(effort) = non_empty(&response["reasoningEffort"]) {
             lock(&self.config_defaults).effort = Some(effort);
