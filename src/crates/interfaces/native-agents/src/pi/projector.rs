@@ -800,6 +800,9 @@ fn uncovered_suffix(streamed: &str, content: Option<&str>) -> Option<String> {
 /// Pi built-in tool name -> OpenBitFun card name. Unknown (extension/MCP)
 /// tools keep their own name and render on the generic card.
 pub(crate) fn native_tool_name(name: &str) -> String {
+    if let Some(card) = crate::delegation::card_tool_name(name) {
+        return card;
+    }
     match name {
         "bash" => "ExecCommand",
         "read" => "Read",

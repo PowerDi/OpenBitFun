@@ -81,6 +81,8 @@ import { ListModelsToolCard } from './ListModelsToolCard';
 import { ControlHubToolCard } from './ControlHubToolCard';
 import { BuiltinToolCard } from './BuiltinToolCard';
 import { GenerateImageToolCard } from './GenerateImageToolCard';
+import { DelegationToolCard } from './DelegationToolCard';
+import { delegationToolKind } from './delegationToolModel';
 
 /**
  * Standard tool adapters backed by concrete `@openbitfun/ui/flow-chat` views.
@@ -206,6 +208,11 @@ export const TOOL_CARD_COMPONENTS = {
  * Get tool card component.
  */
 export function getToolCardComponent(toolName: string) {
+  // Native agent delegation tools travel as MCP calls but have their own card.
+  if (delegationToolKind(toolName)) {
+    return DelegationToolCard;
+  }
+
   // Check MCP tools (prefix: mcp__).
   if (isMcpToolName(toolName)) {
     return MCPToolDisplay;

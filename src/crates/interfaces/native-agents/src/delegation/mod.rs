@@ -19,4 +19,6 @@ mod snapshot;
 mod tools;
 
 pub use service::DelegationCaller;
-pub use tools::{call_tool, tool_specs, DelegationToolOutput, DelegationToolSpec, TOOL_NAMESPACE};
+pub use tools::{
+    call_tool, card_tool_name, tool_specs, DelegationToolOutput, DelegationToolSpec, TOOL_NAMESPACE,
+};

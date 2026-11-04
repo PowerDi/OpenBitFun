@@ -16,6 +16,7 @@ import { getControlHubInput, isControlHubObservation } from './runtimeToolCardMo
 import { SEMANTIC_BUILTIN_TOOL_NAMES, getBuiltinToolInput, getBuiltinToolAttention, isSemanticBuiltinTool } from './builtinToolCardPolicy';
 import { readInteractionInput, readToolRecord } from './toolInteractionModel';
 import { importedToolCardName } from '../utils/importedToolPresentation';
+import { delegationToolKind } from './delegationToolModel';
 
 type ToolCardDefinition = Omit<ToolCardConfig, 'attention' | 'presentation'>;
 
@@ -626,6 +627,23 @@ export function getToolCardConfig(toolName: string, input?: unknown): ToolCardCo
       attention: isOpenBitFunControlDiscovery(input) ? 'ambient' : 'prominent',
     };
   }
+  // Native agent delegation: a launch is an agent card, follow-ups are relation rows.
+  const delegation = delegationToolKind(toolName);
+  if (delegation) {
+    return {
+      attention: delegation === 'start' ? 'prominent' : 'ambient',
+      presentation: delegation === 'start' ? 'standard' : 'relation',
+      toolName,
+      displayName: parseMcpToolName(toolName)?.toolName ?? toolName,
+      icon: '',
+      requiresConfirmation: false,
+      resultDisplayType: 'detailed',
+      description: 'Delegation',
+      displayMode: delegation === 'start' ? 'detailed' : 'compact',
+      primaryColor: APPEARANCE_DOMAIN_TOKENS.toolIdentity.assistantAction,
+    };
+  }
+
   // Check MCP tools (prefix: mcp__).
   if (isMcpToolName(toolName)) {
     const parsed = parseMcpToolName(toolName);

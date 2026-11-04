@@ -12,6 +12,27 @@ use super::service::{self, DelegationCaller, StartRequest};
 /// MCP server / tool namespace name the drivers expose the tools under.
 pub const TOOL_NAMESPACE: &str = "openbitfun";
 
+/// Names of the catalog in [`tool_specs`].
+const TOOL_NAMES: [&str; 8] = [
+    "delegate_start",
+    "agent_inspect",
+    "session_read",
+    "session_wait",
+    "session_send",
+    "session_cancel",
+    "session_watch",
+    "session_list",
+];
+
+/// Card name of a delegation tool call, the same for every driver: Claude
+/// already reports `mcp__openbitfun__<tool>`; Codex dynamic tools and Pi
+/// extension tools report the bare name.
+pub fn card_tool_name(name: &str) -> Option<String> {
+    TOOL_NAMES
+        .contains(&name)
+        .then(|| format!("mcp__{TOOL_NAMESPACE}__{name}"))
+}
+
 /// Same bounds as codex-host `thread wait` (default 30 s).
 const DEFAULT_WAIT_MS: u64 = 30_000;
 const MAX_WAIT_MS: u64 = 10 * 60 * 1000;
@@ -73,7 +94,7 @@ pub fn tool_specs() -> Vec<DelegationToolSpec> {
         DelegationToolSpec {
             name: "delegate_start",
             description: format!(
-                "Delegate a self-contained task to another coding agent in a new, independent session in this workspace, and return immediately. Use it only when the user asks to hand work to another agent. The child runs unattended (no approval prompts) and appears in the user's session list, where the user can watch or continue it. Afterwards use session_wait or session_read to get the result, or set watch=true to receive one automatic notice when it stops. Agents: {}.",
+                "Delegate a self-contained task to another coding agent in a new, independent session in this workspace, and return immediately. Use it only when the user asks to hand work to another agent. The child runs unattended (no approval prompts) and appears in the user's session list, where the user can watch or continue it. Prefer watch=true and then end your turn, so the user can keep working with you; one notice arrives here when the child stops, and you then read its result with session_read. Use session_wait only when the user needs the result before you can continue. Agents: {}.",
                 agents_description()
             ),
             input_schema: json!({
@@ -83,7 +104,7 @@ pub fn tool_specs() -> Vec<DelegationToolSpec> {
                     "task": {"type": "string", "description": "Complete, self-contained task with goal, context, constraints and the expected output. The child does not see this conversation."},
                     "task_name": {"type": "string", "description": "Short session title (default: first line of the task)."},
                     "request_id": {"type": "string", "description": "Reuse to retry without creating a second session."},
-                    "watch": {"type": "boolean", "description": "Notify this session once when the child stops (default false)."},
+                    "watch": {"type": "boolean", "description": "Notify this session once when the child stops (default false; recommended)."},
                     "model": {"type": "string", "description": "Exact model id from agent_inspect. Omit to use the agent's default; set it only when the user asks for a specific model."}
                 },
                 "required": ["agent", "task"],
@@ -118,7 +139,7 @@ pub fn tool_specs() -> Vec<DelegationToolSpec> {
         DelegationToolSpec {
             name: "session_wait",
             description: format!(
-                "Wait until a delegated session stops or the timeout expires (default {} ms, max {} ms), then return the same view as session_read plus timedOut. timedOut=true is a checkpoint, not a failure: the session keeps running.",
+                "Wait until a delegated session stops or the timeout expires (default {} ms, max {} ms), then return the same view as session_read plus timedOut. It holds your turn, so the user cannot talk to you meanwhile; use it only when the result is needed now, otherwise use watch. timedOut=true is a checkpoint, not a failure: the session keeps running.",
                 DEFAULT_WAIT_MS, MAX_WAIT_MS
             ),
             input_schema: json!({
@@ -363,13 +384,18 @@ async fn run(
             )
             .await
             .map_err(failure)?;
+            let watching = input.watch && !started.reused;
             Ok(DelegationToolOutput::ok(json!({
                 "sessionId": started.session_id,
                 "agent": started.client_id,
                 "model": model,
                 "status": if started.reused { "existing" } else if started.queued { "queued" } else { "running" },
-                "watching": input.watch && !started.reused,
-                "next": "Use session_wait or session_read with this sessionId to get the result.",
+                "watching": watching,
+                "next": if watching {
+                    "You will be notified here when it stops; you may end your turn."
+                } else {
+                    "Use session_watch to be notified when it stops, or session_read later with this sessionId."
+                },
             })))
         }
         "session_read" => {
@@ -495,6 +521,14 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), specs.len());
+        let mut known = TOOL_NAMES.to_vec();
+        known.sort_unstable();
+        assert_eq!(names, known);
+        assert_eq!(
+            card_tool_name("session_read").as_deref(),
+            Some("mcp__openbitfun__session_read")
+        );
+        assert_eq!(card_tool_name("read"), None);
         for spec in &specs {
             assert_eq!(spec.input_schema["type"], "object", "{}", spec.name);
         }

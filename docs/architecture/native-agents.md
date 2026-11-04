@@ -204,8 +204,25 @@ nesting of review children. The backend sends `delegatedBy` on
 Nesting stays one level by owner decision: a child of a child lists under
 the top-level ancestor (Web UI hierarchy and backend paging agree), and its
 tooltip names the direct delegator. A child whose delegator is gone lists
-top level. Paging counts only top-level sessions. The tool card in the
-conversation still shows the raw result and does not link to the child.
+top level. Paging counts only top-level sessions.
+
+Conversation cards (owner decision: reuse the subagent card, no new panel):
+
+- Every driver reports the delegation tools as `mcp__openbitfun__<tool>`
+  (`delegation::card_tool_name`; Claude already does, Codex dynamic tools and
+  Pi extension tools are renamed in their projectors).
+- `delegate_start` renders the subagent launch card (`AgentControlToolCard`):
+  agent icon, child title, live status from the session list status source,
+  hover preview with agent, model and task. Several launches share a row.
+- `session_send` / `read` / `wait` / `cancel` / `watch` render one relation
+  row each, never a new card. `agent_inspect` and `session_list` keep the MCP
+  card.
+- Clicking a card or row opens the child in the side pane next to the
+  delegator; the child keeps its own persisted record (it is loaded first,
+  never created as a side chat), and the composer can target it.
+- Tool descriptions steer the delegator to `watch=true` and ending its turn;
+  `session_wait` is described as holding the turn and reserved for results
+  needed now. The loop itself is unchanged.
 
 Model selection (owner decision: exactly codex-host `harness inspect` and
 `validateConfiguration`):
@@ -231,8 +248,7 @@ Model selection (owner decision: exactly codex-host `harness inspect` and
 - Live check: `delegation::live_tests::live_inspect_reports_each_agent_catalog`.
 
 Not yet: the full child round trip in a running desktop (create, run,
-read, watch notice), SSH, mobile view of children, tool card link to the
-child, request-id idempotency across restarts (in memory only), watches
+read, watch notice), SSH, mobile view of children, request-id idempotency across restarts (in memory only), watches
 across restarts (in memory only, same as codex-host), thinking-level
 selection on delegation.
 

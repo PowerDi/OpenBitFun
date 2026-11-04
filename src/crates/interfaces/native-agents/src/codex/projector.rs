@@ -908,10 +908,13 @@ pub(crate) fn generic_tool(item: &Value) -> Option<(String, Value)> {
             ),
             item["arguments"].clone(),
         )),
-        "dynamicToolCall" => Some((
-            item["tool"].as_str().unwrap_or("tool").to_string(),
-            item["arguments"].clone(),
-        )),
+        "dynamicToolCall" => {
+            let tool = item["tool"].as_str().unwrap_or("tool");
+            Some((
+                crate::delegation::card_tool_name(tool).unwrap_or_else(|| tool.to_string()),
+                item["arguments"].clone(),
+            ))
+        }
         "webSearch" => Some((
             "WebSearch".into(),
             json!({"query": item["query"], "action": item["action"]}),

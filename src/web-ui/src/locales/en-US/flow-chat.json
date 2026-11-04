@@ -3015,6 +3015,28 @@
     "agentSendInput": {
       "action": "Send instructions"
     },
+    "delegation": {
+      "open": "Open session",
+      "untitled": "Delegated task",
+      "defaultModel": "Agent default",
+      "previewAgent": "Agent",
+      "previewModel": "Model",
+      "previewTask": "Task",
+      "sent": "Message sent",
+      "queued": "Message queued",
+      "sending": "Sending message...",
+      "reading": "Reading result...",
+      "readDone": "Read result: {{status}}",
+      "waiting": "Waiting for it to stop...",
+      "waitTimedOut": "Still running after the wait",
+      "waitStopped": "Stopped: {{status}}",
+      "cancelling": "Cancelling...",
+      "cancelled": "Cancelled the running turn",
+      "nothingToCancel": "Nothing was running",
+      "watchRequesting": "Requesting a notice...",
+      "watching": "Will notify when it stops",
+      "alreadyStopped": "Already stopped: {{status}}"
+    },
     "canvas": {
       "create": "Create canvas",
       "read": "View canvas",
