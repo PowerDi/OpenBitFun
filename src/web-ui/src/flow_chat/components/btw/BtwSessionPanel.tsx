@@ -27,8 +27,6 @@ import { type LineRange } from '@/shared/editor/LineRange';
 import { DEFAULT_RETAINED_MOUNT_MS, RetainedMountBoundary } from '@/shared/presence';
 import {resolveSessionRelationship} from '../../utils/sessionMetadata';
 import {agentAPI} from '@/infrastructure/api';
-import {ACPClientAPI} from '@/infrastructure/api/service-api/ACPClientAPI';
-import {acpClientIdFromAgentType} from '../../utils/acpSession';
 import {globalEventBus} from '@/infrastructure/event-bus';
 import {notificationService} from '@/shared/notification-system';
 import {createLogger} from '@/shared/utils/logger';
@@ -114,57 +112,15 @@ const resolveSessionTitle = (session?: Pick<Session, 'title'> | null, fallback =
 const log = createLogger('BtwSessionPanel');
 
 /**
- * Model a delegated native child actually ran on: the CLI reports it per
+ * Model a delegated native child runs on, as its driver records it on each
  * model round. `config.modelName` holds OpenBitFun's own alias for these
- * sessions, so it is not shown; nor are the drivers' placeholders for a
- * round whose model was not reported yet.
+ * sessions, so it is not shown.
  */
-const NATIVE_MODEL_PLACEHOLDERS = new Set(['claude', 'codex', 'pi']);
-
 function delegatedChildModelName(session: Session): string | undefined {
-  for (let turn = session.dialogTurns.length - 1; turn >= 0; turn -= 1) {
-    const rounds = session.dialogTurns[turn].modelRounds;
-    for (let round = rounds.length - 1; round >= 0; round -= 1) {
-      const name = rounds[round].effectiveModelName?.trim();
-      if (name && !NATIVE_MODEL_PLACEHOLDERS.has(name)) return name;
-    }
-  }
-  return undefined;
-}
-
-/**
- * Model the delegated child's agent resolves before it reports one (or when
- * its turn failed before reporting): the same current model the composer's
- * model selector shows for a native session.
- */
-function useDelegatedChildOptionsModel(session: Session | undefined): string | undefined {
-  const clientId = session
-    ? acpClientIdFromAgentType(session.config?.agentType) ?? acpClientIdFromAgentType(session.mode)
-    : null;
-  const request = useMemo(
-    () => (session && clientId
-      ? {
-        sessionId: session.sessionId,
-        clientId,
-        workspaceId: session.workspaceId || session.config?.workspaceId,
-        workspacePath: session.workspacePath || session.config?.workspacePath,
-        remoteConnectionId: session.remoteConnectionId,
-        remoteSshHost: session.remoteSshHost,
-      }
-      : null),
-    // Identity fields only; the session object changes on every streamed event.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [session?.sessionId, clientId, session?.remoteConnectionId],
-  );
-  useSyncExternalStore(ACPClientAPI.subscribeCapabilities, ACPClientAPI.getCapabilityRevision);
-  const cached = request ? ACPClientAPI.getCachedSessionOptions(request) : undefined;
-  useEffect(() => {
-    if (!request || ACPClientAPI.getCachedSessionOptions(request)) return;
-    ACPClientAPI.getSessionOptions(request).catch(error => {
-      log.debug('Delegated child model lookup failed', { sessionId: request.sessionId, error });
-    });
-  }, [request]);
-  return cached?.currentModelId?.trim() || undefined;
+  const names = session.dialogTurns.flatMap(turn => turn.modelRounds)
+    .map(round => round.effectiveModelName?.trim())
+    .filter(Boolean);
+  return names[names.length - 1];
 }
 const REVIEW_ACTION_BOTTOM_BLANK_SPACE_PX = 96;
 const EMPTY_ACTION_ID_SET = new Set<string>();
@@ -284,14 +240,9 @@ const BtwSessionPanelContent: React.FC<BtwSessionPanelProps & { viewState: BtwPa
     : childKind === 'subagent'
       ? t(resolveSubagentNameKey(childSessionId ?? ''))
       : displayTitle?.trim() || resolveSessionTitle(childSession, childTitleFallback);
-  const delegatedOptionsModel = useDelegatedChildOptionsModel(
-    childSession?.delegatedBy ? childSession : undefined,
-  );
   const headerModelName = childKind === 'subagent'
     ? childSession?.config?.modelName?.trim()
-    : childSession?.delegatedBy
-      ? delegatedChildModelName(childSession) ?? delegatedOptionsModel
-      : undefined;
+    : childSession?.delegatedBy ? delegatedChildModelName(childSession) : undefined;
   const sessionVirtualItems = useMemo(
     () => sessionToVirtualItems(childSession ?? null),
     [childSession],

@@ -928,6 +928,7 @@ impl ClaudeNativeSession {
                     input.text,
                     original,
                     false,
+                    input.metadata,
                 )
                 .await?;
                 self.fail_turn(&error.to_string()).await;
@@ -946,7 +947,7 @@ impl ClaudeNativeSession {
         let title_message = (state.index == 0)
             .then(|| title::title_source(&input.text, original.as_deref()))
             .flatten();
-        self.begin_turn_with(
+        self.begin_turn(
             &mut state,
             turn_id.clone(),
             input.text.clone(),
@@ -1141,6 +1142,7 @@ impl ClaudeNativeSession {
                     steer.text.clone(),
                     steer.display.clone(),
                     false,
+                    None,
                 )
                 .await?;
                 continue;
@@ -1168,18 +1170,6 @@ impl ClaudeNativeSession {
                 .is_some_and(|uuid| state.steers.iter().any(|steer| steer.uuid == uuid))
     }
 
-    async fn begin_turn(
-        &self,
-        state: &mut TurnState,
-        turn_id: String,
-        input: String,
-        original: Option<String>,
-        autonomous: bool,
-    ) -> OpenBitFunResult<()> {
-        self.begin_turn_with(state, turn_id, input, original, autonomous, None)
-            .await
-    }
-
     /// Open the turn Claude Code started on its own (background output or a
     /// queued task notification), labelled with the oldest wake reason.
     async fn begin_autonomous_turn(&self, state: &mut TurnState) -> OpenBitFunResult<()> {
@@ -1196,7 +1186,7 @@ impl ClaudeNativeSession {
             Some(reason) => (reason.display_input(), Some(reason.metadata())),
             None => (String::new(), None),
         };
-        self.begin_turn_with(
+        self.begin_turn(
             state,
             uuid::Uuid::new_v4().to_string(),
             input,
@@ -1207,7 +1197,8 @@ impl ClaudeNativeSession {
         .await
     }
 
-    async fn begin_turn_with(
+    /// Open a turn; `metadata` marks system notices (wake, delegation).
+    async fn begin_turn(
         &self,
         state: &mut TurnState,
         turn_id: String,
@@ -1232,8 +1223,14 @@ impl ClaudeNativeSession {
             turn_index: state.index - 1,
             ..Default::default()
         });
-        let mut projector =
-            ClaudeTurnProjector::new(&self.session_id, &turn_id, state.model.as_deref());
+        // The model Claude reported, else the one this turn asks for; the
+        // CLI's own default stays unnamed until `init` reports it.
+        let selected = self.selected_model();
+        let model = state
+            .model
+            .clone()
+            .or_else(|| (selected != DEFAULT_MODEL_ID).then_some(selected));
+        let mut projector = ClaudeTurnProjector::new(&self.session_id, &turn_id, model.as_deref());
         if let Some(usage) = self
             .context_usage
             .lock()
@@ -2081,6 +2078,7 @@ impl ClaudeNativeSession {
                 String::new(),
                 None,
                 true,
+                None,
             )
             .await?;
         }
@@ -2227,6 +2225,7 @@ impl ClaudeNativeSession {
                 String::new(),
                 None,
                 true,
+                None,
             )
             .await?;
         }

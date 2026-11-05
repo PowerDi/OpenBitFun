@@ -999,18 +999,8 @@ impl PiNativeSession {
         });
     }
 
+    /// Open a user turn; metadata marks system notices (wake, delegation).
     async fn begin_turn(
-        &self,
-        state: &mut TurnState,
-        turn_id: String,
-        input: String,
-        original: Option<String>,
-    ) -> OpenBitFunResult<()> {
-        self.begin_turn_with(state, turn_id, input, original, None)
-            .await
-    }
-
-    async fn begin_turn_with(
         &self,
         state: &mut TurnState,
         turn_id: String,
@@ -1430,7 +1420,7 @@ impl PiNativeSession {
             Ok(process) => process,
             Err(error) => {
                 let mut state = self.state.lock().await;
-                self.begin_turn(&mut state, turn_id, input.text, original)
+                self.begin_turn(&mut state, turn_id, input.text, original, input.metadata)
                     .await?;
                 drop(state);
                 self.fail_turn(&error.to_string()).await;
@@ -1444,7 +1434,7 @@ impl PiNativeSession {
         };
         if let Err(error) = bridge {
             let mut state = self.state.lock().await;
-            self.begin_turn(&mut state, turn_id, input.text, original)
+            self.begin_turn(&mut state, turn_id, input.text, original, input.metadata)
                 .await?;
             drop(state);
             self.fail_turn(&error.to_string()).await;
@@ -1454,7 +1444,7 @@ impl PiNativeSession {
         let title_message = {
             let mut state = self.state.lock().await;
             let first = state.index == 0;
-            self.begin_turn_with(
+            self.begin_turn(
                 &mut state,
                 turn_id.clone(),
                 input.text.clone(),
