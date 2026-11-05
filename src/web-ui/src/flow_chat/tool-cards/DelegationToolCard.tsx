@@ -18,33 +18,15 @@ import { getToolCardStatus } from './toolCardStatus';
 import { interactionOutcome, toolString } from './toolInteractionModel';
 import { useCurrentToolSessionParticipant } from './useToolSessionParticipant';
 import {
+  DELEGATION_LIFECYCLE_LABEL_KEYS,
   delegationAgentName,
-  delegationTaskTitle,
+  delegationStatusLabelKey,
   delegationToolKind,
   readDelegationCall,
   type DelegationCall,
 } from './delegationToolModel';
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
-
-const LIFECYCLE_LABEL_KEYS: Record<SessionLineageLifecycle, string> = {
-  running: 'flowChatHeader.agentTreeStatus.running',
-  finishing: 'flowChatHeader.agentTreeStatus.running',
-  waiting: 'flowChatHeader.agentTreeStatus.waiting',
-  completed: 'flowChatHeader.agentTreeStatus.completed',
-  cancelled: 'flowChatHeader.agentTreeStatus.cancelled',
-  error: 'flowChatHeader.agentTreeStatus.error',
-  idle: 'flowChatHeader.agentTreeStatus.idle',
-};
-
-/** Child status words reported by the delegation tools (`snapshot.rs`). */
-const SNAPSHOT_LIFECYCLES: Record<string, SessionLineageLifecycle> = {
-  running: 'running',
-  completed: 'completed',
-  failed: 'error',
-  cancelled: 'cancelled',
-  idle: 'idle',
-};
 
 function subscribeToFlowChatStore(listener: () => void): () => void {
   return flowChatStore.subscribe(() => listener());
@@ -65,14 +47,17 @@ function useChildSnapshot(childId: string): { title: string; lifecycle?: Session
   return { title, lifecycle: lifecycle || undefined };
 }
 
-/** Live child state from the session list's status source; it also covers unopened sessions. */
-function lifecycleFromNav(status: SessionNavStatus): SessionLineageLifecycle | undefined {
+/**
+ * States from the session list's status source; it also covers unopened
+ * sessions. A finished, unread result is not a state: it reads as completed
+ * either way, and the dot disappears once the user opens it.
+ */
+function liveLifecycleFromNav(status: SessionNavStatus): SessionLineageLifecycle | undefined {
   switch (status.kind) {
     case 'running': return 'running';
     case 'approval': case 'input': return 'waiting';
     case 'error': return 'error';
     case 'stopped': return 'cancelled';
-    case 'unread': return 'completed';
     default: return undefined;
   }
 }
@@ -123,13 +108,18 @@ function openDelegatedSession(childId: string, parentSessionId: string, title: s
     .catch(fail);
 }
 
-function useDelegationTarget(call: DelegationCall, parentSessionId: string | undefined, fallbackTitle: string) {
+/**
+ * The child as the card shows it: live states from the session list, else
+ * the outcome of its own transcript once hydrated.
+ */
+function useDelegationTarget(call: DelegationCall, parentSessionId: string | undefined) {
   const { t } = useI18n('flow-chat');
   const child = useChildSnapshot(call.sessionId);
   const navStatus = useSessionNavStatus(call.sessionId);
-  const title = child.title || toolString(call.result.title) || fallbackTitle
+  // Before the call answers, the requested name stands in for the title.
+  const title = child.title || toolString(call.result.title) || toolString(call.input.task_name)
     || t('toolCards.delegation.untitled');
-  const lifecycle = lifecycleFromNav(navStatus) ?? child.lifecycle;
+  const lifecycle = liveLifecycleFromNav(navStatus) ?? child.lifecycle;
   const onOpen = call.sessionId && parentSessionId
     ? (event: React.MouseEvent<HTMLButtonElement>) => {
       event.stopPropagation();
@@ -147,7 +137,7 @@ const AgentIcon: React.FC<{ agent: string; size: number }> = ({ agent, size }) =
 const DelegationStartCard: React.FC<ToolCardProps & { call: DelegationCall }> = ({ toolItem, sessionId, call }) => {
   const { t, currentLanguage } = useI18n('flow-chat');
   const status = getToolCardStatus(toolItem);
-  const target = useDelegationTarget(call, sessionId, delegationTaskTitle(call.input));
+  const target = useDelegationTarget(call, sessionId);
   const agentName = call.agent ? delegationAgentName(call.agent) : t('toolCards.interaction.unknownAgent');
   const failed = status === 'error';
   const lifecycle = failed ? undefined : target.lifecycle;
@@ -159,7 +149,7 @@ const DelegationStartCard: React.FC<ToolCardProps & { call: DelegationCall }> = 
             : lifecycle === 'completed' ? 'completed' : status;
   const statusLabel = failed ? t('toolCards.default.failed')
     : target.queued ? t('toolCards.default.queued')
-      : lifecycle && lifecycle !== 'completed' ? t(LIFECYCLE_LABEL_KEYS[lifecycle]) : undefined;
+      : lifecycle && lifecycle !== 'completed' ? t(DELEGATION_LIFECYCLE_LABEL_KEYS[lifecycle]) : undefined;
   const statusTone = lifecycle === 'running' || lifecycle === 'finishing' ? 'success'
     : lifecycle === 'waiting' ? 'warning'
       : failed || lifecycle === 'error' || lifecycle === 'cancelled' ? 'danger' : 'neutral';
@@ -202,8 +192,8 @@ function relationOperation(kind: DelegationCall['kind']): ToolCardInteraction['o
 }
 
 function childStatusLabel(value: unknown, t: Translate): string {
-  const lifecycle = SNAPSHOT_LIFECYCLES[toolString(value)];
-  return lifecycle ? t(LIFECYCLE_LABEL_KEYS[lifecycle]) : toolString(value);
+  const key = delegationStatusLabelKey(value);
+  return key ? t(key) : toolString(value);
 }
 
 function relationSummary(call: DelegationCall, status: FlowToolItem['status'], t: Translate): string {
@@ -234,7 +224,7 @@ const DelegationRelationRow: React.FC<ToolCardProps & { call: DelegationCall }> 
   const { t } = useI18n('flow-chat');
   const status = getToolCardStatus(toolItem);
   const source = useCurrentToolSessionParticipant(sessionId, t);
-  const target = useDelegationTarget(call, sessionId, '');
+  const target = useDelegationTarget(call, sessionId);
   const summary = relationSummary(call, status, t);
   const resultText = toolString(call.result.result && typeof call.result.result === 'object'
     ? (call.result.result as Record<string, unknown>).text : undefined);

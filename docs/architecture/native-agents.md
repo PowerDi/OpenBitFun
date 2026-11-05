@@ -213,13 +213,28 @@ Conversation cards (owner decision: reuse the subagent card, no new panel):
   Pi extension tools are renamed in their projectors).
 - `delegate_start` renders the subagent launch card (`AgentControlToolCard`):
   agent icon, child title, live status from the session list status source,
-  hover preview with agent, model and task. Several launches share a row.
+  hover preview with agent and task. The card shows no model. Several
+  launches share a row.
 - `session_send` / `read` / `wait` / `cancel` / `watch` render one relation
   row each, never a new card. `agent_inspect` and `session_list` keep the MCP
   card.
+- Every tool that addresses a child returns its `sessionId`, `agent` and
+  `title`; the card reads them from the result and never parses the session id.
+  Drivers deliver the result text as `{ result: <json text> }`, the only shape
+  the card accepts.
 - Clicking a card or row opens the child in the side pane next to the
   delegator; the child keeps its own persisted record (it is loaded first,
-  never created as a side chat), and the composer can target it.
+  never created as a side chat), and the composer can target it. The pane
+  header names the model of the child's latest model round.
+- A watch notice is a user turn with `nativeWake.source = "delegation"`, so it
+  renders as a grey system line. Each driver has one turn-opening path that
+  takes the user message metadata, so no path drops it.
+
+Model on rounds: each turn opens with the model the agent resolves for it,
+the value its model selector shows (Codex: selection, reported thread model,
+config default, catalog default; Claude: reported model, else the selection;
+Pi: current model). A model the CLI reports during the turn replaces it.
+When none is known the name is empty, never a placeholder.
 - Tool descriptions steer the delegator to `watch=true` and ending its turn;
   `session_wait` is described as holding the turn and reserved for results
   needed now. The loop itself is unchanged.

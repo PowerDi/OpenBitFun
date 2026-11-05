@@ -137,13 +137,11 @@ pub(super) fn build(
             })
             .collect()
     });
+    let identity = super::service::ChildIdentity::of(metadata);
     SessionSnapshot {
         session_id: metadata.session_id.clone(),
-        agent: metadata
-            .external_client_id()
-            .unwrap_or(metadata.agent_type.as_str())
-            .to_string(),
-        title: metadata.session_name.clone(),
+        agent: identity.agent,
+        title: identity.title,
         status,
         running,
         turn_id: latest.map(|turn| turn.turn_id.clone()),

@@ -106,8 +106,28 @@ pub(super) struct StartRequest {
 pub(super) struct Started {
     pub session_id: String,
     pub client_id: String,
+    /// Session title of the child; `None` when an earlier request is reused.
+    pub title: Option<String>,
     pub queued: bool,
     pub reused: bool,
+}
+
+/// Identity of a delegated child, echoed by every tool that addresses one.
+pub(super) struct ChildIdentity {
+    pub agent: String,
+    pub title: String,
+}
+
+impl ChildIdentity {
+    pub(super) fn of(metadata: &SessionMetadata) -> Self {
+        Self {
+            agent: metadata
+                .external_client_id()
+                .unwrap_or(metadata.agent_type.as_str())
+                .to_string(),
+            title: metadata.session_name.clone(),
+        }
+    }
 }
 
 /// Same default as codex-host `thread watch` (29 minutes).
@@ -181,6 +201,7 @@ pub(super) async fn start(
             return Ok(Started {
                 session_id,
                 client_id: request.client_id,
+                title: None,
                 queued: false,
                 reused: true,
             });
@@ -258,6 +279,7 @@ pub(super) async fn start(
     Ok(Started {
         session_id: child,
         client_id: request.client_id,
+        title: Some(name),
         queued,
         reused: false,
     })
@@ -326,7 +348,7 @@ pub(super) async fn send(
     session_id: &str,
     message: &str,
     watch: bool,
-) -> OpenBitFunResult<(String, bool)> {
+) -> OpenBitFunResult<(ChildIdentity, String, bool)> {
     if session_id == caller.session_id {
         return Err(OpenBitFunError::Validation(
             "A session cannot send a message to itself".into(),
@@ -342,19 +364,29 @@ pub(super) async fn send(
     if watch {
         self::watch(caller, session_id, DEFAULT_WATCH_TIMEOUT);
     }
-    Ok(submitted(outcome))
+    let (turn_id, queued) = submitted(outcome);
+    Ok((ChildIdentity::of(&metadata), turn_id, queued))
 }
 
 /// Cancel the running turn of `session_id`; returns the cancelled turn.
 pub(super) async fn cancel(
     caller: &DelegationCaller,
     session_id: &str,
-) -> OpenBitFunResult<Option<String>> {
-    caller.child_metadata(session_id).await?;
+) -> OpenBitFunResult<(ChildIdentity, Option<String>)> {
+    let metadata = caller.child_metadata(session_id).await?;
     let scheduler = get_global_scheduler().ok_or_else(scheduler_unavailable)?;
-    scheduler
+    let turn_id = scheduler
         .cancel_active_turn_for_session(session_id, Duration::from_secs(10))
-        .await
+        .await?;
+    Ok((ChildIdentity::of(&metadata), turn_id))
+}
+
+/// Identity of a child of this caller's workspace.
+pub(super) async fn identity(
+    caller: &DelegationCaller,
+    session_id: &str,
+) -> OpenBitFunResult<ChildIdentity> {
+    Ok(ChildIdentity::of(&caller.child_metadata(session_id).await?))
 }
 
 /// Wait until `session_id` is idle or `timeout` passes.
