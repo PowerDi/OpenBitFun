@@ -34,6 +34,8 @@ pub mod macos_menubar;
 mod macos_window_chrome;
 #[cfg(target_os = "macos")]
 mod macos_window_close;
+#[cfg(target_os = "macos")]
+mod macos_window_resize;
 mod miniapp_desktop;
 mod miniapp_web_host;
 
@@ -47,12 +49,13 @@ pub mod sleep_prevention;
 pub mod startup_trace;
 pub mod tray;
 mod webview_recovery;
+mod window_material;
 mod window_state_support;
 #[cfg(target_os = "windows")]
 mod window_webview_geometry;
 
 use openbitfun_agent_runtime::sdk::{attach_session_event_cursor, SessionEventJournal};
-use openbitfun_core::agentic::tools::computer_use_capability::set_computer_use_desktop_available;
+use openbitfun_core::agentic::tools::computer_use_capability::set_computer_use_host_available;
 use openbitfun_core::agentic::tools::computer_use_host::ComputerUseHostRef;
 use openbitfun_core::infrastructure::ai::AIClientFactory;
 use openbitfun_core::infrastructure::{get_path_manager_arc, try_get_path_manager_arc};
@@ -1419,6 +1422,7 @@ pub async fn run() {
             api::agentic_api::restore_session_view,
             api::agentic_api::load_session_event_backfill,
             api::agentic_api::load_session_turn_window,
+            api::agentic_api::load_session_trajectory,
             api::agentic_api::restore_session_with_turns,
             api::agentic_api::reset_memory,
             api::agentic_api::get_memory_paths,
@@ -1494,6 +1498,7 @@ pub async fn run() {
             openbitfun_control_host::mark_openbitfun_control_surface_ready,
             openbitfun_control_host::mark_openbitfun_control_surface_unready,
             openbitfun_control_host::product_control_invoke,
+            api::generative_ui_api::gen_ui_provider_call,
             openbitfun_control_host::report_openbitfun_control_result,
             miniapp_web_host::mark_miniapp_web_surface_ready,
             miniapp_web_host::report_miniapp_web_result,
@@ -1520,6 +1525,8 @@ pub async fn run() {
             get_app_state,
             update_app_status,
             update_workspace_info,
+            get_workspace_icon,
+            set_workspace_icon,
             appearance::show_agent_companion_desktop_pet,
             appearance::hide_agent_companion_desktop_pet,
             appearance::resize_agent_companion_desktop_pet,
@@ -1942,11 +1949,6 @@ pub async fn run() {
             api::miniapp_api::miniapp_runtime_status,
             api::miniapp_api::miniapp_worker_call,
             api::miniapp_api::miniapp_host_call,
-            api::canvas_api::load_canvas_artifact,
-            api::canvas_api::load_canvas_state,
-            api::canvas_api::report_canvas_runtime_error,
-            api::canvas_api::report_canvas_runtime_ready,
-            api::canvas_api::save_canvas_state,
             api::miniapp_api::miniapp_worker_stop,
             api::miniapp_api::miniapp_worker_list_running,
             api::miniapp_api::miniapp_install_deps,
@@ -2181,9 +2183,17 @@ async fn init_agentic_system() -> anyhow::Result<(
         openbitfun_core::product_runtime::core_permission_request_manager()
             .map_err(anyhow::Error::msg)?;
 
+    if let Ok(paths) = openbitfun_core::infrastructure::try_get_path_manager_arc() {
+        openbitfun_computer_use::set_ocr_debug_directory(
+            paths
+                .default_assistant_workspace_dir(None)
+                .join(openbitfun_core_types::product_identity::hidden_data_directory())
+                .join("computer_use_debug"),
+        );
+    }
     let computer_use_host: ComputerUseHostRef =
         Arc::new(computer_use::DesktopComputerUseHost::new());
-    set_computer_use_desktop_available(true);
+    set_computer_use_host_available(true);
 
     let tool_pipeline = Arc::new(
         tools::pipeline::ToolPipeline::new(
@@ -2390,6 +2400,13 @@ static PROCESS_EXIT_CLEANUP_STARTED: AtomicBool = AtomicBool::new(false);
 static PROCESS_EXIT_CLEANUP_COMPLETE: AtomicBool = AtomicBool::new(false);
 static DESKTOP_EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static PROCESS_EXIT_CLEANUP_NOTIFY: OnceLock<tokio::sync::Notify> = OnceLock::new();
+
+/// Whether a graceful desktop exit has started; background recovery must not
+/// recreate windows while the app is shutting down.
+pub(crate) fn desktop_exit_in_progress() -> bool {
+    DESKTOP_EXIT_REQUESTED.load(Ordering::Acquire)
+        || PROCESS_EXIT_CLEANUP_STARTED.load(Ordering::Acquire)
+}
 
 pub(crate) async fn perform_process_exit_cleanup() -> bool {
     let notify = PROCESS_EXIT_CLEANUP_NOTIFY.get_or_init(tokio::sync::Notify::new);

@@ -37,9 +37,6 @@ pub mod appearance_market;
 #[cfg(feature = "browser-control")]
 pub mod browser_control;
 
-#[cfg(feature = "canvas-runtime")]
-pub mod canvas;
-
 #[cfg(feature = "deep-research")]
 pub mod deep_research;
 
@@ -104,6 +101,8 @@ pub mod script_tool;
 
 #[cfg(feature = "ptc-runtime")]
 pub mod ptc_runtime;
+#[cfg(feature = "ptc-runtime")]
+pub mod python_ptc_runtime;
 #[cfg(feature = "speech")]
 pub mod speech;
 

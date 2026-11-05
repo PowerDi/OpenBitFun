@@ -1,5 +1,7 @@
 import { ProductBrandIcon } from '@/shared/ui/ProductBrandIcon';
 import { getProductBrandIcon } from '@/shared/ui/productBrandIcons';
+import { acpClientIdFromAgentType } from '@/flow_chat/utils/acpSession';
+import type { Session } from '@/flow_chat/types/flow-chat';
 
 /** ACP client id -> shared product icon id. Native drivers reuse their product's mark. */
 const EXTERNAL_AGENT_PRODUCT_IDS: Record<string, string> = {
@@ -23,6 +25,16 @@ export function externalAgentIconSource(clientId: string | null | undefined): st
   if (PI_CLIENT_IDS.has(clientId)) return PI_MARK_SOURCE;
   const productId = EXTERNAL_AGENT_PRODUCT_IDS[clientId];
   return productId ? getProductBrandIcon(productId)?.src ?? null : null;
+}
+
+/**
+ * Client whose brand icon a session row shows before its title (external
+ * agent sessions such as Claude Code native), or null when it has none.
+ */
+export function sessionRowAgentIconClientId(session: Pick<Session, 'config' | 'mode'>): string | null {
+  const clientId = acpClientIdFromAgentType(session.config?.agentType)
+    ?? acpClientIdFromAgentType(session.mode);
+  return externalAgentIconSource(clientId) ? clientId : null;
 }
 
 export function ExternalAgentIcon({ clientId, size = 14, className }: {

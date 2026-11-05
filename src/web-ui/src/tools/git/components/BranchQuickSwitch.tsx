@@ -553,7 +553,7 @@ export const BranchQuickSwitch: React.FC<BranchQuickSwitchProps> = ({
                 ? <Loader2 size={14} className="branch-quick-switch__spinner" aria-hidden />
                 : undefined}
               key={branch.name}
-              leading={<Icon name="git" size="sm" aria-hidden />}
+              leading={<Icon name={branch.remote ? 'cloud-git' : 'git'} size="sm" aria-hidden />}
               onClick={() => void handleSwitchBranch(branch.name)}
               selected={branch.current}
               value={branch.name}

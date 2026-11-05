@@ -70,6 +70,7 @@ import { openAgentCanvasTabForSession } from '@/app/components/panels/content-ca
 import { workbenchPaneLayoutStore } from '@/app/workbench/workbenchPaneLayoutStore';
 import type { TabCreationOptions } from '@/shared/utils/tabUtils';
 import { interruptedTurnRecoveryGate } from '../interruptedTurnRecoveryGate';
+import { settleDialogTurnToTerminalStatus } from '../../utils/dialogTurnStability';
 import {
   clearHistorySessionOpenTransition,
   clearRecentHistorySessionOpenIntent,
@@ -207,6 +208,7 @@ function mergeParamsPartialEventData(
 }
 
 export const __test_only__ = {
+  relayRecordsBeforeEvent,
   handleSessionDeleted,
   resolveDialogTurnDisplayContent,
   mergeParamsPartialEventData,
@@ -834,6 +836,14 @@ export function mapBackendStateToFrontend(backendState: any): SessionExecutionSt
  * Initialize global event listeners
  * Returns a cleanup function that removes all registered listeners
  */
+/** Records render once a frame; a direct event must not apply to an older render. */
+function relayRecordsBeforeEvent(context: FlowChatContext) {
+  return <E extends { sessionId?: string }>(handle: (event: E) => void) => (event: E): void => {
+    if (event.sessionId) context.flowChatStore.settleRelaySessionRecords(event.sessionId);
+    handle(event);
+  };
+}
+
 export async function initializeEventListeners(
   context: FlowChatContext,
   onTodoWriteResult: (sessionId: string, turnId: string, result: any) => void
@@ -857,6 +867,7 @@ export async function initializeEventListeners(
     void handleMcpInteractionRequest((payload as any)?.value || payload);
   });
 
+  const afterRelayRecords = relayRecordsBeforeEvent(context);
   const callbacks: AgenticEventCallbacks = {
     onSessionCreated: (event) => {
       handleSessionCreated(context, event);
@@ -876,45 +887,45 @@ export async function initializeEventListeners(
     onImageAnalysisCompleted: (event) => {
       handleImageAnalysisCompleted(context, event as ImageAnalysisEvent);
     },
-    onDialogTurnStarted: (event) => {
+    onDialogTurnStarted: afterRelayRecords((event) => {
       handleDialogTurnStarted(context, event);
-    },
+    }),
     onTextChunk: (event) => {
       handleTextChunk(context, event);
     },
-    onToolEvent: (event) => {
+    onToolEvent: afterRelayRecords((event) => {
       handleToolEvent(context, event, onTodoWriteResult);
-    },
+    }),
     onSubagentSessionLinked: (event) => {
       handleSubagentSessionLinked(context, event);
     },
     onDeepReviewQueueStateChanged: (event) => {
       handleDeepReviewQueueStateChanged(event);
     },
-    onModelRoundStarted: (event) => {
+    onModelRoundStarted: afterRelayRecords((event) => {
       handleModelRoundStart(context, event);
-    },
-    onModelRoundCompleted: (event) => {
+    }),
+    onModelRoundCompleted: afterRelayRecords((event) => {
       handleModelRoundComplete(context, event);
-    },
-    onModelRoundAttemptSuperseded: (event) => {
+    }),
+    onModelRoundAttemptSuperseded: afterRelayRecords((event) => {
       handleModelRoundAttemptSuperseded(context, event);
-    },
-    onDialogTurnCompleted: (event) => {
+    }),
+    onDialogTurnCompleted: afterRelayRecords((event) => {
       handleDialogTurnComplete(context, event, onTodoWriteResult);
-    },
-    onDialogTurnFailed: (event) => {
+    }),
+    onDialogTurnFailed: afterRelayRecords((event) => {
       handleDialogTurnFailed(context, event);
-    },
-    onDialogTurnCancelled: (event) => {
+    }),
+    onDialogTurnCancelled: afterRelayRecords((event) => {
       handleDialogTurnCancelled(context, event, onTodoWriteResult);
-    },
-    onDialogTurnInterrupted: (event) => {
+    }),
+    onDialogTurnInterrupted: afterRelayRecords((event) => {
       handleDialogTurnInterrupted(context, event);
-    },
-    onDialogTurnRecovered: (event) => {
+    }),
+    onDialogTurnRecovered: afterRelayRecords((event) => {
       handleDialogTurnRecovered(context, event);
-    },
+    }),
     onTokenUsageUpdated: (event) => {
       handleTokenUsageUpdate(context, event);
     },
@@ -1966,7 +1977,7 @@ function handleDialogTurnStarted(context: FlowChatContext, event: any): void {
       const hadDeferredOldSave = context.deferredStorageIdentitySaves?.delete(deferredOldKey) === true;
       const hadDeferredNewSave = context.deferredStorageIdentitySaves?.delete(deferredNewKey) === true;
       if (hadDeferredOldSave || hadDeferredNewSave) {
-        void saveDialogTurnToDisk(context, sessionId, turnId);
+        void saveDialogTurnToDisk(context, sessionId, turnId).catch(error => log.warn('Deferred turn save failed', { sessionId, turnId, error }));
       }
     }
   }
@@ -2050,7 +2061,7 @@ function handleDialogTurnStarted(context: FlowChatContext, event: any): void {
     }));
     const deferredKey = `${sessionId}:${turnId}`;
     if (context.deferredStorageIdentitySaves?.delete(deferredKey)) {
-      void saveDialogTurnToDisk(context, sessionId, turnId);
+      void saveDialogTurnToDisk(context, sessionId, turnId).catch(error => log.warn('Deferred turn save failed', { sessionId, turnId, error }));
     }
   }
   reconcileBackgroundSubagentSession(sessionId);
@@ -3051,29 +3062,13 @@ function handleDialogTurnCancelled(
     session.dialogTurns.find(turn => turn.id === turnId)?.recovery,
   );
   
-  context.flowChatStore.updateDialogTurn(sessionId, turnId, turn => {
-    const updatedModelRounds = turn.modelRounds.map((round) => {
-      if (round.isStreaming) {
-        return {
-          ...round,
-          isStreaming: false,
-          isComplete: true,
-          status: 'cancelled' as const,
-          endTime: Date.now()
-        };
-      }
-      return round;
-    });
-    
-    return {
-      ...turn,
-      modelRounds: updatedModelRounds,
-      status: 'cancelled' as const,
-      endTime: Date.now(),
-      recoveryEpoch: turn.recovery?.executionGeneration ?? turn.recoveryEpoch,
-      recovery: undefined,
-    };
-  });
+  context.flowChatStore.updateDialogTurn(sessionId, turnId, turn => ({
+    ...settleDialogTurnToTerminalStatus(turn, 'cancelled', Date.now(), undefined, {
+      preserveTerminalOutcome: false,
+    }),
+    recoveryEpoch: turn.recovery?.executionGeneration ?? turn.recoveryEpoch,
+    recovery: undefined,
+  }));
   reconcileBackgroundSubagentSession(sessionId);
    
   if (!runtimeOwnsTurnPersistence) {
@@ -3164,15 +3159,9 @@ function handleDialogTurnInterrupted(context: FlowChatContext, event: any): void
     context.flowChatStore.markSessionFinished(sessionId);
   }
   context.flowChatStore.updateDialogTurn(sessionId, turnId, turn => ({
-    ...turn,
-    modelRounds: turn.modelRounds.map(round => ({
-      ...round,
-      isStreaming: false,
-      isComplete: true,
-      status: round.isStreaming ? 'cancelled' as const : round.status,
-      endTime: round.isStreaming ? Date.now() : round.endTime,
-    })),
-    status: 'cancelled' as const,
+    ...settleDialogTurnToTerminalStatus(turn, 'cancelled', Date.now(), undefined, {
+      preserveTerminalOutcome: false,
+    }),
     finishReason: 'interrupted',
     endTime: Date.now(),
     recovery: {

@@ -2,6 +2,7 @@
 
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { flushSync } from 'react-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FlowGroup, ThinkingBlock } from '@openbitfun/ui/flow-chat';
 import { DeferredContent } from '@openbitfun/flow-chat-presentation/deferred-content';
@@ -11,13 +12,23 @@ import { finishSubmittedMessageScrollIntent, registerSubmittedMessageScrollInten
 import { readingLinePxForViewport, tailSpacerPxForViewport } from './flowChatTailFollow';
 import { ONE_SHOT_NAVIGATION_HOLD_MS } from './flowChatViewportOwnership';
 import { VirtualMessageList, type VirtualMessageListRef } from './VirtualMessageList';
+import { HistorySessionLoadingBoundary } from './HistorySessionLoadingBoundary';
 import type { FlowChatViewportOwnerApi } from './useFlowChatViewportOwner';
+import { FlowChatVolatileContext } from './FlowChatContext';
+import { useFlowGroupState } from './useFlowGroupState';
+import { useTrajectoryNavigation } from '../../trajectory/useTrajectoryNavigation';
+import type { TrajectorySelection } from '../../trajectory/TrajectoryExplorer';
+import type { Session } from '../../types/flow-chat';
 import { useFlowChatReaderValue } from '../../timeline/readerState';
+import { projectAdjacentFlowGroups } from '../../grouping/groupProjection';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const mocks = vi.hoisted(() => ({
   items: [] as Array<Record<string, unknown>>,
+  commitDuringNativeScroll: false,
+  trajectoryPanel: vi.fn(),
+  renderTimelineMembers: false,
   activeSession: null as Record<string, unknown> | null,
   scrollItemIntoView: vi.fn(),
   scrollToOffset: vi.fn(),
@@ -39,9 +50,14 @@ const mocks = vi.hoisted(() => ({
   isFollowingOutput: false,
   followsNow: false,
   scheduleFollowToLatest: vi.fn(),
+  shiftFollowLayout: vi.fn(() => false),
   startAtTailOnMount: true,
   virtualizerStartsAtTail: false,
+  estimateWidth: undefined as number | undefined,
+  estimateRevision: '',
   reconcileOpeningMeasurement: null as null | (() => boolean),
+  shiftMeasurement: null as null | ((delta: number) => boolean),
+  virtualizerKeys: [] as string[],
   placeSubmittedMessage: null as null | ((intent: SubmittedMessageScrollIntent) => number | null),
   readLayoutTarget: null as null | (() => number),
   /**
@@ -139,15 +155,32 @@ vi.mock('./useFlowChatVirtualizer', async () => {
       scrollerRef: { current: HTMLElement | null };
       startAtTailOnMount?: boolean;
       reconcileOpeningMeasurement?: () => boolean;
+      shiftViewport?: (delta: number) => boolean;
+      estimateContext?: { availableWidthPx?: number };
+      estimateContextRevision?: string;
     }) => {
+      const [, commit] = React.useReducer(revision => revision + 1, 0);
+      React.useLayoutEffect(() => {
+        const scroller = options.scrollerRef.current;
+        if (!scroller) return;
+        // TanStack can synchronously commit a new virtual window before the
+        // list's later scroll listener receives this same native event.
+        const onScroll = () => { if (mocks.commitDuringNativeScroll) flushSync(commit); };
+        scroller.addEventListener('scroll', onScroll);
+        return () => scroller.removeEventListener('scroll', onScroll);
+      }, [options.scrollerRef]);
       mocks.virtualizerStartsAtTail = options.startAtTailOnMount === true;
+      mocks.estimateWidth = options.estimateContext?.availableWidthPx;
+      mocks.estimateRevision = options.estimateContextRevision ?? '';
       mocks.reconcileOpeningMeasurement = options.reconcileOpeningMeasurement ?? null;
+      mocks.shiftMeasurement = options.shiftViewport ?? null;
       const rows = options.items.map((item, index) => ({
         index,
         key: options.getItemKey(item),
         startPx: index * 40,
         endPx: index * 40 + 40,
       }));
+      mocks.virtualizerKeys = rows.map(row => row.key);
       return {
         rows,
         paddingTopPx: 0,
@@ -189,8 +222,11 @@ vi.mock('../../store/modernFlowChatStore', () => {
   };
 });
 
+vi.mock('../../trajectory/trajectoryPanel', () => ({ openTrajectoryPanel: mocks.trajectoryPanel }));
+
 vi.mock('../../hooks/useActiveSessionState', () => ({
-  useActiveSessionState: () => ({ isProcessing: false }),
+  // This suite supplies top-origin virtual bounds for the live layout.
+  useActiveSessionState: () => ({ isProcessing: true }),
 }));
 
 vi.mock('../../store/chatInputStateStore', () => ({
@@ -215,6 +251,7 @@ vi.mock('./useFlowChatFollowOutput', () => ({
       enterFollowOutput: mocks.enterFollowOutput,
       exitFollowOutput: mocks.exitFollowOutput,
       scheduleFollowToLatest: mocks.scheduleFollowToLatest,
+      shiftLayout: mocks.shiftFollowLayout,
       isFollowingOutputNow: () => mocks.followsNow,
       // Nothing streams here, so the frame loop is never correcting: the band is
       // judged on the viewport itself, exactly as it is for a resting transcript.
@@ -248,7 +285,10 @@ vi.mock('./VirtualItemRenderer', () => ({
       data-virtual-item-key={`${item.type}:${item.turnId}:${item.data?.id ?? item.data?.groupId ?? ''}`}
       data-virtual-index={index}
     >
-      {item.data?.content ?? item.turnId}
+      {mocks.renderTimelineMembers && item.type === 'model-round'
+        ? item.timeline?.kind === 'round-header' ? item.data.content : item.timeline?.kind === 'round-footer' ? null
+          : item.data.items.map((member: any) => <div key={member.id} data-flow-item-id={member.id}>{member.content ?? member.toolName}</div>)
+        : item.data?.content ?? item.turnId}
     </div>
   ),
 }));
@@ -352,7 +392,9 @@ describe('VirtualMessageList natural scroll contract', () => {
       dialogTurns: [],
     };
     mocks.isFollowingOutput = false;
+    mocks.commitDuringNativeScroll = false;
     mocks.followsNow = false;
+    mocks.trajectoryPanel.mockReset();
     mocks.scrollItemIntoView.mockReset();
     mocks.scrollToOffset.mockReset();
     mocks.cancelAim.mockReset();
@@ -363,11 +405,13 @@ describe('VirtualMessageList natural scroll contract', () => {
     mocks.handleUserScrollIntent.mockReset();
     mocks.handleFollowScroll.mockReset();
     mocks.scheduleFollowToLatest.mockReset();
+    mocks.shiftFollowLayout.mockReset().mockReturnValue(false);
     mocks.startAtTailOnMount = true;
     mocks.placeSubmittedMessage = null;
     mocks.viewportOwner = null;
     mocks.setVisibleTurnInfo.mockReset();
     mocks.renderItemMetadata = true;
+    mocks.renderTimelineMembers = false;
     vi.stubGlobal('ResizeObserver', TestResizeObserver);
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
       nextAnimationFrameId += 1;
@@ -420,6 +464,18 @@ describe('VirtualMessageList natural scroll contract', () => {
     if (!canSynchronize) expect(onBoundaryIntent).not.toHaveBeenCalled();
   });
 
+  it('invalidates width-derived row estimates when only the content column changes', () => {
+    fakeLayout({ clientWidth: 1400, clientHeight: 800, scrollHeight: 2000, turnTopFromScrollerTop: 0 });
+    act(() => root.render(<VirtualMessageList contentWidth={900} />));
+    expect(mocks.estimateWidth).toBe(900);
+    const originalRevision = mocks.estimateRevision;
+    act(() => root.render(<VirtualMessageList contentWidth={600} />));
+    expect(mocks.estimateWidth).toBe(600);
+    expect(mocks.estimateRevision).not.toBe(originalRevision);
+    act(() => root.render(<VirtualMessageList contentWidth={1600} />));
+    expect(mocks.estimateWidth).toBe(1400);
+  });
+
   it('reconciles opening measurements only while follow owns the active viewport', () => {
     act(() => root.render(<VirtualMessageList />));
     expect(mocks.reconcileOpeningMeasurement?.()).toBe(false);
@@ -433,6 +489,156 @@ describe('VirtualMessageList natural scroll contract', () => {
     expect(mocks.scheduleFollowToLatest).toHaveBeenCalledTimes(1);
     act(() => root.render(<VirtualMessageList isViewportActive={false} />));
     expect(mocks.reconcileOpeningMeasurement?.()).toBe(false);
+  });
+
+  it('does not compensate an above-viewport measurement twice before its scroll event arrives', async () => {
+    const restore = fakeLayout({ clientHeight: 800, scrollHeight: 4000, turnTopFromScrollerTop: 100 });
+    try {
+      act(() => root.render(<VirtualMessageList />));
+      await settleOpenReveal();
+      const scroller = container.querySelector<HTMLElement>('[data-flowchat-scroller]')!;
+      const rows = [...scroller.querySelectorAll<HTMLElement>('.virtual-item-wrapper')];
+      let contentTop = 1100;
+      rows.forEach((row, index) => {
+        row.getBoundingClientRect = () => ({ top: contentTop + index * 80 - scroller.scrollTop,
+          bottom: contentTop + index * 80 + 60 - scroller.scrollTop, height: 60,
+          left: 0, right: 800, width: 800 }) as DOMRect;
+      });
+      act(() => {
+        scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true }));
+        scroller.scrollTop = 1000;
+        scroller.dispatchEvent(new Event('scroll'));
+      });
+      // Resize and its registered compensation precede native scroll delivery.
+      contentTop -= 120;
+      act(() => { expect(mocks.shiftMeasurement!(-120)).toBe(true); });
+      expect(scroller.scrollTop).toBe(880);
+      act(() => { resizeObservers.forEach(observer => observer.notify()); });
+      await settleOpenReveal();
+      expect(scroller.scrollTop).toBe(880);
+      expect(rows[0].getBoundingClientRect().top).toBe(100);
+    } finally { restore(); }
+  });
+
+  it('passes a measured displacement refused by follow ownership back to its follower', () => {
+    act(() => root.render(<VirtualMessageList />));
+    mocks.viewportOwner!.claim('follow-output');
+    mocks.shiftFollowLayout.mockReturnValue(true);
+    act(() => { expect(mocks.shiftMeasurement!(-120)).toBe(true); });
+    expect(mocks.shiftFollowLayout).toHaveBeenCalledWith(-120);
+    mocks.shiftFollowLayout.mockClear();
+    mocks.viewportOwner!.claim('user-gesture');
+    act(() => { expect(mocks.shiftMeasurement!(80)).toBe(true); });
+    expect(mocks.shiftFollowLayout).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('restores the unfaded start after scroll round trips with synchronous virtualizer commits=%s', async commitDuringScroll => {
+    const restoreLayout = fakeLayout({ clientHeight: 800, scrollHeight: 4000, turnTopFromScrollerTop: 0 });
+    try {
+      act(() => root.render(<VirtualMessageList />));
+      await settleOpenReveal();
+      const scroller = container.querySelector<HTMLElement>('[data-flowchat-scroller]')!;
+      expect(scroller.dataset.scrollAtStart).toBe('true');
+      act(() => {
+        scroller.scrollTop = 1200;
+        scroller.dispatchEvent(new Event('scroll'));
+      });
+      expect(scroller.dataset.scrollAtStart).toBe('false');
+      mocks.commitDuringNativeScroll = commitDuringScroll;
+      mocks.handleFollowScroll.mockClear();
+
+      // Include fractional offsets and top-edge overscroll from native WebViews.
+      const offsets = [0, 400, 0.5, 2000, -12, 2, 1, 800, 0];
+      for (const topPx of offsets) {
+        act(() => {
+          scroller.scrollTop = topPx;
+          scroller.dispatchEvent(new Event('scroll'));
+        });
+        expect(scroller.dataset.scrollAtStart).toBe(topPx <= 1 ? 'true' : 'false');
+      }
+      expect(mocks.handleFollowScroll).toHaveBeenCalledTimes(offsets.length);
+    } finally {
+      restoreLayout();
+    }
+  });
+
+  it('uses current gesture callbacks and detaches listeners when the session changes', async () => {
+    const restoreLayout = fakeLayout({ clientHeight: 800, scrollHeight: 4000, turnTopFromScrollerTop: 0 });
+    const initialIntent = vi.fn();
+    const currentIntent = vi.fn();
+    const nextSessionIntent = vi.fn();
+    try {
+      act(() => root.render(<VirtualMessageList onUserScrollIntent={initialIntent} />));
+      await settleOpenReveal();
+      const oldScroller = container.querySelector<HTMLElement>('[data-flowchat-scroller]')!;
+      act(() => root.render(<VirtualMessageList onUserScrollIntent={currentIntent} />));
+      act(() => oldScroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true })));
+      act(() => oldScroller.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })));
+      expect(initialIntent).not.toHaveBeenCalled();
+      expect(currentIntent).toHaveBeenCalledTimes(2);
+
+      mocks.activeSession = { ...mocks.activeSession, sessionId: 'session-2' };
+      act(() => root.render(<VirtualMessageList onUserScrollIntent={nextSessionIntent} />));
+      await settleOpenReveal();
+      act(() => oldScroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true })));
+      expect(currentIntent).toHaveBeenCalledTimes(2);
+      expect(nextSessionIntent).not.toHaveBeenCalled();
+      const newScroller = container.querySelector<HTMLElement>('[data-flowchat-scroller]')!;
+      act(() => newScroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true })));
+      expect(nextSessionIntent).toHaveBeenCalledTimes(1);
+    } finally {
+      restoreLayout();
+    }
+  });
+
+  it('crops only idle gutter paint across content and viewport resizing without moving the reader', () => {
+    const layout = { clientWidth: 986, clientHeight: 800, scrollHeight: 800, turnTopFromScrollerTop: 0 };
+    const restoreLayout = fakeLayout({ ...layout, scrollHeight: () => layout.scrollHeight });
+    try {
+      act(() => root.render(<VirtualMessageList />));
+      const scroller = container.querySelector<HTMLElement>('[data-flowchat-scroller]')!;
+      expect(scroller.style.maskSize).toBe('986px 100%');
+      // Supply the reserved leading gutter; jsdom does not lay out scrollbars.
+      Object.defineProperty(scroller, 'clientLeft', { value: 7 });
+      const observer = resizeObservers.find(candidate => candidate.targets.has(scroller))!;
+      act(() => observer.notify());
+      expect(scroller.style.maskSize).toBe('986px 100%');
+      expect(scroller.style.maskPosition).toBe('7px 0px');
+
+      layout.scrollHeight = 1600;
+      scroller.scrollTop = 100;
+      act(() => observer.notify());
+      expect(scroller.style.maskSize).toBe('');
+      expect(scroller.style.maskPosition).toBe('');
+      expect(scroller.scrollTop).toBe(100);
+      expect(mocks.scrollToOffset).not.toHaveBeenCalled();
+      expect(mocks.scrollItemIntoView).not.toHaveBeenCalled();
+
+      layout.scrollHeight = 800;
+      scroller.scrollTop = 0; // Native clamping when the content fits again.
+      act(() => observer.notify());
+      expect(scroller.style.maskSize).toBe('986px 100%');
+
+      Object.defineProperty(scroller, 'clientWidth', { configurable: true, value: 786 });
+      act(() => observer.notify());
+      expect(scroller.style.maskSize).toBe('786px 100%');
+      expect(scroller.style.maskPosition).toBe('7px 0px');
+      expect(scroller.scrollTop).toBe(0);
+      expect(mocks.scrollToOffset).not.toHaveBeenCalled();
+      expect(mocks.scrollItemIntoView).not.toHaveBeenCalled();
+
+      Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 600 });
+      act(() => observer.notify());
+      expect(scroller.style.maskSize).toBe('');
+      Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 800 });
+      act(() => observer.notify());
+      expect(scroller.style.maskSize).toBe('786px 100%');
+      expect(scroller.scrollTop).toBe(0);
+      expect(mocks.scrollToOffset).not.toHaveBeenCalled();
+      expect(mocks.scrollItemIntoView).not.toHaveBeenCalled();
+    } finally {
+      restoreLayout();
+    }
   });
 
   it('isolates the opening transcript at its boundary until reveal', async () => {
@@ -455,6 +661,37 @@ describe('VirtualMessageList natural scroll contract', () => {
     mocks.followsNow = true;
     mocks.viewportOwner!.claim('follow-output');
     expect(mocks.reconcileOpeningMeasurement?.()).toBe(false);
+  });
+
+  it('presents a warm long Turn as soon as its tail settles with the question above the viewport', async () => {
+    const restoreLayout = fakeLayout({ clientHeight: 600, scrollHeight: 600, turnTopFromScrollerTop: 0 });
+    const presented = vi.fn();
+    mocks.items = [userMessage('turn-1', 'message-1', 'Question'), modelRound('turn-1', 'round-1', 'Answer')];
+    try {
+      HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+        if (this.dataset.itemType === 'user-message') return new DOMRect(0, -1_000, 600, 40);
+        if (this.dataset.itemType === 'model-round') return new DOMRect(0, -900, 600, 1_450);
+        return new DOMRect(0, 0, 600, 600);
+      };
+      act(() => root.render(
+        <HistorySessionLoadingBoundary identity="local:session-1" loading={false} hasTranscript
+          disabled={false} intent={false} label="Loading conversation" onPresentationChange={presented}>
+          <VirtualMessageList />
+        </HistorySessionLoadingBoundary>,
+      ));
+      expect(presented).toHaveBeenLastCalledWith('local:session-1', false);
+      for (let frame = 1; frame <= 2; frame += 1) {
+        const pending = [...animationFrames.values()];
+        animationFrames.clear();
+        await act(async () => { pending.forEach(callback => callback(frame * 16)); });
+      }
+      expect(container.querySelector('[data-open-viewport-settled="true"]')).not.toBeNull();
+      expect(presented).toHaveBeenLastCalledWith('local:session-1', true);
+      expect(container.querySelector('[data-history-loading-phase="loading"]')).toBeNull();
+      expect(container.querySelector<HTMLElement>('[data-item-type="user-message"]')!.getBoundingClientRect().bottom).toBeLessThan(0);
+    } finally {
+      restoreLayout();
+    }
   });
 
   it('keeps button activation and consumed keys out of scroll intent, while transcript navigation still scrolls', async () => {
@@ -799,6 +1036,134 @@ describe('VirtualMessageList natural scroll contract', () => {
       expect(targetTop).toBeGreaterThan(readableTop);
       expect(targetTop + 20).toBeLessThan(readableBottom);
       expect(mocks.scrollItemIntoView).not.toHaveBeenCalled();
+    } finally { restoreRanges(); restoreLayout(); }
+  });
+
+  it.each(['item', 'search'] as const)('commits trajectory user-message details after real %s positioning and highlighting', async mode => {
+    const restoreLayout = fakeLayout({ clientHeight: 600, scrollHeight: 2400, turnTopFromScrollerTop: 100 });
+    const restoreRanges = searchRangeLayout(() => new DOMRect(100, 800, 200, 20));
+    let select!: (selection: TrajectorySelection) => Promise<boolean>;
+    const listRef = React.createRef<VirtualMessageListRef>();
+    const rootRef = React.createRef<HTMLDivElement>();
+    function Harness() {
+      select = useTrajectoryNavigation({ session: mocks.activeSession as unknown as Session, items: mocks.items as any,
+        listRef, rootRef, present: vi.fn(), expand: vi.fn(), viewId: 'test-view' });
+      return <div ref={rootRef}><VirtualMessageList ref={listRef} /></div>;
+    }
+    try {
+      act(() => root.render(<Harness />));
+      await settleOpenReveal();
+      const scroller = container.querySelector<HTMLElement>('[data-flowchat-scroller]')!;
+      const wrapper = scroller.querySelector<HTMLElement>('.virtual-item-wrapper')!;
+      wrapper.getBoundingClientRect = () => new DOMRect(0, 800, 600, 40);
+      const highlight = vi.fn(); wrapper.addEventListener('flowchat:focus-line', highlight);
+      const owner = mocks.viewportOwner as FlowChatViewportOwnerApi;
+      mocks.scrollToOffset.mockImplementation((topPx, options) => owner.write({ ...options, topPx }));
+      mocks.scrollItemIntoView.mockImplementation((_index, options) => owner.write({ ...options, topPx: 700 }));
+      scroller.scrollTop = 10;
+      let pending!: Promise<boolean>;
+      act(() => { pending = select({ node: { id: 'message-1', turnId: 'turn-1', turnOrdinal: 0,
+        kind: 'user', label: '', preview: '', timestamp: 1, status: 'completed', matched: mode === 'search',
+        matchField: mode === 'search' ? 'content' : undefined }, query: mode === 'search' ? 'First' : '' }); });
+      expect(mocks.trajectoryPanel).not.toHaveBeenCalled();
+      await settleOpenReveal();
+      expect(await pending).toBe(true);
+      expect(scroller.scrollTop).toBeGreaterThan(10);
+      expect(highlight).toHaveBeenCalled();
+      expect(mocks.trajectoryPanel).toHaveBeenCalledTimes(1);
+    } finally { restoreRanges(); restoreLayout(); }
+  });
+
+  it.each(['model', 'collapsed-tool', 'historical-round'] as const)('synchronizes a %s trajectory through projection, positioning and panel acknowledgement', async kind => {
+    mocks.activeSession = { ...mocks.activeSession, sessionId: `trajectory-${kind}` };
+    const tool = (id: string) => ({ id, type: 'tool', toolName: 'Read', timestamp: 1, status: 'completed',
+      toolCall: { id, input: { file_path: `/src/${id}.ts` } }, toolResult: { success: true, result: {} } });
+    const text = { id: 'text', type: 'text', timestamp: 1, status: 'completed', isStreaming: false, content: 'Model text' };
+    function HistoricalSource() {
+      const [open] = useFlowChatReaderValue('round:turn-1:current:history', false);
+      return open ? <div data-flow-item-id="old-tool">Earlier result</div> : <button>Earlier rounds</button>;
+    }
+    const round = { id: kind === 'historical-round' ? 'current' : 'round', index: 0, startTime: 1,
+      status: 'completed', isStreaming: false, isComplete: true,
+      items: kind === 'collapsed-tool' ? [tool('first'), tool('tool')] : kind === 'model' ? [text] : [],
+      ...(kind === 'historical-round' ? { historyRounds: [{ id: 'old', items: [tool('old-tool')] }], content: <HistoricalSource /> } : {}) };
+    mocks.items = projectAdjacentFlowGroups([{ type: 'model-round', turnId: 'turn-1', data: round, isLastRound: true, isTurnComplete: true }] as any);
+    mocks.renderTimelineMembers = true;
+    const restoreLayout = fakeLayout({ clientHeight: 600, scrollHeight: 2400, turnTopFromScrollerTop: 100 });
+    const restoreRanges = searchRangeLayout(() => new DOMRect(100, 800, 200, 20));
+    let select!: (selection: TrajectorySelection) => Promise<boolean>;
+    const listRef = React.createRef<VirtualMessageListRef>(); const rootRef = React.createRef<HTMLDivElement>();
+    function Harness() {
+      const groups = useFlowGroupState(mocks.items as any, new Map([['round:explore:first', false]]), `trajectory-${kind}`);
+      select = useTrajectoryNavigation({ session: mocks.activeSession as unknown as Session, items: mocks.items as any,
+        listRef, rootRef, present: vi.fn(), expand: groups.onExpandGroup, viewId: 'test-view' });
+      return <FlowChatVolatileContext.Provider value={{ groupStates: groups.groupStates }}>
+        <div ref={rootRef}><VirtualMessageList ref={listRef} /></div>
+      </FlowChatVolatileContext.Provider>;
+    }
+    try {
+      act(() => root.render(<Harness />)); await settleOpenReveal();
+      const scroller = container.querySelector<HTMLElement>('[data-flowchat-scroller]')!;
+      const owner = mocks.viewportOwner as FlowChatViewportOwnerApi;
+      const itemId = kind === 'model' ? 'text' : kind === 'historical-round' ? 'old-tool' : 'tool';
+      const highlight = vi.fn();
+      rootRef.current!.addEventListener('flowchat:focus-line', highlight, true);
+      if (kind !== 'model') expect(container.querySelector(`[data-flow-item-id="${itemId}"]`)).toBeNull();
+      mocks.scrollToOffset.mockImplementation((topPx, options) => owner.write({ ...options, topPx }));
+      mocks.scrollItemIntoView.mockImplementation((_index, options) => owner.write({ ...options, topPx: 700 }));
+      scroller.scrollTop = 400;
+      let pending!: Promise<boolean>;
+      act(() => { pending = select({ node: { id: kind === 'model' ? 'round' : itemId, turnId: 'turn-1', turnOrdinal: 0,
+        roundId: kind === 'historical-round' ? 'old' : 'round', focusItemId: itemId,
+        kind: kind === 'model' ? 'model' : 'tool', label: '', preview: '', timestamp: 1, status: 'completed', matched: false }, query: '' }); });
+      expect(mocks.trajectoryPanel).not.toHaveBeenCalled();
+      await settleOpenReveal();
+      expect(await pending).toBe(true);
+      expect(container.querySelector(`[data-flow-item-id="${itemId}"]`)).not.toBeNull();
+      expect(scroller.scrollTop).not.toBe(400);
+      expect(highlight).toHaveBeenCalled();
+      expect(mocks.trajectoryPanel).toHaveBeenCalledTimes(1);
+      expect(mocks.trajectoryPanel.mock.calls[0][1].focusItemId).toBe(itemId);
+    } finally { restoreRanges(); restoreLayout(); }
+  });
+
+  it('opens the owning history disclosure before focusing a superseded model round tool', async () => {
+    function HistoryTool() {
+      const [open] = useFlowChatReaderValue('round:turn-1:current:history', false);
+      return open ? <div data-flow-item-id="older-tool">Historical result</div> : <button>History</button>;
+    }
+    const item = modelRound('turn-1', 'current', <HistoryTool />);
+    mocks.items = [{ ...item, data: { ...item.data, historyRounds: [{ id: 'older', items: [{ id: 'older-tool', type: 'tool' }] }] } }];
+    const restoreLayout = fakeLayout({ clientHeight: 600, scrollHeight: 2400, turnTopFromScrollerTop: 100 });
+    const restoreRanges = searchRangeLayout(() => new DOMRect(0, 160, 200, 20));
+    try {
+      const listRef = React.createRef<VirtualMessageListRef>();
+      act(() => root.render(<VirtualMessageList ref={listRef} />));
+      await settleOpenReveal();
+      mocks.scrollToOffset.mockClear();
+      act(() => expect(listRef.current?.focusFlowItem('older-tool', { sourceIndex: 0, roundId: 'older' })).toBe(false));
+      expect(container.querySelector('[data-flow-item-id="older-tool"]')).not.toBeNull();
+      act(() => expect(listRef.current?.focusFlowItem('older-tool', { sourceIndex: 0, roundId: 'older' })).toBe(true));
+      expect(mocks.scrollToOffset).toHaveBeenCalledTimes(1);
+    } finally { restoreRanges(); restoreLayout(); }
+  });
+
+  it('focuses a visible collapsed card even when its first text range is hidden', async () => {
+    mocks.items = [userMessage('turn-1', 'message-1', 'Source')];
+    const restoreLayout = fakeLayout({ clientHeight: 600, scrollHeight: 2400, turnTopFromScrollerTop: 100 });
+    const restoreRanges = searchRangeLayout(() => new DOMRect(0, 0, 0, 0));
+    try {
+      const listRef = React.createRef<VirtualMessageListRef>();
+      act(() => root.render(<VirtualMessageList ref={listRef} />));
+      await settleOpenReveal();
+      const scroller = container.querySelector<HTMLElement>('[data-flowchat-scroller]')!;
+      const card = document.createElement('div');
+      card.dataset.flowItemId = 'collapsed-tool'; card.textContent = 'Hidden tool output';
+      card.getBoundingClientRect = () => new DOMRect(0, 160, 300, 28);
+      scroller.querySelector('.virtual-item-wrapper')!.append(card);
+      mocks.scrollToOffset.mockClear();
+      act(() => expect(listRef.current?.focusFlowItem('collapsed-tool')).toBe(true));
+      expect(mocks.scrollToOffset).toHaveBeenCalledTimes(1);
     } finally { restoreRanges(); restoreLayout(); }
   });
 
@@ -1487,9 +1852,11 @@ describe('VirtualMessageList natural scroll contract', () => {
 
         prependOlderTurns(3);
 
-        // Refused, because the holder owns a target of its own...
-        expect(scroller.scrollTop).toBe(500);
-        // ...and asked to go and reach it.
+        // Held still before paint, as the holder itself, so no frame shows
+        // the arrived history pushing the reader's Turn down...
+        expect(scroller.scrollTop).toBe(620);
+        expect(mocks.viewportOwner?.currentOwner()).toBe('follow-output');
+        // ...and the holder is asked to go and reach its own target.
         expect(mocks.scheduleFollowToLatest).toHaveBeenCalled();
       });
     });
@@ -1568,10 +1935,11 @@ describe('VirtualMessageList natural scroll contract', () => {
       }
     }
 
-    it('asks again when the reader returns toward the boundary within the lead', async () => {
+    it.each([false, true])('asks again within the boundary lead with synchronous virtualizer commits=%s', async commitDuringScroll => {
       // Prefetch must not require reaching the physical head first. Moving
       // away alone must also not ask for another older page.
       await withPagedTranscript(async (scroller, asked) => {
+        mocks.commitDuringNativeScroll = commitDuringScroll;
         // Rows 3..7 are on screen, so nothing is reached; the head is 120px up,
         // which is inside the one-screen lead.
         await scrollTo(scroller, 300);
@@ -1611,6 +1979,7 @@ describe('VirtualMessageList natural scroll contract', () => {
       const render = (history = false) => root.render(
         <VirtualMessageList
           presentationMode={history ? 'history-window' : 'tail'}
+          viewportMode="live-tail"
           historyWindow={history ? {
             startOrdinal: 36, endOrdinalExclusive: 46, targetTurnId: null, mode: 'history-window',
           } : null}
@@ -1868,7 +2237,7 @@ describe('VirtualMessageList natural scroll contract', () => {
       Object.defineProperty(scroller, 'scrollTop', {
         configurable: true,
         writable: true,
-        value: 400,
+        value: -1000, // Native end origin; persisted top offset remains 400.
       });
 
       const snapshot = listRef.current?.captureViewportSnapshot();
@@ -1889,7 +2258,7 @@ describe('VirtualMessageList natural scroll contract', () => {
       });
 
       expect(restored).toBe(true);
-      expect(scroller.scrollTop).toBe(540);
+      expect(scroller.scrollTop).toBe(-860);
     } finally {
       restoreLayout();
     }
@@ -1946,8 +2315,49 @@ describe('VirtualMessageList natural scroll contract', () => {
     }
   });
 
+  it.each([-80, -800])('materializes a saved row at offset %s even when its new estimate is shorter', offset => {
+    mocks.items = [
+      userMessage('turn-1', 'message-1', 'Question'),
+      modelRound('turn-1', 'round-1', 'Long answer'),
+    ];
+    const listRef = React.createRef<VirtualMessageListRef>();
+    const restoreLayout = fakeLayout({ clientHeight: 600, scrollHeight: 2000, turnTopFromScrollerTop: 0 });
+    try {
+      act(() => root.render(<VirtualMessageList ref={listRef} />));
+      const scroller = container.querySelector<HTMLElement>('[data-flowchat-scroller]')!;
+      const row = container.querySelector<HTMLElement>('.virtual-item-wrapper[data-item-type="model-round"]')!;
+      const index = Number(row.dataset.virtualIndex);
+      // This mock renderer normally keeps legacy keys. Match the production
+      // renderer's timeline key for the unmounted-item lookup under test.
+      row.dataset.virtualItemKey = mocks.virtualizerKeys[index];
+      const parent = row.parentElement!;
+      const next = row.nextSibling;
+      const snapshot = {
+        sessionId: 'session-1', presentationMode: 'tail' as const, viewportMode: 'live-tail' as const,
+        historyWindow: null, anchorTurnId: 'turn-1', anchorItemKey: row.dataset.virtualItemKey!,
+        anchorOffsetPx: offset, scrollTopPx: 1400, isAtTail: false, capturedAtMs: 1,
+      };
+      row.remove();
+      try {
+        act(() => { expect(listRef.current?.restoreViewportSnapshot(snapshot)).toBe(false); });
+        // Materialize inside the current 40px estimate, even when the saved
+        // reading position was hundreds of pixels into this same answer.
+        expect(scroller.scrollTop).toBe(index * 40 + 39);
+      } finally {
+        parent.insertBefore(row, next);
+      }
+      scroller.getBoundingClientRect = () => new DOMRect(0, 0, 1000, 600);
+      row.getBoundingClientRect = () => new DOMRect(0, index * 40 - scroller.scrollTop, 1000, 900);
+      act(() => { expect(listRef.current?.restoreViewportSnapshot(snapshot)).toBe(true); });
+      expect(scroller.scrollTop).toBe(index * 40 - offset);
+    } finally {
+      restoreLayout();
+    }
+  });
+
   it('materializes and restores a saved reading position without starting tail follow', async () => {
     const listRef = React.createRef<VirtualMessageListRef>();
+    const presented = vi.fn();
     const initialViewportSnapshot = {
       sessionId: 'session-1',
       presentationMode: 'tail' as const,
@@ -1967,10 +2377,13 @@ describe('VirtualMessageList natural scroll contract', () => {
     const restoreLayout = fakeLayout(layout);
     try {
       act(() => root.render(
-        <VirtualMessageList
-          ref={listRef}
-          initialViewportSnapshot={initialViewportSnapshot}
-        />,
+        <HistorySessionLoadingBoundary identity="local:session-1" loading={false} hasTranscript
+          disabled={false} intent={false} label="Loading conversation" onPresentationChange={presented}>
+          <VirtualMessageList
+            ref={listRef}
+            initialViewportSnapshot={initialViewportSnapshot}
+          />
+        </HistorySessionLoadingBoundary>,
       ));
       const scroller = container.querySelector<HTMLElement>('[data-flowchat-scroller]')!;
       scroller.getBoundingClientRect = () => (
@@ -1980,8 +2393,10 @@ describe('VirtualMessageList natural scroll contract', () => {
       expect(mocks.startAtTailOnMount).toBe(false);
       expect(mocks.virtualizerStartsAtTail).toBe(false);
       expect(scroller.scrollTop).toBe(140);
+      expect(presented).toHaveBeenLastCalledWith('local:session-1', false);
       await settleOpenReveal();
       expect(container.querySelector('[data-open-viewport-settled="true"]')).not.toBeNull();
+      expect(presented).toHaveBeenLastCalledWith('local:session-1', true);
     } finally {
       restoreLayout();
     }

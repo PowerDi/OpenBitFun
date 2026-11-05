@@ -24,6 +24,11 @@
     "loadFailed": "Failed to load text selection preferences",
     "saveFailed": "Failed to save text selection preferences"
   },
+  "btwCloseConfirmation": {
+    "title": "Side conversation closing",
+    "label": "Confirm before closing side conversations",
+    "description": "Closing a side conversation permanently discards its content. Turn this off to skip the confirmation."
+  },
   "applicationGroups": {
     "startupAndUpdates": {
       "title": "Startup & updates",
@@ -207,6 +212,7 @@
       "loadFailed": "Failed to load logging configuration",
       "saveFailed": "Failed to save logging level",
       "levelUpdated": "Logging level updated",
+      "levelSavedNotApplied": "Logging level saved, but that device is still logging at {{level}}.",
       "sensitiveDiagnosticsUpdated": "Sensitive diagnostic logging preference updated",
       "refreshed": "Runtime status refreshed",
       "openedFolder": "Log folder opened",

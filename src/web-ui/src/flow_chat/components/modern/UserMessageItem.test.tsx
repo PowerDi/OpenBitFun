@@ -2,6 +2,8 @@ import React, { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import { JSDOM } from 'jsdom';
+import { fileURLToPath } from 'node:url';
+import { compile } from 'sass';
 
 import { FlowChatContext } from './FlowChatContext';
 import { UserMessageItem } from './UserMessageItem';
@@ -275,6 +277,89 @@ describe('UserMessageItem steering tag', () => {
     vi.unstubAllGlobals();
   });
 
+  it.each(['completed', 'error'] as const)('sizes only the preview while retaining complete %s message text', async turnStatus => {
+    const stylesheet = document.createElement('style');
+    stylesheet.textContent = compile(fileURLToPath(new URL('./UserMessageItem.scss', import.meta.url))).css;
+    document.head.append(stylesheet);
+    const preview = 'A short introduction\n\nA short question';
+    const hidden = '\nA much longer explanation that must not widen the preview.';
+    const text = preview + hidden;
+    act(() => root.render(
+      <FlowChatContext.Provider value={{ allowUserMessageRollback: false }}>
+        <UserMessageItem message={{ id: 'long-message', content: text, timestamp: 1000 }}
+          turnId="long-turn" turnStatus={turnStatus} />
+      </FlowChatContext.Provider>,
+    ));
+
+    const content = container.querySelector<HTMLElement>('[data-testid="chat-user-message-content"]')!;
+    const tail = content.querySelector<HTMLElement>('.user-message-item__content-overflow')!;
+    expect(content.querySelector('.user-message-item__content-preview')?.textContent).toBe(preview);
+    expect(tail.textContent).toBe(hidden);
+    expect(dom.window.getComputedStyle(tail).display).toBe('none');
+    expect(content.textContent).toBe(text);
+    expect(content.title).toBe('message.clickToExpand');
+
+    act(() => content.click());
+    expect(dom.window.getComputedStyle(tail).display).toBe('contents');
+    expect(content.textContent).toBe(text);
+    expect(content.title).toBe('message.clickToCollapse');
+
+    act(() => content.click());
+    expect(dom.window.getComputedStyle(tail).display).toBe('none');
+    await act(async () => container.querySelector<HTMLButtonElement>('.user-message-item__copy-btn')!.click());
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(text);
+  });
+
+  it('stays expanded when the pointer moves outside the bubble to its actions', () => {
+    const text = 'Line one\nLine two\nLine three\nLine four';
+    act(() => root.render(
+      <FlowChatContext.Provider value={{ allowUserMessageRollback: false }}>
+        <UserMessageItem message={{ id: 'expanded-message', content: text, timestamp: 1000 }} turnId="expanded-turn" />
+      </FlowChatContext.Provider>,
+    ));
+
+    const content = container.querySelector<HTMLElement>('[data-testid="chat-user-message-content"]')!;
+    act(() => content.click());
+    expect(content.title).toBe('message.clickToCollapse');
+
+    const copyButton = container.querySelector<HTMLButtonElement>('.user-message-item__copy-btn')!;
+    act(() => {
+      copyButton.dispatchEvent(new dom.window.MouseEvent('mousedown', { bubbles: true }));
+      document.body.dispatchEvent(new dom.window.MouseEvent('mousedown', { bubbles: true }));
+    });
+    expect(content.title).toBe('message.clickToCollapse');
+
+    act(() => content.click());
+    expect(content.title).toBe('message.clickToExpand');
+  });
+
+  it('shows, opens, and copies stored large paste content instead of only its placeholder', async () => {
+    const placeholder = '[Pasted content 12 chars]';
+    act(() => root.render(
+      <FlowChatContext.Provider value={{ allowUserMessageRollback: false }}>
+        <UserMessageItem
+          message={{
+            id: 'paste-message',
+            content: `Review ${placeholder} please`,
+            timestamp: 1000,
+            metadata: { largePastes: { [placeholder]: 'pasted body' } },
+          }}
+          turnId="paste-turn"
+        />
+      </FlowChatContext.Provider>,
+    ));
+
+    const capsule = container.querySelector<HTMLButtonElement>('.message-reference-capsule--large-paste')!;
+    expect(capsule.textContent).toBe(placeholder);
+    act(() => capsule.click());
+    const viewer = document.querySelector<HTMLTextAreaElement>('.user-message-item__large-paste-text textarea, textarea.user-message-item__large-paste-text');
+    expect(viewer?.value).toBe('pasted body');
+    expect(viewer?.readOnly).toBe(true);
+
+    await act(async () => container.querySelector<HTMLButtonElement>('.user-message-item__copy-btn')!.click());
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('Review pasted body please');
+  });
+
   it('uses the shared image dialog without changing image or background click behavior', () => {
     act(() => root.render(
       <FlowChatContext.Provider value={{ sessionId: 'main-session' }}>
@@ -500,6 +585,19 @@ describe('UserMessageItem steering tag', () => {
     expect(container.querySelector('.user-message-item__steering-tag')).toBeNull();
     expect(container.textContent).toContain('Accepted instruction');
     expect(container.querySelector('.user-message-item__edit-rollback-btn')).toBeNull();
+  });
+
+  it('presents GenUI host repair input as evidence instead of a user message', () => {
+    act(() => root.render(
+      <FlowChatContext.Provider value={{ allowUserMessageRollback: true, allowUserMessageEdit: true }}>
+        <UserMessageItem message={{ id: 'genui-evidence', content: 'internal diagnostics payload', timestamp: 1000,
+          metadata: { genUIHostRepair: true } }} turnId="genui-repair-turn" />
+      </FlowChatContext.Provider>,
+    ));
+    expect(container.querySelector('.user-message-item__host-evidence')?.textContent).toContain('toolCards.generativeUI.hostEvidence');
+    expect(container.querySelector('[data-testid="chat-user-message-content"]')).toBeNull();
+    expect(container.querySelector('.user-message-item__edit-rollback-btn')).toBeNull();
+    expect(container.textContent).not.toContain('internal diagnostics payload');
   });
 
   it('does not render a steering tag after steering is triggered', () => {

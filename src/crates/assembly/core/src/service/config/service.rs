@@ -232,6 +232,22 @@ impl ConfigService {
         Ok(ai)
     }
 
+    pub async fn get_project_ai_config(
+        &self,
+        project_id: Option<&str>,
+    ) -> OpenBitFunResult<AIConfig> {
+        let mut ai = self.get_effective_ai_config().await?;
+        if let Some(project_id) = project_id {
+            let app: crate::service::config::AppConfig = self.get_config(Some("app")).await?;
+            if let Some(defaults) = app.project_defaults.get(project_id) {
+                defaults
+                    .apply_model_defaults(&mut ai)
+                    .map_err(OpenBitFunError::validation)?;
+            }
+        }
+        Ok(ai)
+    }
+
     pub async fn remove_runtime_ai_model(&self, model_id: &str) {
         self.runtime_ai_models.write().await.remove(model_id);
     }
@@ -565,6 +581,54 @@ impl ConfigService {
         Ok(())
     }
 
+    /// Reloads when another writer (a hand edit, another OpenBitFun process)
+    /// replaced the config file since this service last loaded or wrote it.
+    ///
+    /// A missing file is left alone rather than recreated, and a file that
+    /// fails to load keeps the current in-memory configuration. Returns
+    /// whether a reload happened.
+    pub async fn reload_if_changed_on_disk(&self) -> OpenBitFunResult<bool> {
+        let (config_file, known) = {
+            let manager = self.manager.read().await;
+            (
+                manager.config_file().to_path_buf(),
+                manager.disk_fingerprint(),
+            )
+        };
+        let Some(on_disk) = read_config_fingerprint(&config_file).await? else {
+            return Ok(false);
+        };
+        if known == Some(on_disk) {
+            return Ok(false);
+        }
+
+        {
+            let mut manager = self.manager.write().await;
+            // A local save may have landed between the check and the lock.
+            match read_config_fingerprint(&config_file).await? {
+                Some(on_disk) if manager.disk_fingerprint() != Some(on_disk) => {}
+                _ => return Ok(false),
+            }
+            manager.reload().await?;
+        }
+
+        info!(
+            "Configuration reloaded after an on-disk change: path={}",
+            config_file.display()
+        );
+        super::global::GlobalConfigManager::broadcast_update(
+            super::global::ConfigUpdateEvent::ModelConfigurationUpdated,
+        )
+        .await;
+        super::global::GlobalConfigManager::broadcast_update(
+            super::global::ConfigUpdateEvent::ConfigReloaded,
+        )
+        .await;
+        #[cfg(feature = "web-tools")]
+        self.refresh_web_search_runtime().await;
+        Ok(true)
+    }
+
     /// Creates a configuration backup.
     pub async fn create_backup(&self) -> OpenBitFunResult<std::path::PathBuf> {
         let manager = self.manager.read().await;
@@ -834,6 +898,17 @@ impl ReconcileModelsReport {
     }
 }
 
+async fn read_config_fingerprint(path: &std::path::Path) -> OpenBitFunResult<Option<u64>> {
+    match tokio::fs::read(path).await {
+        Ok(content) => Ok(Some(super::manager::config_content_fingerprint(&content))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(OpenBitFunError::config(format!(
+            "Failed to read config file {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1064,6 +1139,50 @@ mod tests {
             .subagents
             .builtin
             .contains_key("ResearchSpecialist"));
+    }
+
+    #[tokio::test]
+    async fn reload_if_changed_on_disk_picks_up_external_edits_only() {
+        let (service, dir) = test_service("reload-on-disk-change").await;
+        service
+            .add_ai_model(runtime_model("kept", "fixture-key"))
+            .await
+            .unwrap();
+        // The service's own write is not an external change.
+        assert!(!service.reload_if_changed_on_disk().await.unwrap());
+
+        let config_file = dir
+            .path()
+            .join("reload-on-disk-change")
+            .join("config")
+            .join("app.json");
+        let mut value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&config_file).unwrap()).unwrap();
+        value["ai"]["models"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::to_value(runtime_model("added", "fixture-key")).unwrap());
+        std::fs::write(&config_file, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+
+        let mut changes = service.subscribe_local_changes();
+        changes.borrow_and_update();
+        assert!(service.reload_if_changed_on_disk().await.unwrap());
+        let config: GlobalConfig = service.get_config(None).await.unwrap();
+        assert!(config.ai.models.iter().any(|model| model.id == "added"));
+        // A reload is not a local edit and must not echo into account sync.
+        assert!(!changes.has_changed().unwrap());
+        assert!(!service.reload_if_changed_on_disk().await.unwrap());
+
+        // A half-written edit keeps the loaded configuration.
+        std::fs::write(&config_file, "{\"ai\": ").unwrap();
+        assert!(service.reload_if_changed_on_disk().await.is_err());
+        let config: GlobalConfig = service.get_config(None).await.unwrap();
+        assert!(config.ai.models.iter().any(|model| model.id == "added"));
+
+        // A deleted file is neither reloaded nor recreated.
+        std::fs::remove_file(&config_file).unwrap();
+        assert!(!service.reload_if_changed_on_disk().await.unwrap());
+        assert!(!config_file.exists());
     }
 
     #[tokio::test]
@@ -1910,6 +2029,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn project_defaults_are_host_scoped_and_preserve_global_models() {
+        let (service, _dir) = test_service("project-defaults").await;
+        service
+            .set_config(
+                "ai.models",
+                vec![
+                    model("global", true, ModelCategory::GeneralChat),
+                    model("ssh-main", true, ModelCategory::GeneralChat),
+                    model("ssh-fast", true, ModelCategory::GeneralChat),
+                ],
+            )
+            .await
+            .unwrap();
+        service
+            .set_config("ai.default_models.primary", "global")
+            .await
+            .unwrap();
+        service.set_config("app.project_defaults", serde_json::json!({
+            "ssh-project": { "primary_model": "ssh-main", "fast_model": "ssh-fast", "mode": "Ultimate" }
+        })).await.unwrap();
+        let project = service
+            .get_project_ai_config(Some("ssh-project"))
+            .await
+            .unwrap();
+        assert_eq!(
+            project.resolve_model_selection("primary").as_deref(),
+            Some("ssh-main")
+        );
+        assert_eq!(
+            project.resolve_model_selection("fast").as_deref(),
+            Some("ssh-fast")
+        );
+        for other in [None, Some("other-project")] {
+            let ai = service.get_project_ai_config(other).await.unwrap();
+            assert_eq!(
+                ai.resolve_model_selection("primary").as_deref(),
+                Some("global")
+            );
+        }
+        let persisted: AIConfig = service.get_config(Some("ai")).await.unwrap();
+        assert_eq!(persisted.default_models.primary.as_deref(), Some("global"));
+    }
+
+    #[tokio::test]
     async fn runtime_ai_model_overlays_a_persisted_duplicate_for_effective_reads() {
         let (service, _dir) = test_service("runtime-overlay-duplicate-test").await;
         service
@@ -2601,7 +2764,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn startup_disables_invalid_reasoning_model_without_mutating_the_file() {
+    async fn startup_preserves_unresolved_reasoning_model_without_mutating_the_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let user_root = dir.path().join("invalid-reasoning-startup");
         let path_manager = Arc::new(PathManager::with_user_root_for_tests(user_root));
@@ -2650,7 +2813,7 @@ mod tests {
         let service = ConfigService::with_settings(settings()).await.unwrap();
         let models = service.get_ai_models().await.unwrap();
         assert_eq!(models.len(), 1);
-        assert!(!models[0].enabled);
+        assert!(models[0].enabled);
         assert_eq!(models[0].api_key, "key");
         assert_eq!(
             models[0]
@@ -2661,7 +2824,7 @@ mod tests {
                 .as_deref(),
             Some("missing")
         );
-        assert!(service.load_diagnostics().await.iter().any(|d| d
+        assert!(!service.load_diagnostics().await.iter().any(|d| d
             .message
             .contains("default preset 'missing' is not available")));
         assert_eq!(

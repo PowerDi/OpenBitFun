@@ -313,6 +313,9 @@ function createAppearanceOwnedTokens(
     '--openbitfun-component-conversation-excerpt-accent': String(themes.light['color.accent.default']),
     // Update glass retains its cyan companion when a dark theme's accent becomes blue.
     '--openbitfun-component-update-material-cyan': String(themes.light['color.accent.default']),
+    // Token series stay chromatic even when a product theme uses neutral accents.
+    '--openbitfun-component-session-usage-input': String(themes[palette.type]['color.status.info.emphasis']),
+    '--openbitfun-component-session-usage-output': String(themes[palette.type]['color.accent.secondary']),
     '--openbitfun-domain-context-compression': purple[500],
     '--openbitfun-domain-generative-ui': '#06b6d4',
     '--openbitfun-domain-mini-app': purple[500],
@@ -590,23 +593,6 @@ export function buildBuiltinAppearance(palette: AppearancePalette): AppearancePa
           id: `builtin.${palette.id}`,
           mode: palette.type,
           vars: createWidgetAppearanceVars(themeTokens),
-        },
-      },
-      'openbitfun-canvas': {
-        version: 1,
-        settings: {
-          id: `builtin.${palette.id}`,
-          mode: palette.type,
-          bg: palette.colors.background.primary,
-          panel: palette.colors.background.secondary,
-          fg: palette.colors.text.primary,
-          muted: palette.colors.text.muted,
-          border: palette.colors.border.base,
-          accent: palette.colors.accent[500],
-          success: palette.colors.semantic.success,
-          warning: palette.colors.semantic.warning,
-          danger: palette.colors.semantic.error,
-          info: palette.colors.semantic.info,
         },
       },
     },

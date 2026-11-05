@@ -439,6 +439,7 @@ pub struct SavedBotConnectionRecord {
 }
 
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RemoteConnectFormStateRecord {
     pub telegram_bot_token: String,
     pub feishu_app_id: String,
@@ -459,6 +460,8 @@ pub struct BotPersistenceRecord {
     pub form_state: RemoteConnectFormStateRecord,
     #[serde(default)]
     pub verbose_mode: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_bots: Vec<String>,
 }
 
 impl std::fmt::Debug for BotPersistenceRecord {
@@ -597,6 +600,9 @@ pub enum SavedAuthTypeRecord {
         fallback_key_path: Option<String>,
     },
     KeyboardInteractive,
+    /// Server accepts the connection without credentials; kept in sync with
+    /// `remote_ssh::types::SavedAuthType::None` so migrated profiles survive.
+    None,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -615,6 +621,8 @@ pub struct SavedConnectionRecord {
     pub last_connected: Option<u64>,
     #[serde(default)]
     pub proxy_jump: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_command: Option<String>,
     #[serde(default)]
     pub container: Option<ContainerWorkspaceRecord>,
     #[serde(default)]

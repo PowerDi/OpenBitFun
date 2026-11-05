@@ -33,6 +33,9 @@ export const PEER_EVENT_WRAPPED_PAYLOAD_KEY = '__openbitfunSourcePayload';
  */
 const SURFACE_SCOPED_EVENTS = new Set<string>([
   'terminal_event',
+  'terminal-output',
+  'terminal-exit',
+  'terminal-closed',
   'relay://session-gap',
   'relay://session-ready',
   'session-record',
@@ -44,6 +47,8 @@ const SURFACE_SCOPED_EVENTS = new Set<string>([
   'ai://model-catalog-updated',
   'session_title_generated',
   'workspace-catalog-changed',
+  // Catalog stream hint of one host; the sidebar device catalog observes it.
+  'host-catalog-changed',
   'cron://jobs-changed',
 ]);
 

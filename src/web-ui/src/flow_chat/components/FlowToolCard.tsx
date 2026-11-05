@@ -20,6 +20,7 @@ import { getToolInterruptionNote } from '../utils/toolInterruption';
 import { projectEffectiveToolItem } from '../utils/toolInvocationIdentity';
 import { isToolCardVisible } from '../utils/flowItemVisibility';
 import { useFlowChatContext, useFlowChatVolatileContext } from './modern/FlowChatContext';
+import GenerativeWidgetInline from './GenerativeWidgetInline';
 import './FlowToolCard.scss';
 
 interface FlowToolCardProps {
@@ -36,7 +37,7 @@ interface FlowToolCardProps {
   parallel?: boolean;
 }
 
-export const FlowToolCard: React.FC<FlowToolCardProps> = React.memo(({
+const FlowToolCardCard: React.FC<FlowToolCardProps> = React.memo(({
   toolItem,
   onOpenInEditor,
   onOpenInPanel,
@@ -137,6 +138,7 @@ export const FlowToolCard: React.FC<FlowToolCardProps> = React.memo(({
             onOpenInPanel={toolItem.importedSource ? undefined : onOpenInPanel}
             onExpand={handleExpand}
             sessionId={sessionId}
+            turnId={turnId}
             displayContext={displayContext}
             isLastItem={isLastItem}
           />
@@ -179,6 +181,7 @@ export const FlowToolCard: React.FC<FlowToolCardProps> = React.memo(({
     prevProps.toolItem.userConfirmed === nextProps.toolItem.userConfirmed &&
     prevProps.toolItem.requiresConfirmation === nextProps.toolItem.requiresConfirmation &&
     prevProps.toolItem.isParamsStreaming === nextProps.toolItem.isParamsStreaming &&
+    prevProps.toolItem._genUIStream === nextProps.toolItem._genUIStream &&
     prevProps.toolItem.subagentSessionId === nextProps.toolItem.subagentSessionId &&
     prevProps.toolItem.subagentDialogTurnId === nextProps.toolItem.subagentDialogTurnId &&
     prevProps.toolItem.subagentModelId === nextProps.toolItem.subagentModelId &&
@@ -191,4 +194,15 @@ export const FlowToolCard: React.FC<FlowToolCardProps> = React.memo(({
     prevProps.toolItem.partialParams === nextProps.toolItem.partialParams &&
     prevProps.toolItem.toolResult === nextProps.toolItem.toolResult
   );
+});
+
+/** GenUI is a FlowChat answer surface, not a tool-card presentation. Keep the
+ * generic card path for every other tool and isolate its hooks from the
+ * inline renderer. */
+export const FlowToolCard: React.FC<FlowToolCardProps> = React.memo((props) => {
+  const effectiveToolName = projectEffectiveToolItem(props.toolItem).toolName;
+  if (effectiveToolName === 'GenerativeUI') {
+    return <GenerativeWidgetInline toolItem={props.toolItem} sessionId={props.sessionId} turnId={props.turnId} />;
+  }
+  return <FlowToolCardCard {...props} />;
 });

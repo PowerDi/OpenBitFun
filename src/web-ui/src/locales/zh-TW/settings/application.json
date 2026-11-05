@@ -24,6 +24,11 @@
     "loadFailed": "載入文字選取偏好失敗",
     "saveFailed": "儲存文字選取偏好失敗"
   },
+  "btwCloseConfirmation": {
+    "title": "側問關閉",
+    "label": "關閉側問前確認",
+    "description": "關閉側問會永久捨棄對話內容；關閉後不再顯示確認提示。"
+  },
   "applicationGroups": {
     "startupAndUpdates": {
       "title": "啟動與更新",
@@ -55,8 +60,8 @@
         "description": "默認暗色外觀"
       },
       "openbitfun-light": {
-        "name": "亮色",
-        "description": "亮色外觀 - 純白界面、柔和中性灰與深海軍藍操作色"
+        "name": "淺色",
+        "description": "淺色外觀 - 純白界面、柔和中性灰與深海軍藍操作色"
       },
       "openbitfun-monochrome": {
         "name": "黑白撞色",
@@ -193,6 +198,7 @@
       "loadFailed": "載入日誌設定失敗",
       "saveFailed": "儲存日誌級別失敗",
       "levelUpdated": "日誌級別已更新",
+      "levelSavedNotApplied": "日誌級別已儲存，但該裝置仍按 {{level}} 級別記錄日誌。",
       "sensitiveDiagnosticsUpdated": "敏感除錯資訊日誌偏好已更新",
       "refreshed": "運行時狀態已重新整理",
       "openedFolder": "日誌資料夾已開啟",

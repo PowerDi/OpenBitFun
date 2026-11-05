@@ -11,6 +11,7 @@ name = "openbitfun_services_integrations"
 crate-type = ["rlib"]
 
 [dependencies]
+zstd = { workspace = true, optional = true }
 pulldown-cmark = { workspace = true, optional = true }
 tokio = { workspace = true }
 serde = { workspace = true }
@@ -36,6 +37,7 @@ chrono = { workspace = true, optional = true }
 dunce = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
+glob = { workspace = true, optional = true }
 fs2 = { workspace = true, optional = true }
 git2 = { workspace = true, optional = true }
 hostname = { workspace = true, optional = true }
@@ -47,7 +49,6 @@ local-ip-address = { workspace = true, optional = true }
 mac_address = { workspace = true, optional = true }
 md5 = { workspace = true, optional = true }
 notify = { workspace = true, optional = true }
-oxc = { workspace = true, optional = true }
 qrcode = { workspace = true, features = ["image", "svg"], optional = true }
 rand = { workspace = true, optional = true }
 regex = { workspace = true, optional = true }
@@ -75,7 +76,6 @@ russh = { workspace = true, optional = true }
 russh-sftp = { workspace = true, optional = true }
 russh-keys = { workspace = true, optional = true }
 shellexpand = { workspace = true, optional = true }
-ssh_config = { workspace = true, optional = true }
 terminal-core = { path = "../terminal", optional = true }
 x25519-dalek = { workspace = true, optional = true }
 
@@ -110,15 +110,7 @@ models-dev = [
     "tokio/time",
     "windows",
 ]
-browser-control = ["anyhow", "openbitfun-services-core/process-runtime", "openbitfun-services-core/tls-provider", "dirs", "reqwest", "reqwest/json", "reqwest/rustls-no-provider", "thiserror", "tokio/time"]
-canvas-runtime = [
-    "dep:openbitfun-product-domains",
-    "oxc",
-    "sha2",
-    "tokio/fs",
-    "urlencoding",
-    "uuid",
-]
+browser-control = ["anyhow", "openbitfun-services-core/process-runtime", "openbitfun-services-core/tls-provider", "dirs", "reqwest", "reqwest/json", "reqwest/rustls-no-provider", "thiserror", "tokio/rt", "tokio/time"]
 deep-research = [
     "anyhow",
     "async-trait",
@@ -271,6 +263,7 @@ hook-import = [
     "uuid",
 ]
 remote-connect = [
+    "dep:zstd",
     "dep:sioc",
     "dep:pulldown-cmark",
     "fs2",
@@ -469,6 +462,7 @@ script-tool-runtime = [
 ]
 ptc-runtime = [
     "async-trait",
+    "dep:openbitfun-core-types",
     "openbitfun-runtime-ports/ptc-runtime",
     "process-tree",
     "tokio/io-util",
@@ -492,7 +486,6 @@ web-tools = [
 product-full = [
     "models-dev",
     "browser-control",
-    "canvas-runtime",
     "deep-research",
     "file-watch",
     "function-agents",
@@ -510,7 +503,7 @@ product-full = [
     "workspace-search",
 ]
 skillhub = ["openbitfun-services-core/tls-provider", "reqwest", "reqwest/json", "reqwest/query", "reqwest/rustls-no-provider", "reqwest/stream", "zip", "tempfile", "tokio/fs", "tokio/io-util"]
-ssh_config = ["dep:ssh_config"]
+ssh_config = ["dep:glob"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

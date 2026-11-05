@@ -43,6 +43,30 @@ pnpm --dir src/web-ui run test:run src/infrastructure/config/components/common/S
 ```
 
 Follow the parent guide for `check:web`, i18n, and Appearance registration checks.
+For the independent Appearance conversation-width setting and shared drag preference:
+
+```bash
+pnpm --dir src/web-ui run test:run src/app/scenes/settings/pages/application/FlowChatWidthSettingsSection.test.tsx src/flow_chat/components/FlowChatWidthBoundary.test.tsx src/infrastructure/appearance/preferences/flowChatWidthStore.test.ts
+```
+
+These local DOM/storage fixtures do not establish rendered visuals or live remote behavior.
+
+For Appearance sidebar pinning, capsule selection, ordering, persistence and contribution lifecycle:
+
+```bash
+pnpm --dir src/web-ui run test:run src/app/navigation/sidebarPreferences.test.ts src/app/navigation/sidebarRegistry.test.ts src/app/scenes/settings/pages/application/SidebarSettingsSection.test.tsx src/app/scenes/settings/settingsRegistry.test.ts src/app/components/NavPanel/MainNav.projectCreation.test.tsx src/app/scenes/skills/skillsSceneStore.test.ts
+```
+
+Keep trusted navigation contributions separate from controller-local preferences and
+device-scoped MiniApp pins. These tests simulate Peer activation and capability gates;
+they do not establish live SSH, Remote Control, Peer Device or Detached Dispatch behavior.
+
+Model connection and detail editors use the shared `Dialog preset="panel"`
+with a centered provider identity and the panel's top/bottom spacing. Keep the
+editor footer `appearance="floating"` for centered actions. This presentation is
+intentional; form controls inside still follow the standard shared sizing and
+field-surface contracts.
+
 For model-pool strategy selection, member search/multi-selection, nested-dialog
 dismissal, preserved records and device-switch isolation, run:
 

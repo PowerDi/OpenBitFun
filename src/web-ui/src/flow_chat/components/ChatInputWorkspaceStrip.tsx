@@ -39,6 +39,8 @@ import {
 import { formatCompactTokenCount } from '../utils/tokenUsageDisplay';
 import { AcpModeSelector } from './AcpModeSelector';
 import type { AcpModeControl } from './ModelSelector';
+import { ContextUsagePopover } from './usage/ContextUsagePopover';
+import type { UsageContextBreakdown } from '@/infrastructure/api/service-api/SessionAPI';
 import './ChatInputWorkspaceStrip.scss';
 
 export interface ChatInputWorkspaceStripProps {
@@ -54,6 +56,10 @@ export interface ChatInputWorkspaceStripProps {
     visible: boolean;
     currentTokens: number;
     maxTokens: number;
+    sessionKey?: string;
+    anchorRef?: React.RefObject<HTMLElement>;
+    previewSession?: { sessionId: string; workspaceId?: string };
+    loadContext?: () => Promise<UsageContextBreakdown | undefined>;
     onOpen: () => void;
   };
   /** Native-tool permission mode for this session, exposed as a compact strip control. */
@@ -196,6 +202,11 @@ export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = (
   const { t } = useTranslation('flow-chat');
   const { t: tWorktrees } = useI18n('worktrees');
   const { t: tCommon } = useI18n('common');
+  const stripRef = useRef<HTMLDivElement>(null);
+  const usageTriggerRef = useRef<HTMLButtonElement>(null);
+  const usagePopoverId = useId();
+  const [usagePopoverOpen, setUsagePopoverOpen] = useState(false);
+  useEffect(() => setUsagePopoverOpen(false), [usageReport?.sessionKey]);
   const permissionRootRef = useRef<HTMLDivElement>(null);
   const permissionTriggerRef = useRef<HTMLButtonElement>(null);
   const permissionMenuRef = useRef<HTMLDivElement>(null);
@@ -618,6 +629,7 @@ export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = (
       return (
         <Tooltip content={workspaceTooltipContent} placement="top">
           <span data-openbitfun-component="chat-input-workspace-strip" data-openbitfun-part="workspace" className="openbitfun-chat-input-workspace-strip__workspace">
+            <Icon name="folder-open" size="xs" aria-hidden />
             <span className="openbitfun-chat-input-workspace-strip__workspace-name"><OverflowText>{label}</OverflowText></span>
           </span>
         </Tooltip>
@@ -641,6 +653,7 @@ export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = (
               setWorkspaceMenuOpen(open => !open);
             }}
           >
+            <Icon name="folder-open" size="xs" aria-hidden />
             <span className="openbitfun-chat-input-workspace-strip__workspace-name"><OverflowText>{label}</OverflowText></span>
           </button>
         </Tooltip>
@@ -827,6 +840,7 @@ export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = (
 
   return (
     <div data-openbitfun-component="chat-input-workspace-strip" data-openbitfun-part="root"
+      ref={stripRef}
       className="openbitfun-chat-input-workspace-strip"
       data-testid="chat-input-workspace-strip"
     >
@@ -1154,14 +1168,18 @@ export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = (
         {showUsage ? (
           <Tooltip content={usageTooltip}>
             <button
+              ref={usageTriggerRef}
               data-openbitfun-component="chat-input-workspace-strip"
               data-openbitfun-part="usageAction"
               className="openbitfun-chat-input-workspace-strip__usage-btn"
               type="button"
-              aria-label={t('usage.runtime.open')}
+              aria-label={t('usage.context.title')}
+              aria-haspopup="dialog"
+              aria-expanded={usagePopoverOpen}
+              aria-controls={usagePopoverOpen ? usagePopoverId : undefined}
               onClick={e => {
                 e.stopPropagation();
-                usageReport.onOpen();
+                setUsagePopoverOpen(open => !open);
               }}
             >
               <span className="openbitfun-chat-input-workspace-strip__usage-ring" aria-hidden>
@@ -1177,6 +1195,22 @@ export const ChatInputWorkspaceStrip: React.FC<ChatInputWorkspaceStripProps> = (
               </span>
             </button>
           </Tooltip>
+        ) : null}
+        {showUsage && usagePopoverOpen ? (
+          <ContextUsagePopover
+            id={usagePopoverId}
+            anchorRef={usageReport.anchorRef ?? stripRef}
+            triggerRef={usageTriggerRef}
+            currentTokens={usageCurrentTokens}
+            maxTokens={usageMaxTokens}
+            loadContext={usageReport.loadContext}
+            previewSession={usageReport.previewSession}
+            onClose={() => setUsagePopoverOpen(false)}
+            onViewReport={() => {
+              setUsagePopoverOpen(false);
+              usageReport.onOpen();
+            }}
+          />
         ) : null}
       </div>
     </div>

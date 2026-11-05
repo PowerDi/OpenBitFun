@@ -10,10 +10,12 @@
   @include flatMarkdownSurfaces.apply;
   @include transcriptLayout.reading-column;
 
-  // Keep descendant margins inside the border box measured by the virtualizer.
-  // Escaped margins otherwise disappear when a row is replaced by virtual padding.
-  // Unlike overflow: hidden, this preserves outlying decorations and controls.
-  display: flow-root;
+  // Flex contains descendant margins in the measured border box, as flow-root
+  // did, without clipping controls. It also makes the content a flex item:
+  // WebKit then paints native selection over text instead of filling the row's
+  // turn padding and the gaps around its positioned message containers.
+  display: flex;
+  flex-direction: column;
 
   /*
    * Single reading column shared by every item type (model rounds, explore
@@ -125,7 +127,7 @@
   }
 }
 
-// The current text line is a passive overlay, never a new transcript surface.
+// Search follows the current text line; item navigation covers the target card.
 .flowchat-search-line {
   position: absolute;
   pointer-events: none;
@@ -137,6 +139,18 @@
     inset-block: 0;
     inset-inline-start: calc(-1 * var(--openbitfun-space-2));
     border-inline-start: var(--openbitfun-focus-width) solid var(--openbitfun-color-control-switch-track-checked);
+  }
+
+  &[data-openbitfun-state~='itemFocus'] {
+    background: var(--openbitfun-color-accent-surface);
+    border-radius: var(--openbitfun-radius-sm);
+
+    &::before {
+      inset-block: var(--_flowchat-focus-marker-top) auto;
+      inset-inline-start: calc(var(--_flowchat-focus-marker-left) - var(--openbitfun-space-2));
+      block-size: var(--_flowchat-focus-marker-height);
+      border-color: var(--openbitfun-color-accent-default);
+    }
   }
 }
 
@@ -151,7 +165,8 @@
 }
 
 @media (forced-colors: active) {
-  .flowchat-search-line {
+  .flowchat-search-line,
+  .flowchat-search-line[data-openbitfun-state~='itemFocus'] {
     background: transparent;
 
     &::before {

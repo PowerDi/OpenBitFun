@@ -8,8 +8,6 @@ pub mod analyze_image_tool;
 #[cfg(feature = "tools-miniapp")]
 pub mod appearance_publish_tool;
 pub mod ask_user_question_tool;
-#[cfg(feature = "tools-canvas")]
-pub mod canvas_tools;
 pub mod code_review_tool;
 #[cfg(feature = "tools-computer-use")]
 pub mod computer_use_actions;
@@ -62,6 +60,8 @@ pub mod openbitfun_control_tool;
 #[cfg(feature = "tools-pages")]
 pub mod page_deploy_tool;
 #[cfg(feature = "tools-pages")]
+pub mod page_manage_tool;
+#[cfg(feature = "tools-pages")]
 pub mod page_publish_tool;
 mod plan_artifact_diagnostics;
 #[cfg(feature = "tools-miniapp")]
@@ -98,8 +98,6 @@ pub use analyze_image_tool::AnalyzeImageTool;
 #[cfg(feature = "tools-miniapp")]
 pub use appearance_publish_tool::PublishAppearanceTool;
 pub use ask_user_question_tool::AskUserQuestionTool;
-#[cfg(feature = "tools-canvas")]
-pub use canvas_tools::{CreateCanvasTool, PatchCanvasTool, ReadCanvasTool, UpdateCanvasTool};
 pub use code_review_tool::CodeReviewTool;
 #[cfg(feature = "tools-computer-use")]
 pub use computer_use_tool::ComputerUseTool;
@@ -143,6 +141,8 @@ pub use miniapp_publish_tool::PublishMiniAppTool;
 pub use openbitfun_control_tool::OpenBitFunControlTool;
 #[cfg(feature = "tools-pages")]
 pub use page_deploy_tool::PageDeployTool;
+#[cfg(feature = "tools-pages")]
+pub use page_manage_tool::PageManageTool;
 #[cfg(feature = "tools-pages")]
 pub use page_publish_tool::PagePublishTool;
 #[cfg(feature = "tools-miniapp")]

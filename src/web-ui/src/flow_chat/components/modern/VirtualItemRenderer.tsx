@@ -16,12 +16,13 @@ import { TurnFailureNoticeItem } from './TurnFailureNoticeItem';
 import './VirtualItemRenderer.scss';
 import { getVirtualItemStableKey } from './virtualItemIdentity';
 import { useFlowChatSearchPresentation } from './useFlowChatSearchPresentation';
-import { ConversationExcerptMarkers } from '../../selection/ConversationExcerptMarkers';
+import { useConversationExcerptMarkers } from '../../selection/ConversationExcerptMarkers';
 import { getKnownVirtualItemHeightPx } from './virtualItemHeightEstimators';
 import { Icon } from '@openbitfun/ui';
 import { TimelineContentBlock } from '../../timeline/TimelineContentBlock';
 import { useTurnFooterInteraction } from './useTurnFooterInteraction';
 import { BackgroundRunItem } from './BackgroundRunItem';
+import { localizeMarkdownMatch } from '../../timeline/markdownSectionSearch';
 
 interface VirtualItemRendererProps {
   item: VirtualItem;
@@ -45,17 +46,21 @@ export const VirtualItemRenderer = React.memo<VirtualItemRendererProps>(
     const { searchQuery, searchMatchesByVirtualIndex, searchCurrentMatch } = useFlowChatVolatileContext();
     const sourceIndex = item.timeline?.sourceIndex ?? index;
     const ownsMatch = (match: { flowItemId?: string }) => !item.timeline || !match.flowItemId || item.timeline.memberIds.includes(match.flowItemId);
-    const matches = searchMatchesByVirtualIndex?.get(sourceIndex)?.filter(ownsMatch);
-    const currentMatch = searchCurrentMatch?.virtualItemIndex === sourceIndex && ownsMatch(searchCurrentMatch) ? searchCurrentMatch : undefined;
+    const matches = searchMatchesByVirtualIndex?.get(sourceIndex)?.filter(ownsMatch)
+      .flatMap(match => localizeMarkdownMatch(item, searchQuery ?? '', match) ?? []);
+    const currentMatch = searchCurrentMatch?.virtualItemIndex === sourceIndex && ownsMatch(searchCurrentMatch)
+      ? localizeMarkdownMatch(item, searchQuery ?? '', searchCurrentMatch) : undefined;
     const isSearchMatch = Boolean(matches?.length);
     const isSearchCurrent = Boolean(currentMatch);
     const isCollectedEmpty = getKnownVirtualItemHeightPx(item) === 0;
-    const [wrapper, setWrapper] = React.useState<HTMLDivElement | null>(null);
+    const wrapper = React.useRef<HTMLDivElement | null>(null);
     const rowRef = React.useCallback((element: HTMLDivElement | null) => {
-      setWrapper(element);
+      wrapper.current = element;
       measureRef?.(element);
     }, [measureRef]);
     const searchLine = useFlowChatSearchPresentation(wrapper, searchQuery, matches, currentMatch);
+    const excerptMarkers = useConversationExcerptMarkers(wrapper, item.turnId);
+    const itemFocus = searchLine && 'markerTop' in searchLine ? searchLine : null;
 
     const content = (() => {
       switch (item.type) {
@@ -103,7 +108,6 @@ export const VirtualItemRenderer = React.memo<VirtualItemRendererProps>(
               turnOutputDurationMs={item.turnOutputDurationMs}
               turnTtftMs={item.turnTtftMs}
               turnTokenUsage={item.turnTokenUsage}
-              canvasArtifactItems={item.canvasArtifactItems}
               expandedThinkingItemIds={item.layoutHints?.expandedThinkingItemIds ?? []}
             />
           );
@@ -163,17 +167,26 @@ export const VirtualItemRenderer = React.memo<VirtualItemRendererProps>(
         data-ambient-tool-run-continuation-after={continuesAmbientToolRunAfter ? 'true' : undefined}
         data-virtual-item-key={getVirtualItemStableKey(item)}
         data-virtual-index={index}
+        data-markdown-section-start={item.timeline?.markdownSection?.start}
         data-item-index={index}
       >
         {content || <div style={{ minHeight: '1px' }} />}
-        <ConversationExcerptMarkers wrapper={wrapper} turnId={item.turnId} />
+        {excerptMarkers}
         <span
           aria-hidden="true"
           hidden={!searchLine}
           className="flowchat-search-line"
           data-openbitfun-component="virtual-item"
           data-openbitfun-part="searchLine"
-          style={searchLine ?? undefined}
+          data-openbitfun-state={itemFocus ? 'itemFocus' : undefined}
+          style={searchLine ? {
+            top: searchLine.top, left: searchLine.left, width: searchLine.width, height: searchLine.height,
+            ...(itemFocus ? {
+              '--_flowchat-focus-marker-top': `${itemFocus.markerTop}px`,
+              '--_flowchat-focus-marker-left': `${itemFocus.markerLeft}px`,
+              '--_flowchat-focus-marker-height': `${itemFocus.markerHeight}px`,
+            } : {}),
+          } as React.CSSProperties : undefined}
         />
       </div>
     );

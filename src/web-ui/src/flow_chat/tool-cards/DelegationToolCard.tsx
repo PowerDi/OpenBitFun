@@ -14,12 +14,12 @@ import { useSessionNavStatus } from '../hooks/useSessionNavStatus';
 import type { SessionNavStatus } from '../utils/sessionNavStatus';
 import { sessionLineageLifecycleForSession, type SessionLineageLifecycle } from '../utils/sessionLineage';
 import type { FlowToolItem, ToolCardProps } from '../types/flow-chat';
+import { externalAgentDisplayName } from '../utils/acpSession';
 import { getToolCardStatus } from './toolCardStatus';
 import { interactionOutcome, toolString } from './toolInteractionModel';
 import { useCurrentToolSessionParticipant } from './useToolSessionParticipant';
 import {
   DELEGATION_LIFECYCLE_LABEL_KEYS,
-  delegationAgentName,
   delegationStatusLabelKey,
   delegationToolKind,
   readDelegationCall,
@@ -138,7 +138,7 @@ const DelegationStartCard: React.FC<ToolCardProps & { call: DelegationCall }> = 
   const { t, currentLanguage } = useI18n('flow-chat');
   const status = getToolCardStatus(toolItem);
   const target = useDelegationTarget(call, sessionId);
-  const agentName = call.agent ? delegationAgentName(call.agent) : t('toolCards.interaction.unknownAgent');
+  const agentName = call.agent ? externalAgentDisplayName(call.agent) : t('toolCards.interaction.unknownAgent');
   const failed = status === 'error';
   const lifecycle = failed ? undefined : target.lifecycle;
   const displayStatus: FlowToolItem['status'] = failed ? 'error'

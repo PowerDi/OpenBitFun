@@ -2,6 +2,18 @@ import type { Session } from '../types/flow-chat';
 
 const ACP_AGENT_TYPE_PREFIX = 'acp:';
 
+/** Product names of the native agents; brand names are not translated. */
+const NATIVE_AGENT_NAMES: Record<string, string> = {
+  'claude-native': 'Claude Code',
+  'codex-native': 'Codex',
+  'pi-native': 'Pi',
+};
+
+/** Name to show for an external agent client: the product name of a native agent, else its id. */
+export function externalAgentDisplayName(clientId: string): string {
+  return NATIVE_AGENT_NAMES[clientId] ?? clientId;
+}
+
 export function acpClientIdFromAgentType(agentType: string | null | undefined): string | null {
   const value = agentType?.trim();
   if (!value?.startsWith(ACP_AGENT_TYPE_PREFIX)) return null;

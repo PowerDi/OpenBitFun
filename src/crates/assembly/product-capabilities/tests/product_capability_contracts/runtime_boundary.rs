@@ -69,8 +69,6 @@ fn code_agent_tools_are_selected_from_atomic_provider_groups() {
         "InitMiniApp",
         "FinalizeMiniApp",
         "PublishMiniApp",
-        "CreateCanvas",
-        "ReadCanvas",
     ] {
         assert!(
             !tool_names.contains(&product_tool),
@@ -134,10 +132,10 @@ fn cli_pages_are_independent_of_miniapp_and_acp() {
         .iter()
         .flat_map(|group| group.tool_names().iter().copied())
         .collect();
-    for tool in ["PagePublish", "PageDeploy"] {
+    for tool in ["PageManage", "PagePublish", "PageDeploy"] {
         assert!(names.contains(&tool));
     }
-    for tool in ["InitMiniApp", "PublishMiniApp", "CreateCanvas"] {
+    for tool in ["InitMiniApp", "PublishMiniApp"] {
         assert!(!names.contains(&tool));
     }
     for profile in [DeliveryProfile::Acp, DeliveryProfile::Sdk] {

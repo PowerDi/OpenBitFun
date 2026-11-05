@@ -705,6 +705,8 @@ impl ClaudeNativeSession {
             available_models.first().map(|m| m.id.clone())
         };
         AcpSessionOptions {
+            // Native commands come from the commands endpoint.
+            available_commands: None,
             current_model_id,
             available_models,
             model_config_id: None,

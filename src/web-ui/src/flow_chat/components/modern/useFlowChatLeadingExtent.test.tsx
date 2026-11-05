@@ -6,6 +6,7 @@ import type { VirtualItem } from '../../store/modernFlowChatStore';
 import { useFlowChatLeadingExtent } from './useFlowChatLeadingExtent';
 import { getVirtualItemStableKey } from './virtualItemIdentity';
 import { readingLinePxForViewport } from './flowChatTailFollow';
+import { readFlowChatViewportGeometry } from './flowChatViewportGeometry';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -16,7 +17,7 @@ const item = (id: string, kind = 'content') => ({ type: 'model-round', turnId: '
 const cleanups: Array<() => void> = [];
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()); });
 
-function setup() {
+function setup(readReaderScrollPosition?: () => number) {
   const host = document.createElement('div');
   const scroller = document.createElement('div');
   const extent = document.createElement('div');
@@ -34,7 +35,8 @@ function setup() {
   let rebases = 0;
   function Test({ scope }: { scope: string }) {
     api = useFlowChatLeadingExtent({ scope, items, virtualizer: { getItemBounds: index => bounds[index] ?? null },
-      scrollerRef: { current: scroller }, extentRef: { current: extent }, onAnchorRebased: () => { rebases++; } });
+      scrollerRef: { current: scroller }, extentRef: { current: extent }, readReaderScrollPosition,
+      onAnchorRebased: () => { rebases++; } });
     return null;
   }
   const render = (scope = 'session:turn') => act(() => root.render(<Test scope={scope} />));
@@ -49,6 +51,39 @@ function setup() {
 }
 
 describe('desktop leading extent lifecycle', () => {
+  it('rejects a stale leading row when native reader travel precedes its scroll listener', () => {
+    let readerPosition = 2200;
+    const view = setup(() => readerPosition);
+    view.scroller.scrollTop = 2200;
+    view.api.capture(2200);
+    expect(view.api.snapshot()?.key).toBe('block:member');
+    // Registered displacements do not change this reader-travel coordinate.
+    view.scroller.scrollTop = 2600;
+    expect(view.api.snapshot()?.key).toBe('block:member');
+    readerPosition += 300;
+    expect(view.api.snapshot()).toBeNull();
+    view.api.capture(2500);
+    expect(view.api.snapshot()?.key).toBe('block:member');
+  });
+  it('reuses the current scroll read phase without measuring rows again', () => {
+    const view = setup();
+    const row = document.createElement('div');
+    row.className = 'virtual-item-wrapper'; row.dataset.virtualItemKey = 'block:member';
+    let top = 2040;
+    const read = vi.fn(() => ({ top: top - view.scroller.scrollTop,
+      bottom: top + 1200 - view.scroller.scrollTop, height: 1200 }) as DOMRect);
+    row.getBoundingClientRect = read; view.extent.append(row);
+    view.scroller.scrollTop = 2200;
+    const sample = readFlowChatViewportGeometry(view.scroller);
+    view.api.capture(2200, true, sample);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(view.api.snapshot()).toEqual({ key: 'block:member', offset: -160 });
+    // Another layout transaction must read the new geometry, not that sample.
+    top += 80;
+    view.api.refresh(1000);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(view.extent.style.minHeight).toBe('3080px');
+  });
   it.each([-2, -0.25, 0.25, 2])('does not turn a stable %s px cache/DOM difference into repeated travel', difference => {
     const view = setup();
     view.layout([item('header', 'group-header'), item('after')],

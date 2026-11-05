@@ -202,7 +202,6 @@ mod tests {
 
         assert_eq!(owner_registry.get_tool_names(), expected_names);
         assert!(owner_registry.get_tool("CodeReview").is_none());
-        assert!(owner_registry.get_tool("CreateCanvas").is_none());
         assert!(owner_registry.get_tool("InitMiniApp").is_none());
     }
 
@@ -227,7 +226,6 @@ mod tests {
 
         assert_eq!(owner_registry.get_tool_names(), expected_names);
         assert!(owner_registry.get_tool("CodeReview").is_none());
-        assert!(owner_registry.get_tool("CreateCanvas").is_none());
         assert!(owner_registry.get_tool("InitMiniApp").is_none());
     }
 
@@ -240,14 +238,16 @@ mod tests {
             .create_registry()
             .expect("CLI runtime plan must materialize in the product-full test build");
 
-        for tool in ["PagePublish", "PageDeploy"] {
+        for tool in ["PageManage", "PagePublish", "PageDeploy"] {
             assert!(cli.get_tool(tool).is_some(), "CLI must materialize {tool}");
             assert!(sdk.get_tool(tool).is_none(), "SDK must not inherit {tool}");
         }
         let without_pages = |names: Vec<String>| {
             names
                 .into_iter()
-                .filter(|name| !matches!(name.as_str(), "PagePublish" | "PageDeploy"))
+                .filter(|name| {
+                    !matches!(name.as_str(), "PageManage" | "PagePublish" | "PageDeploy")
+                })
                 .collect::<Vec<_>>()
         };
         assert_eq!(sdk.get_tool_names(), without_pages(cli.get_tool_names()));
@@ -311,7 +311,6 @@ mod baseline_tests {
         for excluded in [
             "view_image",
             "GetFileDiff",
-            "CreateCanvas",
             "WebSearch",
             "ListMCPResources",
             "Worktree",

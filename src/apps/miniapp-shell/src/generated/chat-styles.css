@@ -1391,15 +1391,14 @@
   height: var(--openbitfun-control-chat-composer-control-height);
   align-items: center;
   align-self: center;
+  gap: var(--openbitfun-space-1);
   padding: 0;
 }
 .openbitfun-chat-input__composer > [data-openbitfun-part=body] > [data-openbitfun-part=surface] .openbitfun-chat-input__actions-left {
   justify-content: flex-start;
-  gap: var(--openbitfun-space-2);
 }
 .openbitfun-chat-input__composer > [data-openbitfun-part=body] > [data-openbitfun-part=surface] .openbitfun-chat-input__actions-right {
   justify-content: flex-end;
-  gap: var(--openbitfun-space-1);
 }
 .openbitfun-chat-input__composer > [data-openbitfun-part=body] > [data-openbitfun-part=surface] .openbitfun-chat-input__model-usage-group,
 .openbitfun-chat-input__composer > [data-openbitfun-part=body] > [data-openbitfun-part=surface] .openbitfun-model-selector {
@@ -1476,6 +1475,7 @@
 }
 .openbitfun-chat-input__composer > [data-openbitfun-part=body] > [data-openbitfun-part=surface][data-openbitfun-layout=expanded] .openbitfun-harness-selector__trigger {
   height: var(--openbitfun-control-chat-composer-control-height);
+  padding-inline: var(--openbitfun-space-1);
   border-radius: var(--openbitfun-radius-pill);
 }
 .openbitfun-chat-input--capsule .openbitfun-chat-input__content {
@@ -2014,7 +2014,12 @@
   .openbitfun-chat-input__boost-submenu-spinner {
     animation: none;
   }
-}.flow-text-block .markdown-renderer pre,
+}.flow-text-block:not([hidden]):not(.flow-text-block--runtime-status) {
+  display: flex;
+  flex-direction: column;
+}
+
+.flow-text-block .markdown-renderer pre,
 .flow-text-block .markdown-renderer .code-block-wrapper,
 .flow-text-block .markdown-renderer .table-wrapper,
 .flow-text-block .markdown-renderer .mermaid-block,
@@ -2043,6 +2048,9 @@
 .flow-text-block.streaming .markdown-renderer {
   animation: none;
 }
+.flow-text-block > .markdown-renderer.flow-text-block__section {
+  margin-block-start: var(--openbitfun-control-flow-chat-paragraph-gap);
+}
 .flow-text-block--runtime-status {
   display: flex;
   align-items: center;
@@ -2068,6 +2076,9 @@
   }
 }
 .user-message-item-shell {
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
   --_user-message-radius: var(--openbitfun-control-flow-chat-user-message-radius);
   --_user-message-padding-inline: var(--_user-message-radius);
   position: relative;
@@ -2099,6 +2110,10 @@
    * it changes only paint on the contents, never this row's measured layout.
    */
   position: relative;
+}
+
+.user-message-item:not(.user-message-item--expanded):not(.user-message-item--editing) {
+  max-width: min(28rem, var(--openbitfun-control-flow-chat-user-message-max-width));
 }
 
 .user-message-item__surface {
@@ -2203,6 +2218,13 @@
   gap: var(--openbitfun-control-flow-chat-inline-gap);
 }
 
+.user-message-item__host-evidence {
+  margin: 0;
+  color: var(--openbitfun-color-content-secondary);
+  font-size: var(--openbitfun-type-flow-meta-font-size);
+  line-height: var(--openbitfun-type-flow-meta-line-height);
+}
+
 .user-message-item__main-contents-bridge {
   display: contents;
 }
@@ -2274,6 +2296,22 @@
   max-height: 4.75em; /* Collapsed: up to 3 compact lines. */
   user-select: text;
   transition: none;
+}
+
+.user-message-item__content-preview::after {
+  content: "…";
+}
+
+.user-message-item__content-overflow {
+  display: none;
+}
+
+.user-message-item--expanded .user-message-item__content-preview::after {
+  content: none;
+}
+
+.user-message-item--expanded .user-message-item__content-overflow {
+  display: contents;
 }
 
 .user-message-item--expanded {
@@ -2580,6 +2618,11 @@
 }
 .user-message-item__lightbox-close[data-openbitfun-component=icon-button] > [data-openbitfun-part=icon] {
   display: contents;
+}
+
+.user-message-item__large-paste-text {
+  min-height: 280px;
+  font-family: var(--openbitfun-type-code-md-font-family);
 }
 /* Model round item styles (BEM). */
 .model-round-item:is([data-flow-item-stack], .explore-region__content, .flow-group-content-segment):not([data-agent-card-grid]) > :is(.flow-text-block, .flow-thinking-item, .flowchat-flow-item,

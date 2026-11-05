@@ -168,7 +168,7 @@ export class DurableSessionReducer {
     const metadata = turn.userMessage.metadata as UserMetadata | undefined;
     const userText = metadata?.original_text || turn.userMessage.content;
     if (userText.length > 0 || (metadata?.images?.length || 0) > 0) result.push({ id: turn.userMessage.id, turnId: turn.turnId,
-      role: 'user', text: userText, images: metadata?.images, status: 'sent', timestamp: new Date(turn.userMessage.timestamp).toISOString() });
+      role: 'user', text: userText, images: metadata?.images, status: 'sent', timestamp: String(turn.userMessage.timestamp) });
     const turnFence = this.tombstones.get(`turn/${turn.turnId}`) ?? 0;
     const visible = entries.filter((item: StoredItem) => {
       const round = this.rounds.get(item.roundId);
@@ -192,7 +192,11 @@ export class DurableSessionReducer {
       if (entry.data.type === 'tool') {
         const tool: RemoteToolStatusResponse = { id: data.toolCall?.id || data.id, name: data.toolName, status: data.status || (data.toolResult ? (data.toolResult.success ? 'completed' : 'failed') : 'running'),
           tool_input: data.toolCall?.input, tool_output: data.toolResult?.result,
-          duration_ms: data.durationMs ?? data.toolResult?.durationMs, error_preview: data.toolResult?.error, start_ms: data.startTime };
+          duration_ms: data.durationMs ?? data.toolResult?.durationMs, error_preview: data.toolResult?.error, start_ms: data.startTime,
+          // The child Session this launch started, kept on the projection so a
+          // transcript that only exists on this phone still says which session a
+          // delegation drew its worker from.
+          subagent_session_id: data.subagentSessionId };
         item.tool = tool; tools.push(tool);
       }
       items.push(item);
@@ -201,7 +205,7 @@ export class DurableSessionReducer {
     result.push({ id: `assistant-${turn.turnId}`, turnId: turn.turnId, role: 'assistant', status: status,
       text: items.filter((item: ChatMessageItemResponse) => item.type === 'text' && !item.is_subagent).map((item: ChatMessageItemResponse) => item.content || '').join(''),
       thinking: items.filter((item: ChatMessageItemResponse) => item.type === 'thinking' && !item.is_subagent).map((item: ChatMessageItemResponse) => item.content || '').join(''),
-      tools: tools, items: items, timestamp: new Date(turn.timestamp).toISOString(), error: turn.error, renderVersion: stored.revision });
+      tools: tools, items: items, timestamp: String(turn.timestamp), error: turn.error, renderVersion: stored.revision });
     return result;
   }
 }

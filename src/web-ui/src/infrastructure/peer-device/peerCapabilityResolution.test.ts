@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   canCopySessionsOnSurface,
+  canUseSshNoneAuthOnSurface,
   canViewPullRequestsOnSurface,
   canQueryToolCatalogOnSurface,
   canSubmitUserQuestionsOnSurface,
   canQuerySubscriptionQuotaOnSurface,
+  usesTerminalCursorReplay,
 } from './peerCapabilityResolution';
 import type { PeerHostCapabilities } from './PeerConnectionManager';
 
@@ -48,6 +50,15 @@ it('requires explicit host allowance-query capability and never falls back to co
   expect(canQuerySubscriptionQuotaOnSurface(true, caps({ hostKind: 'desktop' }))).toBe(false);
   expect(canQuerySubscriptionQuotaOnSurface(true, caps({ hostKind: 'cli' }))).toBe(false);
   expect(canQuerySubscriptionQuotaOnSurface(true, caps({ subscriptionQuotaV1: true }))).toBe(true);
+});
+
+describe('canUseSshNoneAuthOnSurface', () => {
+  it('requires the negotiated capability on a peer surface', () => {
+    expect(canUseSshNoneAuthOnSurface(false, null)).toBe(true);
+    expect(canUseSshNoneAuthOnSurface(true, null)).toBe(false);
+    expect(canUseSshNoneAuthOnSurface(true, { sshNoneAuthV1: false } as PeerHostCapabilities)).toBe(false);
+    expect(canUseSshNoneAuthOnSurface(true, { sshNoneAuthV1: true } as PeerHostCapabilities)).toBe(true);
+  });
 });
 
 describe('canCopySessionsOnSurface', () => {
@@ -129,4 +140,22 @@ it('requires advertised Grok quota support from a peer', () => {
   expect(canQueryGrokQuotaOnSurface(true, null)).toBe(false);
   expect(canQueryGrokQuotaOnSurface(true, { subscriptionQuotaV1: true } as PeerHostCapabilities)).toBe(false);
   expect(canQueryGrokQuotaOnSurface(true, { grokQuotaV1: true } as PeerHostCapabilities)).toBe(true);
+});
+
+describe('usesTerminalCursorReplay', () => {
+  const capabilities = (fields: Record<string, unknown>) => fields as unknown as PeerHostCapabilities;
+
+  it('follows the typed capability', () => {
+    expect(usesTerminalCursorReplay(capabilities({ terminalCursorReplayV1: true, hostKind: 'cli' }))).toBe(true);
+  });
+
+  it('resolves an older host through its kind', () => {
+    expect(usesTerminalCursorReplay(capabilities({ terminalCursorReplayV1: false, hostKind: 'cli' }))).toBe(true);
+    expect(usesTerminalCursorReplay(capabilities({ terminalCursorReplayV1: false, hostKind: 'desktop' }))).toBe(false);
+  });
+
+  it('stays on terminal_event while the host is unknown or local', () => {
+    expect(usesTerminalCursorReplay(capabilities({ hostKind: null }))).toBe(false);
+    expect(usesTerminalCursorReplay(undefined)).toBe(false);
+  });
 });

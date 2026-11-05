@@ -16,11 +16,17 @@ each missing what the other had.
 
 | Test | Contract it holds |
 |---|---|
+| `../../../infrastructure/markdown/markdownSections.test.ts`, `../../timeline/document.test.ts` | exact source reconstruction and equivalent Markdown ASTs across LF/CRLF/CR, lists/fences/tables/quotes/math, conservative reference/HTML fallback, canonical identities, Unicode search counts, bounded section estimates and no live completion repartition |
+| `../FlowTextBlock.test.tsx`, `../../../infrastructure/markdown/MarkdownCodeBody.test.tsx` | sealed live-prefix DOM/parser reuse, one shared decoration observer, selected-node retention, source-only oversized fences and cleanup; DOM fixtures, not native paint evidence |
+| `../../trajectory` | bounded long-session rail, stable range identities, keyboard preview vs selection, searchable summary pagination, legacy-peer gating, stale device/query rejection, canonical peer body navigation, shared detail components and bounded output; local DOM/transport fixtures, not native rendering or live remote evidence |
+| `../FlowChatWidthBoundary.test.tsx`, `../../../infrastructure/appearance/preferences/flowChatWidthStore.test.ts`, `../../../app/scenes/settings/pages/application/FlowChatWidthSettingsSection.test.tsx` | symmetric pointer/keyboard column resizing, token-derived bounds, cancellation/cleanup, narrow-pane restoration, persisted preference compatibility and settings/reset synchronization; supplied DOM geometry, not visual or live remote evidence |
 | `../../timeline/hostQueueProjection.test.ts`, `../../timeline/useHostQueueTimeline.test.tsx`, `../HostPendingQueuePanel.test.tsx` | host-accepted preview, canonical handoff/event ordering, stable keys, blocked recovery, old-host fallback, history-window visibility and device lease cleanup; fixtures only, no live remote transport evidence |
 | `TurnFooter.test.tsx`, `modelRoundItemMemo.test.ts` | latest-turn identity, hover/focus across virtual rows, lease cleanup, no projection churn and the existing completion reveal gate; behavior only, not visual proof |
 | `MessageExportControls.test.tsx` | flat copy/export menu, illustrated checkbox-card selection by pointer and keyboard, complete user text/reference rendering, omission or expansion of thinking, minimal branding, confirmation, pending/error feedback, cancel/Escape/outside dismissal and resident-trigger focus restoration; local DOM behavior, not image fidelity or remote-host validation |
+| `exportImageLayout.test.ts` | initiating reading-column width and font settings across wide/narrow panes, hidden sibling sessions, and unmounted source rows; measured DOM fixtures, not native visual or remote-host validation |
+| `../../utils/exportImageCapture.test.ts`, `../../utils/captureElementToDownloadsPng.test.tsx` | resolved-style selection without duplicated theme variables, opaque/transparent blank-raster rejection before logo compositing, bounded pixel reads, reduced-scale recovery, font readiness/embedding, timeout cleanup, and widget export save/error handling; rasterizer fixtures, not native WebView or remote-host validation |
 | `../../../shared/ui/Tooltip.test.tsx` | shared metric click opening, immediate scroll dismissal, delayed-open cancellation, viewport-exit observer cleanup and no automatic reopening; DOM/observer behavior only, not native scrolling or visual proof |
-| `../../utils/turnUsageMetrics.test.ts`, `TurnUsageMetrics.test.tsx`, `../../store/modernFlowChatStore.test.ts`, `../../../features/dispatch/DispatchJobObserver.test.ts` | separate request TTFT, effective-output rate excluding waiting and tools, complete multi-round timing, controller setup-row exclusion, legacy/missing/zero telemetry, speed boundaries and projection |
+| `../../utils/turnUsageMetrics.test.ts`, `TurnUsageMetrics.test.tsx`, `../../store/modernFlowChatStore.test.ts`, `../../../features/dispatch/DispatchJobObserver.test.ts` | separate request TTFT, request-to-completion output rate including provider wait and excluding tool execution, complete multi-round timing, controller setup-row exclusion, legacy/missing/zero telemetry, speed boundaries and projection |
 | `../../services/flow-chat-manager/EventHandlerModule.test.ts`, `../../services/flow-chat-manager/PersistenceModule.test.ts`, `../../store/FlowChatStore.test.ts` | live cache aggregation, optional-field persistence and legacy/current hydration; no remote-host claim |
 | `../../hooks/useSessionReadOnOpen.test.tsx` | opening and foreground results mark read; inactive scenes, background windows, unmounts, and device switches cannot acknowledge from stale views |
 | `../../selection/conversationExcerptInventory.test.ts` | source session/device isolation, consumed draft/queue marks, sent-number retention without source marks, stable unrelated snapshots |
@@ -29,7 +35,7 @@ each missing what the other had.
 | `../../selection/conversationExcerptEditing.test.ts` | draft/visible/queue edit and delete ownership, preserved prompt context and attachments, legacy payload handling, sending guards and sent snapshots with no mutation capability |
 | `../../services/flow-chat-manager/PendingQueueModule.test.ts` | persisted payload edits preserve queue order/identity, images and device isolation; sending entries reject edits |
 | `../../../infrastructure/markdown/useStreamingTextReveal.test.tsx` | appended-glyph-only fading, independent batch clocks and renderers, history/remount stability, stream completion and reduced motion |
-| `UserMessageItem.test.tsx` | sent and reloaded MCP references, mixed reference capsules, failed-message presentation, shared edit/rollback menu, Escape focus return, disabled reasons, and existing message action flows; local DOM fixtures, not remote transport evidence |
+| `UserMessageItem.test.tsx`, `userMessagePreview.test.ts` | preview-only layout with complete text/line endings/reference capsules preserved, expansion/collapse and full-message copy, sent and reloaded MCP references, failed-message presentation, shared edit/rollback menu, Escape focus return, disabled reasons, and existing message action flows; local DOM/CSS fixtures, not native width or remote transport evidence |
 | `UserMessageItemActions.test.ts` | metadata visibility, bubble outsets from the shared reading column, and normal-flow action layout |
 | `../../services/submittedMessagePresentation.test.ts` | explicit-send receipts, one-shot claims, expiry, device activation isolation, and initial status paint delay |
 | `useSubmittedMessageMotion.test.tsx` | submission clock, remount stability, StrictMode, reduced motion, focus, and surface-change cancellation; lifecycle only, not visual acceptance |
@@ -37,22 +43,32 @@ each missing what the other had.
 | `modelRoundItemMemo.test.ts` | settled rows refresh continuation labels and tool grouping hints without invalidating equivalent hints |
 | `flowChatTailFollow.test.ts` | the three-quarter reservation and `hold-tail` geometry |
 | `flowChatCollapseMotion.test.ts` | collapse does not move earlier content |
-| `useFlowChatFollowOutput.test.tsx` | one-shot new-Turn reveal, frame loop, blank crossing, resize realign, opening readback publication and ownership/lifecycle gates |
+| `useFlowChatFollowOutput.test.tsx` | one-shot new-Turn reveal, frame loop, blank crossing, atomic reflow across native clamping, preserved output lag, opening readback publication and ownership/lifecycle gates |
 | `../../tool-cards/useToolCardHeightContract.test.tsx` | tool cards reflow rather than compensate |
 | `flowChatHistoryBoundary.test.ts` | the screenful lead and physical boundary geometry |
+| `flowChatViewportGeometry.test.ts` | actual gutter centring, symmetric/omitted leading gutter and origin handoff without accumulated horizontal offset |
+| `../../services/RelaySessionHistory.test.ts`, `../../store/FlowChatStore.test.ts`, `../../services/flow-chat-manager/SessionModule.test.ts` | local/SSH one-Turn restore, paint-gated adjacent prefetch without tail replacement, partial reopen without full-history drain, replay staging, live updates during older reads, failed-read retention and retry; transport fixtures, not live remote evidence |
 | `flowChatHistoryPager.test.ts` | request/layout ordering, coalesced demand, prefetch without physical arrival, stale tickets, exhaustion and retry eligibility |
-| `useFlowChatViewportOwner.test.tsx` | synchronous write/shift accounting preserves reader travel and actual clamping |
+| `useFlowChatViewportOwner.test.tsx` | top/native coordinate conversion, older-range growth creates no reader demand, synchronous write/shift accounting preserves reader travel and actual clamping |
 | `flowChatLiveTailWindow.test.ts` | "does the transcript still reach the newest Turn" |
 | `flowChatViewportAnchor.test.ts` | anchor geometry and the DOM contract |
 | `useFlowChatViewportAnchor.test.tsx` | capture, restore, carry, the settle window |
-| `VirtualMessageList.session-boundary.test.tsx` | prepend compensation, consecutive paging with/without queued input, passive scroll suppression, navigation-target current Turn with gesture/follow/session handoff, and search placement only outside the readable viewport |
+| `useFlowChatLeadingExtent.test.tsx` | shared event geometry without repeated rectangle reads; fresh layout reads after resize and collection |
+| `VirtualMessageList.session-boundary.test.tsx` | prepend compensation, consecutive paging with/without queued input, passive scroll suppression, navigation-target current Turn with gesture/follow/session handoff, search placement only outside the readable viewport, and real viewport-register acknowledgement before trajectory details/highlights commit for user/search/model/folded-tool/history targets |
+| `VirtualMessageList.resize.test.tsx` | first-frame node and screen-position retention during repeated CSS-only width previews, release, fractional row geometry, native clamping, both row/container observer orders and delayed scroll delivery; completed follow and reader-owned positions on local/simulated peer surfaces, not native or live-transport evidence |
+| `VirtualMessageList.history-prepend.test.tsx` | full list with real virtualization/follow/ownership: stable row identity and screen offset through short/long completed answers, consecutive/dense prepends, delayed measurement/native scroll and reader-chosen positions on local/simulated peer surfaces; supplied row/DOM geometry, not native or live-transport evidence |
+| `VirtualMessageList.timeline-prepend.test.tsx`, `FlowChatPrependSnapshot.test.tsx` | production timeline whole/compound/single-Turn pages; native bottom-origin continuity before observer delivery and zero passive scroll writes, stable hydration lifetime, fractional measurements, bounded long histories, chronological navigation, legacy whole-text and section bookmark coordinates, live handoff and reader-selected block retention; supplied DOM geometry on local/simulated Peer, not native paint or live transport evidence |
+| `flowChatScrollbarMask.test.ts`, `VirtualMessageList.session-boundary.test.tsx` | idle gutter masking with symmetric, one-sided and overlay scrollbars; overflow restoration and content/viewport resizing without scroll writes; supplied DOM geometry, not native rendering or live remote evidence |
+| `VirtualMessageList.edgeFade.test.ts`, `VirtualMessageList.session-boundary.test.tsx` | repeated scroll-away/back restores the opaque top edge even when an earlier native listener synchronously commits a virtual window; fractional/top-overscroll offsets, one follow notification per event, current gesture callbacks and old-session cleanup; DOM/CSS contracts, not native repaint or live remote evidence |
 | `FlowChatOpeningBoundary.test.tsx` | opening-only activation/scroll isolation, bidirectional focus skipping, programmatic focus return, and reveal cleanup; DOM contracts only |
+| `HistorySessionLoadingBoundary.test.tsx` | shared 200 ms indicator delay, immediate settled cold/warm opens, off-screen user-message independence, settled-viewport gating, atomic text/tools/code presentation, interaction blocking, session/device cancellation, failure/inactive/resume/reduced-motion handling and no streaming/remount replay; DOM/animation fixtures, not native paint or live remote evidence |
 | `ModernFlowChatContainer.history-state.test.tsx` | history presentation and the submission event |
 | `flowChatViewportOwnership.test.ts` | the priority order, preemption, expiry |
 | `useFlowChatVirtualizer.test.ts` | the offsets-and-positions boundary |
-| `useFlowChatVirtualizer.measurement.test.tsx` | `measureRenderedItems` against a real virtualizer |
+| `useFlowChatVirtualizer.measurement.test.tsx` | `measureRenderedItems` against a real virtualizer, fractional normal-flow sizes and offscreen size reservations across reflow |
+| `useFlowChatVirtualizer.follow.test.tsx` | post-reveal history measurement shifts both follow coordinates before paint, stable tail row identity with delayed scroll delivery, and visible output still eases; real hooks with supplied DOM geometry, not native or live-peer evidence |
 | `useFlowChatVirtualizer.cascade.test.tsx` | bounded synchronous measurement notifications, cross-frame convergence, ordinary synchronous opening, reader takeover and StrictMode/session cleanup; real hooks with supplied geometry, not native paint evidence |
-| `useFlowChatVirtualizer.initial-window.test.tsx` | tail-first window, empty hydration, head default, one-time seed, user-scroll takeover, opening readbacks before native events, suspended viewport, measured-window reconciliation with delayed scroll/scroll-end delivery; supplied DOM geometry, not performance validation |
+| `useFlowChatVirtualizer.initial-window.test.tsx` | tail-first window, empty hydration, head default, one-time seed, user-scroll takeover, newly attached rows measured during gestures before observer delivery, smooth-aim target stability and immediate measurement on reader takeover, opening readbacks before native events, suspended viewport, measured-window reconciliation with delayed scroll/scroll-end delivery; supplied DOM geometry, not performance validation |
 | `useFlowChatVirtualizer.aim.test.tsx` | the re-aim, and giving it up on takeover |
 | `VirtualMessageList.layout.test.ts` | the item-height estimate and the spacer |
 | `FlowChatTurnRail.test.tsx` | single-marker emphasis, neighboring hover fan, independent keyboard focus, reduced motion, and rail navigation |
@@ -60,7 +76,8 @@ each missing what the other had.
 | `flowChatSearchDom.test.ts` | concrete text ranges and independent highlight ownership across rows and panes |
 | `../../selection/flowChatHighlights.test.ts` | exact text-parent scoping across Markdown nodes, shared markers, cleanup and document isolation |
 | `../../../infrastructure/appearance/adapters/ThemeTokenAppearanceAdapter.test.ts` | legacy accent projection, alpha preservation, theme changes and paint cleanup |
-| `../../selection/flowChatSelection.test.ts` | Markdown selection boundaries, source isolation, repeated text anchors, and changed sources |
+| `../../selection/flowChatSelection.test.ts` | Markdown selection boundaries, source isolation, repeated text anchors, changed sources and legacy table excerpt offsets across cell presentation wrappers |
+| `../../../infrastructure/markdown/MarkdownRenderer.test.tsx`, `../../../infrastructure/markdown/AsyncPrismSyntaxHighlighter.test.tsx` | compiled CSS and product DOM selection boundaries for mixed replies, hidden/runtime bodies, response/thinking tables and fences; table alignment/semantics, unchanged cross-message ranges, real Prism/fallback whitespace; not native selection paint evidence |
 | `../../selection/FlowChatSelectionBar.test.tsx` | annotation Dialog focus containment and return, frozen excerpts during scroll/resize, and comment submission |
 | `../../selection/useExcerptComposerActions.test.tsx` | main/side draft routing, focus after activation, ordinary child ownership, and stale surface rejection |
 | `../../../shared/utils/conversationExcerpt.test.ts` | quote deduplication, source-data framing, and legacy/additive presentation metadata |
@@ -69,13 +86,278 @@ each missing what the other had.
 | `SessionTreePopover.test.tsx` | Agent selection/cancellation/deletion menus, type-only metadata, active branch filtering with ancestor retention, restoring all agents, and the active empty state |
 | `../../services/deleteSessionTreeBranch.test.ts` | Unloaded descendant deletion in child-first order, remote location forwarding, failure retention, and device surface guards |
 
+The resize and production-timeline geometry fixtures cache recursive heights only
+within one synchronous read and deliver ResizeObserver entries only for changed
+boxes. Their caches never span a DOM/style/row-height change. This keeps repeated
+frame checks affordable on CI without relaxing position assertions or timeouts;
+test duration is not a product performance measurement.
+
+## Native performance fixtures
+
+When E2E is authorized, build Desktop and current frontend assets, then run the
+focused command documented in `tests/e2e/AGENTS.md`:
+
+```bash
+pnpm --dir tests/e2e exec wdio run ./config/wdio.flowchat-scroll-native.ts
+```
+
+The isolated packaged-app fixture exercises slow and fast bidirectional wheel
+input, history paging, draft/search navigation, session restoration, and repeated
+long/short session switches. Tool-heavy coverage opens actual shell/edit card
+controls, verifies their DOM was collected outside the window, then checks that
+expansion survives remounting. Long text searches target narrative/code contents.
+Each phase records frame intervals, mounted rows, rectangle reads, DOM scans,
+reversals and uncovered viewport geometry. The assertions are P95 < 34 ms,
+maximum < 100 ms, no reversal > 4 px, no empty frames or uncovered gaps > 48 px,
+fewer than 90 mounted rows, and stable post-gesture position. The maximum budget
+is explicitly configurable for different measurement hosts. Run without builds
+or other test suites competing for CPU.
+
+Set `OPENBITFUN_SCROLL_STREAMING=1` for the loopback SSE provider fixture. The real
+Agent runtime executes four shell commands and four file edits in its temporary
+workspace, then receives an initial ~40K Markdown burst followed by continuing
+output. The test asserts the actual tool results and edited files, continued
+reading position while output grows, reader-scroll frame budgets, return to
+latest, and completion. It does not simulate internal store events.
+
+JSON, screenshots, frontend revision and fixture configuration remain in the
+printed temporary evidence directory. `OPENBITFUN_SCROLL_DIAGNOSTICS=1` adds
+row geometry and scroll-write stacks; use that mode for attribution, not timing.
+macOS memory samples report a fixed set of newly created host/WebKit candidate
+PIDs. WKWebView does not expose `performance.memory`; RSS is not JS heap size,
+and a short switching test cannot establish the absence of a leak. The embedded
+driver holds strong element references; sampling releases only disconnected
+(stale) driver handles and reports their count. Application caches and data are
+never cleared and GC is not forced. Earlier uncorrected RSS switching runs were
+contaminated by the driver's retained React trees and are not product leak evidence.
+
+### Findings and architecture
+
+| Scenario | Observed cost / risk | Owning change |
+|---|---|---|
+| One Turn with hundreds of text/tool groups | Whole-Turn range expansion and tail pinning defeated content-block virtualization; 208 resident rows and repeated geometry reads | Resident DOM follows measured blocks; only the footer/tail shell and active interactions pin rows; direct key lookup for pins |
+| Large historical Markdown | A single row hides parse/highlight cost until the wheel crosses into a new giant message | Semantic source-range projection with bounded derived caches and complete canonical data |
+| Single huge fence or long tool output | Syntax-token DOM can remain large even with few virtual rows | Exact source retained, offscreen decoration released, indivisible chat fences over 24K characters use source-only rendering; existing terminal/card disclosure ownership retained |
+| Streaming and completion | Reprocessing a growing prefix and replay/scanning on historical remount | Stable live source owner, memoized sealed prefixes, suffix-only renderer updates, no settled-history reveal scan |
+| Paging, selection, search, reopen | Incorrect gap placement or changed coordinate systems can introduce blank space or move the reader | Tail prefix stays inside its CSS shell; existing viewport writer retained; canonical-to-section search mapping, additive excerpt/bookmark hints and legacy whole-text restoration |
+| Repeated switching | Retained token DOM, derived strings or observers can accumulate | Bounded section/search caches under the shared resource budget; observer cleanup; DOM residency soak assertions |
+
+### Local macOS measurements (2026-11-05)
+
+All results use an isolated native macOS arm64 Desktop and packaged frontend.
+They are individual local runs, not cross-machine or OS-trackpad guarantees.
+Artifacts live in the printed `openbitfun-flowchat-scroll-<suffix>` temporary
+folder. Preserve the frontend revision with every comparison. No remote PR was
+consulted, as requested for this local optimization.
+
+The first optimization stage compared `bundled-b2c0bd8f26cc91e1` with
+`bundled-555562062dd87321`:
+
+| Measurement | Before | First stage |
+|---|---:|---:|
+| 400-group tool-heavy Turn: peak mounted rows | 208 | 40 |
+| Same slow-up phase: rectangle reads | 57,613 | 5,750 |
+| Same slow-up phase: P95 | 27 ms | 19 ms |
+| 100 Turns × 80K rich text: initial DOM nodes | 13,157 | 1,855 |
+| Rich-text DOM after scrolling | 25,401 | 2,250 |
+| Rich-text worst fast-up frame | 419 ms | 76 ms |
+| Rich-text worst fast-down frame | 356 ms | 29 ms |
+
+These historical numbers are not the final-stage frame distribution. Earlier
+ordinary-history, 800-group, 100K single-fence and user-only-tail fixtures passed
+scroll/search/draft/restore/switch checks. Tool disclosure survived recycling.
+
+#### First large arrival and typical frames
+
+First arrival is isolated from actual tool startup. A matched ~123K initial
+burst on `555562062dd87321` (`6yViWc`) had 22 frame intervals: P50/P90/P95/P99
+16/19/19/142ms, one interval above 100ms (4.55%). The subsequent bounded-live,
+pixel-overscan stage measured:
+
+| Initial batch | Intervals | P50 / P90 / P95 / P99 | >33.33ms | >50ms | >100ms | Reader-scroll P95 / max |
+|---|---:|---|---:|---:|---:|---|
+| ~40K (`ilqcIY`) | 28 | 17 / 18 / 18 / 52ms | 1 (3.57%) | 1 | 0 | 23 / 34ms |
+| ~123K (`yESAUv`) | 27 | 17 / 23 / 32 / 55ms | 1 (3.70%) | 1 | 0 | 19 / 29ms |
+| ~395K (`3ypK5T`) | 27 | 17 / 18 / 20 / 58ms | 1 (3.70%) | 1 | 0 | 22 / 41ms |
+
+These runs executed four real shell commands and four real edits, retained the
+reader position while output grew, and persisted every paragraph. Most frames
+were already 16–18ms before optimization; the improvement is removal of the
+large isolated stall, not a several-fold speedup of every frame. The earlier
+160ms combined tool/startup sample is not comparable to isolated text arrival.
+The fixture now also records a separate 24-paragraph sustained-follow phase.
+
+Final stage build `6846baf21c4d237e` (`lj3Y1Z`) reran the ~123K case after
+animation ownership and excerpt fixes. First arrival (27 intervals) was
+P50/P90/P95/P99 17/19/30/54ms: one >33.33ms and >50ms frame (3.70%), zero >100ms.
+Sustained follow (131 intervals) was 17/18/19/27ms, max 29ms; active reader scroll
+(43 intervals, excluding settle) was 17/17/17/25ms, max 25ms. Neither steady phase
+had a >33.33ms frame. Eight real tools succeeded, all paragraphs persisted and
+the reader anchor remained exactly unchanged while output grew.
+
+#### Opening sessions
+
+Actual nav-click timestamps exclude WebDriver polling and the scroll-settle wait.
+For 100 Turns × 80K rich text, each side has one first UI entry and 11 warm opens.
+First UI entry is not necessarily cold storage: startup can prehydrate it.
+P95 below uses nearest rank; with 11 samples it equals the maximum.
+
+| Click to interactive | Before (`KS043n`, `1a1f4b7708960a2d`) | Readiness fix (`HsTje3`, `db8f2f725c193a0b`) |
+|---|---:|---:|
+| Long session, first UI entry | 831ms | 301ms |
+| Long session, warm P50 / P90 / P95 | 764 / 785 / 786ms | 205 / 209 / 220ms |
+| Short session, first UI entry | 805ms | 237ms |
+| Short session, warm P50 / P90 / P95 | 762 / 777 / 782ms | 190 / 204 / 206ms |
+
+The old readiness check waited for the offscreen/unmounted user bubble, exhausting
+30 RAF retries. These measurements used a mounted-content/bookmark check. Main
+subsequently removed that polling entirely in `06e3472a6`; this branch retains
+main's settled-viewport handoff. The measurements below predate that integration
+and have not been repeated on the rebased branch.
+The sampled backend restore took only 26–31ms, conversion 0ms and store commit
+2ms; it was the UI readiness wait that dominated this fixture. This does not
+establish every provider, cold-disk, remote or whole-document opening latency.
+
+Final build `6846baf21c4d237e` (`c0JhwF`) passed 24 actual-click openings with no
+readiness-timeout trace. Long first entry was 303ms and warm P50/P90/P95
+198/215/216ms; short first entry was 223ms and warm 195/197/198ms. Each warm
+distribution contains 11 samples. The original paired comparison remains above
+so run-to-run noise and percentile definitions are visible.
+
+#### Fast scrolling and paint
+
+Native traces identified 83/166px implicit scroll clamps when code intersections
+replaced complete `pre` trees. Bounded rows now retain their decoration for their
+mounted lifetime. Three runs of `6b3c89a56a57fcc3` (`6mVGVk`, `iPqSk4`, `mYHsWi`)
+had no painted reversal over 4px or geometric white gap, but fast-up P95 was 36ms.
+
+The eight-leaf overscan cap (`0ee4a7b250c892ca`) was then measured three times
+(`4pDYaH`, `FETjI5`, `akCdkm`). Active-wheel samples exclude 24 idle settling frames:
+
+| Phase | Active intervals/run | P50 | P95 range | >33.33ms | Maximum |
+|---|---:|---:|---:|---:|---:|
+| Reading up/down | 122–124 | 17ms | 18–19ms | 0–0.8% | 21–40ms |
+| Fast up, 1,800px steps | 125–128 | 17ms | 34–36ms | 5.5–7.2% | 74–79ms |
+| Fast down, 1,800px steps | 124–126 | 17ms | 23–26ms | 1.6% | 44–61ms |
+
+Peak tool rows fell to 34. No run had a painted reversal >4px or uncovered gap
+>48px. Two of the three runs still failed the unchanged whole-phase P95 <34ms
+gate. Fast-up consecutive stalls lasted 231–256ms in aggregate: this remains an
+optimization target, and the stage must not be described as universally smooth.
+CPU-contended runs (`6XF2Bv`, `Dqp3ur`) are retained but excluded from isolated
+performance conclusions; an unrelated encoder was consuming multiple cores.
+
+The separate native-pixel run `9Plic3` compared 128 immediate/settled screenshot
+pairs at ±1,800px boundaries. 127 pairs had stable geometry, covering 501 text
+fragments; their maximum changed-pixel ratio was zero. One moving-geometry pair
+was excluded explicitly. This is sampled WKWebView paint evidence from the
+bounded-live stage, not every compositor frame or a final-build OS-inertia test.
+
+#### Memory and animation ownership
+
+Stale WebDriver element handles are released on both sides; product caches and GC
+are never manipulated. The first-stage 16-cycle comparison reduced the largest
+WebKit candidate RSS from 933MiB to 576MiB; 64 cycles reached 776MiB while DOM
+stayed 1,920/1,877. Later 128-cycle native and single-eval soaks both showed RSS
+movement/growth despite stable DOM and bounded caches. Repeated driver compilation
+therefore cannot explain all of it.
+
+The `6b3c89a56a57fcc3` 256-cycle single-eval soak (`u3Yg3M`, seven minutes including
+45s idle) ended at 1,811/1,795 long/short DOM nodes, 1,099,346 logical budget bytes,
+and one weakly observed detached transcript root. Largest launch-time WebKit
+candidate RSS started at 479MiB, peaked at 881MiB and ended at 704MiB. Concurrent
+CPU/memory load and explicit native allocation inspection affect residency, so
+this is not a clean process-memory plateau proof. Native allocated bytes rose.
+
+Animation diagnostics (`eXMrzb`) found 126 finished warm-session animations,
+127 cancelled loading effects and 126 cancelled Spinner effects still alive after
+64 switches and 30s idle. The cleanup experiment (`cjl7uH`, `0e5f99be834eff7f`)
+explicitly cancelled and detached their effects: all 379 old effect targets were
+released; only the current Spinner retained its target. Old animation wrappers
+were still observable. End RSS was 669MiB before / 622MiB after, peak 761/697MiB,
+with different starting RSS (660/505MiB); this small sample is not a causal
+measurement of total savings. The native effect-target result is the stronger
+ownership evidence. The pre-fix diagnostic's DOM gate missed by one node because
+its first sample preceded async syntax decoration; the fixture now compares
+cycles 8 onward without increasing the 64-node tolerance and retains cold samples.
+
+The extended post-cleanup soak (`9x3ypp`, same frontend) completed 256 cycles in
+6m10s including 45s idle. All 1,531 old animation effects had no target; only the
+current Spinner remained attached. Long/short DOM was 1,811/1,795, budget bytes
+remained 1,099,346 and detached transcript roots reached zero after idle (512
+roots observed). RSS went from 605MiB to 686MiB, with quarter medians
+609/647/657/678MiB: growth is reduced but not zero, and no plateau is established.
+An in-run native heap sample found 4 KeyframeEffects / 4 BlendingKeyframes versus
+1,561 / 1,561 in the earlier pre-cleanup native sample. Those samples have
+different cycle counts; they establish release of effect graphs, not an exact
+per-cycle byte-saving ratio. Animation wrappers remained observable and require
+separate engine/lifecycle investigation. DOM/resource budgets, native allocation
+and RSS are different measures; none alone proves that the JS heap has no leak.
+
+### Compatibility and verification status
+
+Canonical messages, tool payloads, runtime execution and storage/transport shapes
+are not truncated or rewritten. Presentation caches alone are evictable. Source
+sections preserve complete fences, lists, tables, math and reference dependencies.
+Legacy bookmark/quote navigation can materialize the complete source. New section
+hints are additive; quote text remains the older-host fallback. Identical excerpts
+in different sections have distinct annotation identities. Whole-source fallback
+must reject ambiguous section-local offsets instead of choosing an earlier copy.
+Precise new-section navigation on an actual older client remains unverified.
+
+The focused 31-file suite passed 416 tests before the final ownership review;
+subsequent eight-leaf tests (15), loading/container tests (20), and shared
+Spinner/brand/registry tests (13) passed. Final review passed 331 tests across
+25 files covering virtualizer, session boundary, selection and excerpt contracts;
+Web UI TypeScript and three frame-statistics tests also passed. Final changed-source
+ESLint has zero errors and one Fast Refresh warning for the exported excerpt hook
+sharing a component file. Earlier MiniApp style projection and all 28 color-governance surfaces passed. No audit
+baseline was raised. `check:web` still has four pre-existing typography violations
+in `DeviceWorkspaceSections.scss` and `SceneBar.scss`. Focused E2E typing has
+pre-existing shared-driver/workspace-helper errors, documented separately from
+changed-file errors; final focused E2E typing reported no changed-FlowChat-file errors.
+
+Native runs cover local macOS only. Windows, Linux/WebKitGTK, live SSH workspaces,
+relay Remote Control, Peer Device and Detached Dispatch were not exercised.
+Local/simulated-peer unit fixtures are not live remote evidence. Whole semantic
+documents and individual huge lists/fences remain potential expensive units.
+
 ## Manual
+
+For content-width resizing, check both edge hit areas, subtle hover/focus paint,
+composer/transcript alignment, rail and scrollbar gaps, minimum/maximum widths,
+light/dark and reduced motion, long virtualized history, and restart persistence.
+Local, remote-workspace and peer transcripts share controller-local appearance;
+live SSH/Peer, mobile Remote Control and Detached Dispatch were not exercised by
+the DOM fixtures and need separate scenario acceptance where applicable.
 
 For text selection, check the floating toolbar and right-click actions in the
 native WebView; keyboard selection, Tab, Escape, and Ctrl/Cmd+Alt+B; both main
 and ordinary side transcripts; multiline Markdown/code; dark/light and forced
 colors; narrow AuxPane layouts; long virtualized history; and switching targets
-with existing drafts. Remote workspace and desktop-peer sends, older-host quote
+with existing drafts. Drag across an assistant reply, a short right-aligned user
+bubble and the next reply in both directions: turn padding, paragraph gaps and
+the empty lane beside the bubble must stay unpainted, with full text still
+selectable/copyable. Include direct model rounds, timeline content/group members,
+parallel tool capsules, expanded user messages and the full-width edit composer;
+check that row height, action alignment and outlying controls remain intact.
+In a single reply, include several paragraphs, bold/link runs, wrapped lines,
+tight and loose nested lists. Select through the last paragraph in either
+direction: the right-hand blank and inter-paragraph/list gaps must stay clear.
+Repeat inside a collected group, retry history and a subagent projection, and
+confirm hidden reply bodies remain hidden while their source text stays mounted.
+For tables, include short/long cells, left/center/right alignment, inline links,
+code and emphasis, wrapped rows, and horizontal overflow in a narrow pane.
+Select across cells and rows in both directions: padding and unused row height
+must stay clear, while text remains selected and copied with native table
+semantics. Locate a table excerpt saved before the cell-wrapper change.
+For fences, select from the preceding paragraph through the following paragraph,
+then partially within code. Include labelled/unlabelled one-line fences,
+indented multiline code with blank lines, syntax tokens, long scrollable lines,
+streaming responses, completed responses and thinking. Check both outer fence
+insets and right-hand line blanks stay unpainted, source whitespace survives
+selection/copy, and line hover/copy controls remain usable.
+Remote workspace and desktop-peer sends, older-host quote
 fallbacks, disconnect recovery, and CLI-peer/dispatch unsupported states require
 separate real-host checks. Unit fixtures are not evidence of those scenarios.
 Annotation editing, draft management, and sent annotations use the public Dialog
@@ -101,7 +383,10 @@ without changing size or selection; only the checkbox indicates the selected
 output. Check reduced motion and touch input separately. Check the captured image's
 user bubble against the live message, full long text/reference labels, minimal
 brand/date header and attribution footer, and absence of all thinking items/icons
-in compact output. The same presentation
+in compact output. Verify that many model rounds retain their inter-item gaps
+without accumulating empty space above the footer, and that long tool summaries
+respect the horizontal inset. Exercise both system and bundled font profiles on
+macOS, Windows, and Linux. The same presentation
 on remote-workspace and peer-host sessions remains a real-host check.
 
 **Agents must not perform UI interaction verification.** Report these as pending
@@ -109,6 +394,21 @@ unless a human confirms them. They are grouped so that adding a check to one
 group does not renumber the others.
 
 ### Opening a session
+
+Check the sparse history placeholder in light/dark themes and wide/narrow panes:
+the left lines retain a normal 24px height, the upper-right user bubble has equal
+rounded corners and no border, and the composition shares one soft light field.
+Open text-only, tool-only and long-code histories, including a restored bookmark.
+The abstract layer must disappear completely before real content reveals; no
+thin-line intermediate state or jump in the reading position is acceptable.
+Switch sessions/devices rapidly, fail and retry a load, and toggle reduced
+motion. Local, remote-workspace, Peer Device and detached-dispatch observer
+histories need separate real-host checks; mobile Remote Control uses its own UI.
+
+For the top edge fade, scroll down and all the way back to the first message
+several times. Its first line must be as readable as on initial open; leaving
+the top must restore the fade. Check native WebViews, light/dark themes and
+forced colors. Automated DOM/CSS checks do not establish this paint behavior.
 
 1. Session open lands at the end of the transcript, not inside the spacer.
 2. Open a long `isPartial` session and leave it alone. Nothing may page in
@@ -128,6 +428,15 @@ group does not renumber the others.
    not enter host suspension or move to the tail.
 
 ### Submitting and revealing
+
+For user-message disclosure, compare a short message with a long message whose
+first lines are short and later lines are wide. The collapsed preview stays
+compact; expanding grows leftward only as needed and downward, keeping its right
+edge aligned. Collapse restores the compact width. Repeat with images, reference
+capsules, failed messages, editing and a narrow main/side pane. Verify long
+expanded text still scrolls within its height limit. Local, remote-workspace,
+Peer Device and detached-dispatch observer views require separate real-host
+checks; mobile Remote Control uses its own message renderer.
 
 1. A newly submitted Turn performs one physical-bottom placement, exposing the
    full resident spacer while leaving at least one quarter of the transcript
@@ -259,11 +568,14 @@ group does not renumber the others.
 
 ### History paging
 
-1. Open a session long enough to be `isPartial` — the loaded tail is shorter
-   than the viewport, so it pages older Turns in on its own. No jump-to-latest
-   bar should appear, and streaming output should be followed. Then send a
-   message: it must appear immediately in the one-shot tail reveal, with the
-   history above neither moving nor reloading.
+1. On local and peer devices, open a long session whose last Turn is short.
+   Only that Turn starts at the top, with blank space below; background history
+   must not fill the blank. Repeat with a long last Turn: its end is visible.
+   After the first presentation, any adjacent prefetch adds content above without
+   remounting or moving the visible rows. Switch away and back: no full-history
+   drain or new placement. Test an older peer host separately for its compatible,
+   potentially slower record-page fallback. Then send a message: it appears in
+   the one-shot live-tail reveal without reloading the history above.
 2. Scroll up to a junction. **One** page loads, the Turn under the cursor stays
    where it is, and paging stops until the head is reached again. Then keep
    going: every junction must behave the same way all the way to the first
@@ -307,6 +619,13 @@ group does not renumber the others.
    hand while a distant hit is resolving and confirm search stops positioning.
 
 ### Turn navigation
+
+For trajectory navigation, check user, model, folded-tool and historical-round
+targets in light/dark themes. The target receives a temporary full-item accent
+fill; the short tool marker sits left of its icon. Rail selection and right-panel
+content change only after successful positioning. These native visual checks
+remain manual; DOM geometry and transport fixtures do not establish native or
+live-remote rendering behavior.
 
 At rest the rail's dark emphasis belongs only to its current step
 (`aria-current`), not to every Turn visible in the transcript. Hover temporarily

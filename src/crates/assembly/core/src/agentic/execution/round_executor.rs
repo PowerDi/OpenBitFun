@@ -1021,6 +1021,7 @@ impl RoundExecutor {
                 .map_err(|error| OpenBitFunError::AIClient(error.to_string()).with_channel_bound_replay())?;
             let mut usage_context =
                 openbitfun_services_core::token_usage::types::ModelRequestUsageContext {
+                    context_composition: context.context_composition.clone(),
                     version: 1,
                     round_id: round_id.clone(),
                     attempt_id: attempt_id.clone(),
@@ -1253,6 +1254,18 @@ impl RoundExecutor {
 
             // Check cancellation token before calling stream processing.
             if cancel_token.is_cancelled() {
+                // The request was already accepted by the provider, so this
+                // attempt is as billable as one cancelled mid-send or
+                // mid-stream and must leave the same ledger evidence.
+                self.record_attempt_usage(
+                    &context,
+                    &usage_context,
+                    None,
+                    openbitfun_services_core::token_usage::types::ModelRequestOutcome::Cancelled,
+                    context_window,
+                    is_subagent,
+                )
+                .await;
                 Self::complete_model_exchange_trace(
                     trace_config.as_ref(),
                     trace_handle.as_ref(),
@@ -1838,21 +1851,31 @@ impl RoundExecutor {
             !stream_result.tool_calls.is_empty()
         );
 
+        // The same facts ride on the assistant message so the durable Turn
+        // round keeps them even when no client checkpointed this event.
+        let round_timing = crate::agentic::core::message::ModelRoundTimingMetadata {
+            duration_ms: Some(elapsed_ms_u64(round_started_at)),
+            first_chunk_ms: stream_result.first_chunk_ms,
+            first_visible_output_ms: stream_result.first_visible_output_ms,
+            stream_duration_ms: Some(stream_processing_ms),
+            ttft_ms,
+            attempt_count: Some(lifecycle.attempts_started()),
+        };
         self.emit_event(
             AgenticEvent::ModelRoundCompleted {
                 session_id: context.session_id.clone(),
                 turn_id: context.dialog_turn_id.clone(),
                 round_id: round_id.clone(),
                 has_tool_calls: !stream_result.tool_calls.is_empty(),
-                duration_ms: Some(elapsed_ms_u64(round_started_at)),
+                duration_ms: round_timing.duration_ms,
                 provider_id: None,
                 model_config_id: context.model_config_id.clone(),
                 effective_model_name: context.effective_model_name.clone(),
-                first_chunk_ms: stream_result.first_chunk_ms,
-                first_visible_output_ms: stream_result.first_visible_output_ms,
-                stream_duration_ms: Some(stream_processing_ms),
-                ttft_ms,
-                attempt_count: Some(lifecycle.attempts_started()),
+                first_chunk_ms: round_timing.first_chunk_ms,
+                first_visible_output_ms: round_timing.first_visible_output_ms,
+                stream_duration_ms: round_timing.stream_duration_ms,
+                ttft_ms: round_timing.ttft_ms,
+                attempt_count: round_timing.attempt_count,
                 failure_category: None,
                 token_details: stream_result
                     .usage
@@ -1909,6 +1932,7 @@ impl RoundExecutor {
                     model_config_id: context.model_config_id.clone(),
                     effective_model_name: context.effective_model_name.clone(),
                     routing: lifecycle.routing.clone(),
+                    timing: Some(round_timing),
                 });
 
             debug!("Returning RoundResult: has_more_rounds=false");
@@ -1985,6 +2009,7 @@ impl RoundExecutor {
                 model_config_id: context.model_config_id.clone(),
                 effective_model_name: context.effective_model_name.clone(),
                 routing: lifecycle.routing.clone(),
+                timing: Some(round_timing),
             });
 
         // Publish the semantic assistant response before tool execution so
@@ -2039,6 +2064,7 @@ impl RoundExecutor {
                 agent_type: context.agent_type.clone(),
                 workspace: context.workspace.clone(),
                 primary_model_facts: context.primary_model_facts.clone(),
+                model_client: Some(ai_client.clone()),
                 context_vars: context.context_vars.clone(),
                 subagent_parent_info,
                 permission_delegation,
@@ -2751,6 +2777,7 @@ pub(super) mod tests {
 
     pub(in crate::agentic::execution) fn test_round_context() -> RoundContext {
         RoundContext {
+            context_composition: None,
             session_id: "session-1".to_string(),
             subagent_parent_info: None,
             permission_delegation: None,
@@ -6473,6 +6500,12 @@ pub(super) mod tests {
             let source = test_account_source(vec![primary.client(), backup.client()], false);
             let mut context = test_round_context();
             context.account_client_source = Some(source);
+            let composition = openbitfun_core_types::UsageContextBreakdown {
+                system_prompt: 3,
+                conversation: 7,
+                ..Default::default()
+            };
+            context.context_composition = Some(composition.clone());
             let mut executor = test_round_executor();
             executor.usage_service = Some(service.clone());
             let result = executor
@@ -6497,6 +6530,11 @@ pub(super) mod tests {
             };
             let records = service.query_records(query()).await.unwrap();
             assert_eq!(records.len(), 2);
+            assert!(records.iter().all(|record| record
+                .request_context()
+                .unwrap()
+                .context_composition
+                == Some(composition.clone())));
             let failed = records
                 .iter()
                 .find(|record| record.request_context().unwrap().attempt_index == 1)
@@ -7634,6 +7672,93 @@ pub(super) mod tests {
             AgenticEvent::ModelRoundAttemptSuperseded { .. }
         )));
         assert_eq!(server.requests.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cancellation_racing_stream_open_still_records_the_sent_attempt() {
+        use crate::service::token_usage::{TimeRange, TokenUsageQuery, TokenUsageService};
+        use openbitfun_services_core::token_usage::types::ModelRequestOutcome;
+        use std::sync::atomic::Ordering;
+
+        // Cancel while the response headers are already buffered but the round
+        // has not been polled since. Whichever branch observes cancellation, the
+        // provider accepted the request, so its attempt must reach the ledger.
+        // `select!` picks randomly between two ready branches; repeat so the
+        // post-open branch is exercised.
+        for iteration in 0..16 {
+            // Delay the headers so polling can pause before they arrive.
+            let server = RetryTestServer::with_timing_options(
+                vec![(200, String::new())],
+                true,
+                None,
+                Some((Duration::from_millis(50), Duration::ZERO)),
+            );
+            let dir = tempfile::tempdir().unwrap();
+            let ledger = Arc::new(
+                TokenUsageService::new_in_base_dir(dir.path().join("ledger"))
+                    .await
+                    .unwrap(),
+            );
+            let mut executor = test_round_executor();
+            executor.usage_service = Some(ledger.clone());
+            let token = CancellationToken::new();
+            executor.register_cancel_token("turn-1", token.clone());
+            let execution = executor.execute_round(
+                server.client(),
+                test_round_context(),
+                vec![super::AIMessage::user("Cancel at stream open".into())],
+                None,
+                None,
+            );
+            tokio::pin!(execution);
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while server.requests.lock().unwrap().is_empty() {
+                    tokio::select! {
+                        biased;
+                        _ = &mut execution => panic!("round finished before cancellation"),
+                        _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+                    }
+                }
+                while server.opened_streams.load(Ordering::SeqCst) != 1 {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                // Let the connection task parse the buffered response head.
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            })
+            .await
+            .expect("fixture must open the stream");
+            token.cancel();
+            let result = tokio::time::timeout(Duration::from_secs(5), execution)
+                .await
+                .expect("cancelled round must stop");
+            assert!(matches!(result, Err(OpenBitFunError::Cancelled(_))));
+            let records = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let records = ledger
+                        .query_records(TokenUsageQuery {
+                            model_id: None,
+                            session_id: None,
+                            time_range: TimeRange::All,
+                            time_zone: None,
+                            limit: None,
+                            offset: None,
+                            include_subagent: true,
+                        })
+                        .await
+                        .unwrap();
+                    if !records.is_empty() {
+                        break records;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("iteration {iteration}: cancelled attempt has no record"));
+            assert_eq!(records.len(), 1);
+            let attempt = records[0].request_context().unwrap();
+            assert_eq!(attempt.outcome, ModelRequestOutcome::Cancelled);
+            assert!(!records[0].usage_is_known());
+        }
     }
 
     #[tokio::test]

@@ -5,6 +5,7 @@ import { readableModelPools, supportsModelPools, type ModelPoolDefinition, type 
 import { useConfigSeed } from '@/infrastructure/config/hooks/useConfigSeed';
 import ReviewCapacitySection from '@/app/scenes/settings/pages/ai/ReviewCapacitySection';
 import ToolJsonRepairSection from '@/app/scenes/settings/pages/ai/ToolJsonRepairSection';
+import GenUILibrarySection from './GenUILibrarySection';
 import '@/app/scenes/settings/pages/shared/RuntimeSettings.scss';
 import { useSceneStore } from '@/app/stores/sceneStore';
 import {
@@ -41,7 +42,7 @@ type DescribedSelectOption = SelectOption & { description?: string };
 const log = createLogger('ExecutionSettingsPage');
 
 type SubagentBatchExecutionPolicy = 'safe_only' | 'force_parallel' | 'serial';
-type ToolPresentationMode = 'native' | 'ptc';
+type ToolPresentationMode = 'native' | 'ptc' | 'ptc_python';
 
 const DEFAULT_SUBAGENT_BATCH_EXECUTION_POLICY: SubagentBatchExecutionPolicy = 'force_parallel';
 
@@ -107,7 +108,10 @@ const ExecutionSettingsPage: React.FC = () => {
   const [deferredToolLoadingConfigSaving, setDeferredToolLoadingConfigSaving] = useState(false);
 
   const [toolPresentationMode, setToolPresentationMode] = useState<ToolPresentationMode>(
-    seed.get<ToolPresentationMode | null>('ai.tool_presentation_mode', 'native') === 'ptc' ? 'ptc' : 'native',
+    (() => {
+      const value = seed.get<ToolPresentationMode | null>('ai.tool_presentation_mode', 'native');
+      return value === 'ptc' || value === 'ptc_python' ? value : 'native';
+    })(),
   );
 
   const [toolPresentationModeSaving, setToolPresentationModeSaving] = useState(false);
@@ -144,8 +148,9 @@ const ExecutionSettingsPage: React.FC = () => {
   };
 
   const handleToolPresentationModeChange = async (value: string | number | (string | number)[]) => {
-    const nextMode: ToolPresentationMode = String(Array.isArray(value) ? value[0] : value) === 'ptc'
-      ? 'ptc'
+    const selected = String(Array.isArray(value) ? value[0] : value);
+    const nextMode: ToolPresentationMode = selected === 'ptc' || selected === 'ptc_python'
+      ? selected
       : 'native';
     if (nextMode === toolPresentationMode) return;
     const previousMode = toolPresentationMode;
@@ -341,7 +346,11 @@ const ExecutionSettingsPage: React.FC = () => {
         ? '180'
         : loadedUserQuestionTimeout === null ? '0' : String(loadedUserQuestionTimeout));
       setSubagentBatchExecutionPolicy(normalizeSubagentBatchExecutionPolicy(loadedSubagentBatchExecutionPolicy));
-      setToolPresentationMode(loadedToolPresentationMode === 'ptc' ? 'ptc' : 'native');
+      setToolPresentationMode(
+        loadedToolPresentationMode === 'ptc' || loadedToolPresentationMode === 'ptc_python'
+          ? loadedToolPresentationMode
+          : 'native',
+      );
 
       hasLoadedPageDataRef.current = true;
     } catch (error) {
@@ -417,6 +426,7 @@ const ExecutionSettingsPage: React.FC = () => {
                   options={[
                     { value: 'native', label: t('toolPresentation.native') },
                     { value: 'ptc', label: t('toolPresentation.ptc'), tooltip: t('toolPresentation.ptcTooltip') },
+                    { value: 'ptc_python', label: t('toolPresentation.ptcPython'), tooltip: t('toolPresentation.ptcPythonTooltip') },
                   ]}
                   disabled={toolPresentationModeSaving}
                   onValueChange={handleToolPresentationModeChange}
@@ -561,6 +571,7 @@ const ExecutionSettingsPage: React.FC = () => {
           </ConfigPageSection>
 
           <ToolJsonRepairSection />
+          <GenUILibrarySection />
           <ReviewCapacitySection />
 
         </>

@@ -1,4 +1,5 @@
 import { CapsulePreview } from "../preview/CapsulePreview";
+import { ColorPickerPreview } from "../preview/ColorPickerPreview";
 import { Fragment, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { ComponentOverview } from "../preview/ComponentOverview";
 import { getComponentPresentation, getInitialPreviewState, hasComponentOverview } from "../preview/componentPresentation";
@@ -539,6 +540,7 @@ export function ComponentDetailPage({
     if (component.name === "Checkbox" || component.name === "Radio") return `import { ${component.name} } from "@openbitfun/ui";\n\n<${component.name}${component.name === "Checkbox" ? ` appearance="${checkboxAppearance}"` : ""} label="${t("components.preview.notifications")}" defaultChecked />`;
     if (component.name === "NumberBadge") return `import { NumberBadge } from "@openbitfun/ui";\n\n<NumberBadge value={${JSON.stringify(numberBadgeValue)}} />;`;
     if (component.name === "NumberInput") return 'import { useState } from "react";\nimport { NumberInput } from "@openbitfun/ui";\n\nfunction Example() {\n  const [value, setValue] = useState(8);\n  return <NumberInput value={value} onValueChange={setValue} />;\n}';
+    if (component.name === "ColorPicker") return 'import { ColorPicker } from "@openbitfun/ui";\n\n<ColorPicker onValueChange={setColor} />';
     if (component.name === "Empty") return `import { Empty } from "@openbitfun/ui";\n\n<Empty title="${t("components.preview.cardTitle")}" description="${t("components.preview.cardDescription")}" />`;
     if (flowChatPreview) {
       return flowChatPreview.codeSample(t);
@@ -666,7 +668,7 @@ export function ComponentDetailPage({
       return `import { Combobox } from "@openbitfun/ui";\n\n<Combobox\n  aria-label="Mode"\n  onValueChange={setMode}\n  options={[\n    { label: "Ask", value: "ask" },\n    { label: "Plan", value: "plan" },\n    { disabled: true, label: "Agent", value: "agent" },\n  ]}\n  value={mode}\n/>`;
     }
     if (component.name === "Spinner") {
-      return `import { Spinner } from "@openbitfun/ui";\n\n<Spinner aria-label="${t("detail.loading")}" size="${size}" variant="${previewState === "bars" ? "bars" : "matrix"}" />`;
+      return `import { Spinner } from "@openbitfun/ui";\n\n<Spinner aria-label="${t("detail.loading")}" size="${size}" variant="${previewState === "bars" ? "bars" : "logo"}"${previewState === "reduced-motion" ? " active={false}" : ""} />`;
     }
     if (component.name === "MultiSelect") {
       return `import { MultiSelect } from "@openbitfun/ui";\n\n<MultiSelect\n  aria-label="Modes"\n  onValueChange={setModes}\n  options={[\n    { label: "Ask", value: "ask" },\n    { label: "Plan", value: "plan" },\n    { disabled: true, label: "Agent", value: "agent" },\n  ]}\n  value={modes}\n/>`;
@@ -1285,6 +1287,7 @@ export function ComponentDetailPage({
       );
     }
     if (component.name === "NumberInput") return <NumberInputPreview key={state} state={state} />;
+    if (component.name === "ColorPicker") return <ColorPickerPreview key={state} state={state} />;
     if (component.name === "NumberBadge") return <NumberBadge value={numberBadgeValue} />;
     if (component.name === "Empty") {
       return (
@@ -1881,9 +1884,9 @@ export function ComponentDetailPage({
       return (
         <Spinner
           aria-label={t("detail.loading")}
-          className={state === "reduced-motion" ? "design-preview-reduced-motion" : undefined}
+          active={state !== "reduced-motion"}
           size={size}
-          variant={state === "bars" ? "bars" : "matrix"}
+          variant={state === "bars" ? "bars" : "logo"}
         />
       );
     }

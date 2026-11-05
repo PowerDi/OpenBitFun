@@ -35,18 +35,6 @@ fn named_agent(id: &str, name: &str) -> crate::agentic::agents::AgentInfo {
 }
 
 #[test]
-fn agent_name_reference_catalog_exposes_the_display_name_and_escapes_markup() {
-    let available = vec![named_agent("agent-internal", "Research & <review>")];
-    let listing = AgentExecutionTool::format_agent_descriptions(&available);
-    assert!(listing.contains("<agent type=\"agent-internal\">"));
-    assert!(listing.contains("<name>Research &amp; &lt;review&gt;</name>"));
-    assert!(listing.contains("<tools>Read</tools>"));
-    assert!(AgentSpawnTool
-        .render_agent_spawn_description()
-        .contains("Users reference agents by name"));
-}
-
-#[test]
 fn external_subagent_validation_accepts_model_emitted_casing() {
     let available = vec!["FileFinder".to_string(), "explore".to_string()];
 
@@ -127,6 +115,7 @@ fn test_tool_context(agent_type: &str) -> ToolUseContext {
         dialog_turn_id: Some("turn-1".to_string()),
         workspace: None,
         loaded_deferred_tool_specs: Vec::new(),
+        model_client: None,
         primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
         custom_data: HashMap::new(),
         computer_use_host: None,
@@ -969,6 +958,7 @@ async fn call_impl_rejects_nested_subagent_delegation() {
         dialog_turn_id: Some("turn-1".to_string()),
         workspace: None,
         loaded_deferred_tool_specs: Vec::new(),
+        model_client: None,
         primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
         custom_data: HashMap::from([
             (
@@ -1117,6 +1107,7 @@ async fn description_with_context_filters_restricted_subagents_by_parent_agent()
         dialog_turn_id: None,
         workspace: None,
         loaded_deferred_tool_specs: Vec::new(),
+        model_client: None,
         primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
         custom_data: HashMap::new(),
         computer_use_host: None,
@@ -1154,6 +1145,7 @@ async fn prompt_stability_description_with_context_renders_available_agents_in_s
         dialog_turn_id: None,
         workspace: None,
         loaded_deferred_tool_specs: Vec::new(),
+        model_client: None,
         primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
         custom_data: HashMap::new(),
         computer_use_host: None,

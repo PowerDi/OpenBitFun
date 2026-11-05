@@ -101,9 +101,32 @@ describe('public Select product integration', () => {
     expect(document.querySelectorAll('button[role="combobox"]')).toHaveLength(1);
   });
 
+  it('hides group headings while preserving groups, native values and keyboard selection', () => {
+    render({ showGroupLabels: false, options: [
+      { label: 'Ask', value: 'ask', group: 'Basic' },
+      { label: 'Plan', value: 'plan', group: 'Basic' },
+      { label: 'Agent', value: 3, group: 'Advanced' },
+    ] });
+    key(trigger(), 'ArrowDown');
+
+    const groups = document.querySelectorAll('[role="listbox"] [role="group"]');
+    expect(groups).toHaveLength(2);
+    expect(groups[0].querySelector('[data-openbitfun-part="group-label"]')).toBeNull();
+    expect(groups[0].querySelectorAll('[role="option"]')).toHaveLength(2);
+    expect(groups[1].querySelector('[data-openbitfun-part="group-label"]')).toBeNull();
+    expect(host.querySelectorAll('optgroup')).toHaveLength(2);
+
+    key(document.activeElement!, 'ArrowDown');
+    key(document.activeElement!, 'ArrowDown');
+    key(document.activeElement!, 'Enter');
+    expect(change).toHaveBeenLastCalledWith(3);
+    expect(host.querySelector('select')?.value).toBe('3');
+    expect(document.activeElement).toBe(trigger());
+  });
+
   it('keeps a pill trigger compact while expanded and native options retain full labels', () => {
     render({
-      variant: 'pill', size: 'sm', width: 'content', popupWidth: 'content',
+      variant: 'pill', bordered: false, size: 'sm', width: 'content', popupWidth: 'content',
       defaultValue: 'global',
       options: [
         { value: 'global', label: 'International platform', selectedLabel: 'Global' },
@@ -195,7 +218,7 @@ describe('public Select product integration', () => {
     });
     act(() => root.render(
       <Field description="Choose a mode" label="Mode" required>
-        <Select options={options} />
+        <Select options={options} valuePrefix={<span>Mode:</span>} bordered="hover" hitArea="expanded" showIndicator={false} />
       </Field>,
     ));
     const button = trigger();
@@ -203,11 +226,13 @@ describe('public Select product integration', () => {
     expect(host.querySelector('label')?.htmlFor).toBe(button.id);
     expect(button.getAttribute('aria-required')).toBe('true');
     expect(button.getAttribute('aria-describedby')).not.toBeNull();
+    expect(button.querySelector('[data-openbitfun-part="indicator"]')).toBeNull();
 
-    act(() => button.click());
+    act(() => button.querySelector<HTMLElement>('[data-openbitfun-part="value-prefix"]')!.click());
     const popup = document.querySelector<HTMLElement>('[data-openbitfun-component="select-popup"]')!;
     const header = popup.querySelector<HTMLButtonElement>('[data-openbitfun-part="header"]')!;
     expect(popup.style.left).toBe('40px');
+    expect(header.querySelector('[data-openbitfun-part="indicator"]')).not.toBeNull();
     expect(popup.style.top).toBe('20px');
     expect(popup.style.width).toBe('240px');
     expect(popup.dataset.placement).toBe('bottom');

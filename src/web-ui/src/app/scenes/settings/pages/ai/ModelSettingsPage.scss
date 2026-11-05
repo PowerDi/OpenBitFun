@@ -1275,60 +1275,43 @@
   }
 
   &__connection-section > .openbitfun-config-page-section__body {
-    display: grid;
-    grid-template-columns: 112px minmax(0, 1.6fr) 96px minmax(0, 1fr);
-    column-gap: var(--openbitfun-space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--openbitfun-space-4);
+    overflow: visible;
   }
 
-  &__connection-section &__connection-row,
-  &__connection-section &__endpoint-row {
+  &__connection-section &__connection-row {
     display: grid;
-    grid-column: 1 / -1;
-    grid-template-columns: subgrid;
-    column-gap: var(--openbitfun-space-4);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: var(--openbitfun-space-4);
     min-width: 0;
-    padding: var(--openbitfun-space-3) var(--openbitfun-space-4);
   }
 
-  &__connection-row > .openbitfun-config-page-row {
-    grid-column: span 2;
-    grid-template-columns: subgrid;
-    column-gap: var(--openbitfun-space-4);
+  &__connection-section &__connection-row--single {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  &__connection-row > .openbitfun-config-page-row,
+  &__connection-section &__endpoint-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--openbitfun-space-2);
     min-width: 0;
     padding: 0;
-    border-top: 0;
-  }
+    border: 0;
 
-  &__connection-row > .openbitfun-config-page-row + .openbitfun-config-page-row {
-    border-top: 0;
-  }
-
-  @media (hover: hover) and (pointer: fine) {
-    @container model-editor (width > 560px) {
-      &__connection-row:hover {
-        background: var(--openbitfun-component-config-page-row-hover-background);
-
-        > .openbitfun-config-page-row:hover {
-          background: transparent;
-        }
-      }
+    > .openbitfun-config-page-row__meta {
+      max-inline-size: none;
     }
-  }
 
-  &__connection-row--single > .openbitfun-config-page-row {
-    grid-column: 1 / -1;
-  }
-
-  &__connection-row--single > .openbitfun-config-page-row,
-  &__connection-section &__endpoint-row {
     > .openbitfun-config-page-row__control {
-      grid-column: 2 / -1;
+      grid-column: 1;
     }
-  }
 
-  &__connection-row + &__connection-row,
-  &__connection-row + &__endpoint-row {
-    border-top: var(--openbitfun-border-width-default) solid var(--openbitfun-component-config-page-divider);
+    &:hover {
+      background: transparent;
+    }
   }
 
   &__connection-value {
@@ -1735,8 +1718,10 @@
 
   &__selected-models-empty {
     flex-basis: 100%;
-    padding-block: var(--openbitfun-space-4);
-    text-align: center;
+    padding: var(--openbitfun-space-3) var(--openbitfun-space-4);
+    border-radius: var(--openbitfun-radius-base);
+    background: var(--openbitfun-color-field-group-background);
+    text-align: start;
     color: var(--openbitfun-color-content-muted);
     font-size: var(--openbitfun-type-support-font-size);
     line-height: var(--openbitfun-type-support-line-height);
@@ -1868,6 +1853,10 @@
 
   &__advanced-settings-content {
     padding-inline: 0;
+
+    .openbitfun-config-page-row {
+      border: 0;
+    }
   }
 
   &__form-content {
@@ -2248,10 +2237,21 @@
     overflow-wrap: anywhere;
   }
 
+  &__selection-header {
+    > .openbitfun-config-page-header__inner {
+      flex-direction: row;
+      align-items: center;
+    }
+
+    .openbitfun-config-page-header__extra {
+      width: auto;
+      margin-top: 0;
+    }
+  }
+
   &__selection-actions {
     display: flex;
     justify-content: flex-end;
-    margin-top: var(--openbitfun-space-4);
   }
 
   
@@ -2766,7 +2766,7 @@
   }
 }
 
-@container model-editor (max-width: 560px) {
+@container model-editor (max-width: 480px) {
   .openbitfun-model-settings__advanced-settings {
     .openbitfun-config-page-row:not(.openbitfun-model-settings__toggle-row) {
       grid-template-columns: minmax(0, 1fr);
@@ -2797,32 +2797,12 @@
     }
   }
 
-  .openbitfun-model-settings__connection-section > .openbitfun-config-page-section__body {
+  .openbitfun-model-settings__connection-section .openbitfun-model-settings__connection-row {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .openbitfun-model-settings__connection-row > .openbitfun-config-page-row {
-    grid-column: 1 / -1;
-    padding-block: var(--openbitfun-space-3);
-  }
-
-  .openbitfun-model-settings__connection-row--single > .openbitfun-config-page-row,
-  .openbitfun-model-settings__connection-section .openbitfun-model-settings__endpoint-row {
-    > .openbitfun-config-page-row__control {
-      grid-column: 1;
-    }
   }
 
   .openbitfun-model-settings__form--modal .openbitfun-model-settings__edit-section .openbitfun-config-page-row {
     row-gap: var(--openbitfun-space-2);
-  }
-
-  .openbitfun-model-settings__connection-section .openbitfun-model-settings__connection-row {
-    padding-block: 0;
-  }
-
-  .openbitfun-model-settings__connection-row > .openbitfun-config-page-row + .openbitfun-config-page-row {
-    border-top: var(--openbitfun-border-width-default) solid var(--openbitfun-component-config-page-divider);
   }
 
   .openbitfun-model-settings__endpoint-inputs {

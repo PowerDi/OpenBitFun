@@ -115,6 +115,45 @@ unsupported by the Product Operation Registry. Existing Remote Control sessions
 reuse the bound workspace providers, and Detached Dispatch does not create WSL
 profiles. Native WSL has no SSH transport for port forwarding.
 
+## ProxyCommand
+
+The additive `proxyCommand` profile field carries the SSH transport over a
+local process's stdin/stdout, as OpenSSH does (for example
+`coder ssh --stdio %h`). The Services layer and the port-forward tool's
+`~/.ssh/config` path honor it; the desktop connection dialog does not send
+`proxyCommand` yet, so profiles created there still dial directly. When such a
+profile targets a `~/.ssh/config` alias that has a ProxyCommand, the host logs
+a warning and a failed dial names the ignored ProxyCommand instead of
+reporting only a network error. Missing `proxyCommand` preserves direct
+dialing; connection drift includes the field.
+
+`%h`, `%p`, `%r`, and `%%` are expanded first, and a host or user that would be
+substituted must match `[A-Za-z0-9._\-@:%\[\]]` (OpenSSH 9.6, CVE-2023-51385)
+or the connection fails before anything runs. Unix runs `sh -c "exec …"` in its
+own process group; Windows runs `cmd.exe /d /v:off /s /c "…"` inside a
+kill-on-close Job. Disconnect, failed handshakes, and reconnect tear the whole
+process tree down; a reconnect keeps a displaced proxy only until its old
+transport has no users left.
+
+A saved profile with both ProxyCommand and ProxyJump, or with a container or
+WSL target, is rejected. A ProxyJump hop whose `~/.ssh/config` alias resolves
+to a ProxyCommand fails with an explicit unsupported error instead of dialing
+the hop directly.
+
+`~/.ssh/config` values come from a line-based resolver over the
+`Include`-merged text. Include runs inside the includer's `Host`/`Match`
+context, which is restored afterwards. Host patterns support `*`, `?`, `!`,
+and inline `#` comments. The first value wins, except that `IdentityFile` and
+`CertificateFile` accumulate; single-key consumers take the first value from a
+block that names the host exactly. `ProxyCommand` is kept verbatim (`none`
+disables it), and ProxyJump and ProxyCommand compete: whichever is obtained
+first wins.
+
+The host advertises `ssh_proxy_command_v1`. Older hosts ignore the unknown
+field and would dial directly, so a future controller UI must not send
+`proxyCommand` to a peer that lacks the capability. CLI peer setup is
+unsupported, as for WSL.
+
 ## ProxyJump
 
 The comma-separated jump chain is resolved left to right. Each token can be a
@@ -246,7 +285,11 @@ to searching the controller filesystem.
 ## Authentication and secrets
 
 Supported target methods are password, private key, private key plus OpenSSH
-certificate, OpenSSH agent, and keyboard-interactive responses.
+certificate, OpenSSH agent, keyboard-interactive responses, and the SSH `none`
+method for endpoints whose transport is already authenticated (a Coder
+workspace agent, for example). `none` is an explicit profile choice: it is
+never tried as a fallback, and a rejected `none` profile never turns into a
+credential prompt.
 
 - Passwords use the existing encrypted password vault.
 - Private-key paths, certificate paths, and auth method metadata may be saved.
@@ -465,6 +508,15 @@ Local Docker profiles may legitimately retain an empty legacy password
 placeholder. Connection, testing, and local container discovery do not require
 a password-vault entry for those profiles.
 
+`SavedAuthType::None` is unknown to earlier builds, which parse
+`ssh_connections.json` as one list and rewrite it from memory. Those profiles
+therefore live in `ssh_connections_extended.json`, which earlier builds neither
+read nor write; the primary file keeps the shape they understand. Loading merges
+both files, and the primary entry wins when an earlier build recreated the same
+ID. An earlier build does not list these profiles until the user upgrades again.
+Peer controllers reject `None` before RPC unless the host advertises
+`ssh_none_auth_v1`.
+
 Startup recovery never deletes a profile or workspace merely because a
 credential is unavailable, a connection times out, or a remote host is
 temporarily offline. Destructive removal remains an explicit user action.
@@ -655,8 +707,9 @@ between identical OS credentials.
 Discover capabilities at the provider/assembly boundary, not with scattered
 `is_remote` gates in individual tools. Missing target programs, an unavailable
 interactive desktop, network loss and platform-specific process behavior can
-require explicit differences. A local hook executable or MCP command is not
-silently relocated to the target. Keep its execution domain and source trust
+require explicit differences. User and imported Hook commands remain host
+owned; manually configured project Hook commands are explicitly target-owned
+when the project gate is enabled. Keep execution domain and source trust
 explicit; reuse the existing engine and approval mechanism.
 
 Remote workspaces do not acquire Detached Dispatch semantics through this

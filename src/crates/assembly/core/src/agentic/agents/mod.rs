@@ -129,8 +129,7 @@ pub fn standard_harness_tools() -> Vec<String> {
         // for the interval.
         "Cron".to_string(),
         "PublishAppearance".to_string(),
-        "PageDeploy".to_string(),
-        "PagePublish".to_string(),
+        "PageManage".to_string(),
     ]
 }
 
@@ -311,16 +310,6 @@ mod tests {
         let tools = standard_harness_tools();
 
         assert!(tools.contains(&"ReviewPlatform".to_string()));
-    }
-
-    #[test]
-    fn standard_harness_tools_keep_canvas_provider_tools_opt_in() {
-        let tools = standard_harness_tools();
-
-        assert!(!tools.contains(&"CreateCanvas".to_string()));
-        assert!(!tools.contains(&"ReadCanvas".to_string()));
-        assert!(!tools.contains(&"UpdateCanvas".to_string()));
-        assert!(!tools.contains(&"PatchCanvas".to_string()));
     }
 
     #[test]

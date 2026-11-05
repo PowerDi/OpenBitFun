@@ -3,12 +3,15 @@ import { ChatInputAttachments } from './ChatInputAttachments';
 import { useExcerptComposerActions } from '../selection/useExcerptComposerActions';
 import { isConversationExcerpt, formatConversationExcerpt } from '@/shared/utils/conversationExcerpt';
 import { withConversationExcerpts } from '../utils/composerPresentation';
+import { expandLargePastes, pickReferencedLargePastes } from '../utils/largePasteMetadata';
 /**
  * Standalone chat input component
  * Separated from bottom bar, supports session-level state awareness
  */
 
 import React, { useRef, useCallback, useEffect, useReducer, useState, useMemo, useSyncExternalStore } from 'react';
+import type { UsageContextBreakdown } from '@/infrastructure/api/service-api/SessionAPI';
+import type { UsageReportUiParams } from '../session-drivers/types';
 import path from 'path-browserify';
 import { useTranslation } from 'react-i18next';
 import { RotateCcw, Loader2, Play, Goal } from 'lucide-react';
@@ -95,6 +98,7 @@ import {
   successfulRetryCleanupTarget,
 } from './chatInputDraftRecovery';
 import { startBtwThread } from '../services/BtwThreadService';
+import { peerHostRefusalMessage } from '@/infrastructure/peer-device/peerHostRefusal';
 import { buildImagePayload } from '../utils/imagePayload';
 import {
   canRestoreQueuedMessageToComposer,
@@ -554,6 +558,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const richTextInputRef = useRef<RichTextInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const externalFileDropTargetRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
   const [nativeFileDragOver, setNativeFileDragOver] = useState(false);
   const [contextFileDragOver, setContextFileDragOver] = useState(false);
   const inputAreaAnchorRef = useRef<HTMLDivElement>(null);
@@ -631,6 +636,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const removeContext = useContextStore(state => state.removeContext);
   const clearContexts = useContextStore(state => state.clearContexts);
   const replaceContexts = useContextStore(state => state.replaceContexts);
+  const restoreContexts = useCallback((items: ContextItem[]) => {
+    items.forEach(addContext);
+  }, [addContext]);
 
   const contextsRef = useRef(contexts);
   contextsRef.current = contexts;
@@ -722,8 +730,22 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   // A submission keeps the session started even if every surviving Turn is
   // later rolled back. Before that first submission, the composer intentionally
   // stays expanded instead of collapsing as the empty draft is measured.
-  const effectiveTargetSessionStarted = effectiveTargetSession ? hasSessionStarted(effectiveTargetSession) : false;
-  const isNewSessionComposer = !effectiveTargetSessionStarted;
+  const historySessionOpenTransition = useSyncExternalStore(
+    subscribeHistorySessionOpenTransition,
+    getHistorySessionOpenTransitionSnapshot,
+    getHistorySessionOpenTransitionSnapshot,
+  );
+  // A persisted session whose history is still loading has no turns yet, but
+  // it is not a new session: treating it as one drew the expanded new-session
+  // composer for the length of the load and then collapsed it (a height jump).
+  const effectiveTargetSessionStarted = effectiveTargetSession
+    ? hasSessionStarted(effectiveTargetSession) || effectiveTargetSession.isHistorical === true
+      || effectiveTargetSession.historyState === 'metadata-only' || effectiveTargetSession.historyState === 'hydrating'
+    : false;
+  // While a session is being opened the composer already belongs to it: keep
+  // the conversation layout instead of the new-session one, so its height and
+  // controls do not change when the session arrives.
+  const isNewSessionComposer = !effectiveTargetSessionStarted && historySessionOpenTransition === null;
   const dispatchObserverJob = dispatchJobStore(state => {
     const jobId = effectiveTargetSession?.config.dispatchJobId;
     return jobId ? state.jobs[jobId] : undefined;
@@ -737,11 +759,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     hostMasksDispatch: !!registration,
     displayAsChild: isBtwSession,
   });
-  const historySessionOpenTransition = useSyncExternalStore(
-    subscribeHistorySessionOpenTransition,
-    getHistorySessionOpenTransitionSnapshot,
-    getHistorySessionOpenTransitionSnapshot,
-  );
   const acpSessionForInput = useMemo(
     () => acpSessionRef(effectiveTargetSession),
     [effectiveTargetSession],
@@ -1556,42 +1573,71 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     targetWorkspacePath,
   ]);
 
+  // Catalog refreshes (e.g. opening the "+" menu) publish new mode objects with
+  // identical content. Key tool resolution on stable values so a refresh does
+  // not hide tool-gated actions; explicit config events bump the revision.
+  const targetModeId = targetModeInfo?.id ?? null;
+  const targetModeSource = targetModeInfo?.source ?? null;
+  const targetModeDefaultToolsKey = targetModeInfo?.defaultTools
+    ? targetModeInfo.defaultTools.join('\n')
+    : null;
+  const targetModeInfoRef = useRef(targetModeInfo);
+  targetModeInfoRef.current = targetModeInfo;
+  const resolvedTargetModeKeyRef = useRef<string | null>(null);
+  const [targetModeConfigRevision, setTargetModeConfigRevision] = useState(0);
+
   useEffect(() => {
-    if (isSubagentInputTarget) {
+    const bumpRevision = () => setTargetModeConfigRevision(revision => revision + 1);
+    globalEventBus.on('mode:config:updated', bumpRevision);
+    globalEventBus.on('custom-agent:updated', bumpRevision);
+    return () => {
+      globalEventBus.off('mode:config:updated', bumpRevision);
+      globalEventBus.off('custom-agent:updated', bumpRevision);
+    };
+  }, []);
+
+  useEffect(() => {
+    const clearTargetModeTools = () => {
+      resolvedTargetModeKeyRef.current = null;
       setTargetModeEnabledTools(null);
       setTargetModeToolsResolved(false);
+    };
+
+    if (isSubagentInputTarget || !targetModeId) {
+      clearTargetModeTools();
       return;
     }
 
-    if (!targetModeInfo) {
-      setTargetModeEnabledTools(null);
-      setTargetModeToolsResolved(false);
-      return;
-    }
-    if (targetModeInfo.source === 'external') {
-      setTargetModeEnabledTools(targetModeInfo.defaultTools ?? null);
+    const modeKey = `${targetModeSource ?? ''}:${targetModeId}`;
+    if (targetModeSource === 'external') {
+      resolvedTargetModeKeyRef.current = modeKey;
+      setTargetModeEnabledTools(targetModeInfoRef.current?.defaultTools ?? null);
       setTargetModeToolsResolved(true);
       return;
     }
 
+    // Keep the last known tools while re-resolving the same mode so gated
+    // actions do not flicker; only a different mode starts unresolved.
+    if (resolvedTargetModeKeyRef.current !== modeKey) {
+      clearTargetModeTools();
+    }
+
     let cancelled = false;
-    setTargetModeEnabledTools(null);
-    setTargetModeToolsResolved(false);
     (async () => {
       try {
-        const config = await configAPI.getAgentProfileConfig(targetModeInfo.id);
+        const config = await configAPI.getAgentProfileConfig(targetModeId);
         if (!cancelled) {
+          resolvedTargetModeKeyRef.current = modeKey;
           setTargetModeEnabledTools(config.enabled_tools ?? null);
           setTargetModeToolsResolved(true);
         }
       } catch (err) {
         log.error('Failed to load mode tool config for chat input', {
           err,
-          targetAgentType: targetModeInfo.id,
+          targetAgentType: targetModeId,
         });
         if (!cancelled) {
-          setTargetModeEnabledTools(null);
-          setTargetModeToolsResolved(false);
+          clearTargetModeTools();
         }
       }
     })();
@@ -1599,7 +1645,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isSubagentInputTarget, targetModeInfo]);
+  }, [
+    isSubagentInputTarget,
+    targetModeId,
+    targetModeSource,
+    targetModeDefaultToolsKey,
+    targetModeConfigRevision,
+  ]);
 
   const canUseThreadGoal =
     caps.threadGoal &&
@@ -1671,6 +1723,19 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     workspaceId: effectiveTargetSession?.workspaceId || contextWorkspace?.id,
     workspaceKind: contextWorkspace?.workspaceKind,
   });
+  /*
+   * The add menu's "additional modes" item is built from these skills. Fetched
+   * only on open, it arrived after the rest of the menu and pushed it down.
+   * Warm them once the composer has been shown a moment (or the moment the
+   * pointer reaches the add button), so the menu opens whole; each opening
+   * still revalidates in place.
+   */
+  const [modeSkillsWarm, setModeSkillsWarm] = useState(false);
+  useEffect(() => {
+    if (modeSkillsWarm || !isSceneActive || !canUseSkillsForTarget) return;
+    const timer = window.setTimeout(() => setModeSkillsWarm(true), 600);
+    return () => window.clearTimeout(timer);
+  }, [canUseSkillsForTarget, isSceneActive, modeSkillsWarm]);
   const {
     skills: resolvedModeSkills,
     loading: resolvedModeSkillsLoading,
@@ -1681,6 +1746,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     retry: retryResolvedModeSkills,
   } = useResolvedModeSkills({
     enabled: isSceneActive && canUseSkillsForTarget && (
+      modeSkillsWarm ||
       isModeDropdownOpen ||
       contextTriggerState.isActive ||
       (slashCommandState.isActive && (slashCommandState.kind === 'all' || slashCommandState.kind === 'skills'))
@@ -2316,20 +2382,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       return;
     }
 
-    replacePendingLargePastes(Object.fromEntries(
-      entries.filter(([placeholder]) => text.includes(placeholder))
-    ));
+    replacePendingLargePastes(pickReferencedLargePastes(pendingLargePastesRef.current, text) ?? {});
   }, [replacePendingLargePastes]);
 
-  const expandPendingLargePastes = useCallback((text: string) => {
-    let expanded = text;
-    for (const [placeholder, actual] of Object.entries(pendingLargePastesRef.current)) {
-      if (expanded.includes(placeholder)) {
-        expanded = expanded.split(placeholder).join(actual);
-      }
-    }
-    return expanded;
-  }, []);
+  const expandPendingLargePastes = useCallback((text: string) => (
+    expandLargePastes(text, pendingLargePastesRef.current)
+  ), []);
 
   const expandComposerSpecialTokens = useCallback((text: string) => {
     return expandAdditionalModePromptReferenceTokens(
@@ -2374,6 +2432,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       /** Complete composer context replacement, including image attachments. */
       contexts?: ContextItem[];
       composerPresentation?: ComposerPresentation;
+      largePastes?: Record<string, string>;
       onlyIfEmpty?: boolean;
       mode?: 'replace' | 'append';
       separator?: string;
@@ -2399,10 +2458,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       if (composerPresentation && data.mode !== 'append') {
         const restoredValue = composerPresentationToEditorText(composerPresentation);
         replaceContexts(data.contexts ?? composerPresentationContexts(composerPresentation));
-        clearPendingLargePastes();
+        const restoredLargePastes = pickReferencedLargePastes(data.largePastes, restoredValue) ?? {};
+        replacePendingLargePastes(restoredLargePastes);
         dispatchInput({ type: 'SET_VALUE', payload: restoredValue });
         inputValueRef.current = restoredValue;
-        richTextInputRef.current?.restoreComposerPresentation?.(composerPresentation);
+        richTextInputRef.current?.restoreComposerPresentation?.(composerPresentation, {
+          largePastes: restoredLargePastes,
+        });
         richTextInputRef.current?.focus();
         return;
       }
@@ -2423,7 +2485,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           : content;
 
       if (data.mode !== 'append') {
-        clearPendingLargePastes();
+        // A restored message keeps its pasted bodies so the placeholders
+        // render as capsules again instead of becoming literal text.
+        replacePendingLargePastes(pickReferencedLargePastes(data.largePastes, nextValue) ?? {});
         if (data.contexts) {
           replaceContexts(data.contexts);
         }
@@ -2441,7 +2505,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     return () => {
       globalEventBus.off('fill-chat-input', handleFillChatInput);
     };
-  }, [addContext, clearPendingLargePastes, conversationScope, dispatchInput, replaceContexts]);
+  }, [addContext, conversationScope, dispatchInput, replaceContexts, replacePendingLargePastes]);
 
   // Expose current input value for external queries (e.g. deep review fill-back confirmation)
   React.useEffect(() => {
@@ -3732,6 +3796,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       selectTargetSession(childSessionId);
     } catch (e) {
       log.error('Failed to start /btw thread', { e });
+      const refusal = peerHostRefusalMessage(e, t);
+      if (refusal) notificationService.error(refusal);
       replacePendingLargePastes(originalPendingLargePastes);
       dispatchInput({ type: 'SET_VALUE', payload: originalMessage });
     }
@@ -3790,7 +3856,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     t,
   ]);
 
-  const runEffectiveSessionUsageReport = useCallback(async () => {
+  const runEffectiveSessionUsageReport = useCallback(async (presentReport?: UsageReportUiParams['presentReport']) => {
     if (!effectiveTargetSessionId || !effectiveTargetSession) {
       notificationService.error(
         t('chatInput.usageNoSession')
@@ -3803,6 +3869,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         effectiveTargetSessionId,
         {
           isProcessing: !!derivedState?.isProcessing,
+          presentReport,
+          reportTitle: t('usage.panel.report'),
           busyMessage: t('chatInput.usageBusy'),
           noWorkspaceMessage: t('chatInput.usageNoWorkspace'),
           failedTitle: t('chatInput.usageFailed'),
@@ -3862,6 +3930,15 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     void runEffectiveSessionUsageReport().catch(() => {
       /* errors surfaced by runUsageReportCommand */
     });
+  }, [runEffectiveSessionUsageReport]);
+
+  const loadContextUsageOverview = useCallback(async () => {
+    let context: UsageContextBreakdown | undefined;
+    await runEffectiveSessionUsageReport(report => {
+      context = report.context;
+      return true;
+    });
+    return context;
   }, [runEffectiveSessionUsageReport]);
 
   const submitInitFromInput = useCallback(async () => {
@@ -6371,7 +6448,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           } : undefined}
       workspaceId={executionWorkspaceId ?? ''}
       repositoryPath={chatStripRepositoryPath}
-      workspaceLabel={chatStripWorkspaceLabel}
+      workspaceLabel={isAssistantWorkspace || chatInputModePolicy.fixedModeId === 'Claw'
+        ? '' : chatStripWorkspaceLabel}
       executionTarget={effectiveTargetSession?.config.executionTarget}
       dispatchControl={dispatchControl}
       worktreeControl={worktreeControl}
@@ -6431,6 +6509,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               visible: true,
               currentTokens: tokenUsage.current,
               maxTokens: tokenUsage.max,
+              sessionKey: deviceSurfaceScope.key(effectiveTargetSessionId),
+              anchorRef: composerRef,
+              previewSession: {
+                sessionId: effectiveTargetSessionId,
+                workspaceId: effectiveTargetSession.workspaceId ?? effectiveTargetSession.config.workspaceId,
+              },
+              loadContext: loadContextUsageOverview,
               onOpen: handleToolbarUsageReport,
             }
           : undefined
@@ -6517,6 +6602,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           ) : null}
           <div ref={externalFileDropTargetRef} className="openbitfun-chat-input__box" data-openbitfun-component="chat-input" data-openbitfun-part="box">
             <ChatComposer
+              ref={composerRef}
               className="openbitfun-chat-input__composer"
               contextBar={workspaceStrip}
               layout={isMultiLine ? 'expanded' : 'compact'}
@@ -6600,11 +6686,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               ))}
               <RichTextInput
                 ref={richTextInputRef}
+                historyScope={`${deviceSurfaceScope.epoch}:${deviceSurfaceScope.key(effectiveTargetSessionId)}`}
                 value={inputState.value}
                 onChange={handleInputChange}
                 onLargePaste={createLargePastePlaceholder}
                 onPasteFiles={handleClipboardFiles}
                 pendingLargePastes={pendingLargePastes}
+                onRestoreLargePastes={replacePendingLargePastes}
                 skillReferenceNames={skillReferenceNames}
                 onUpdateLargePaste={updateLargePaste}
                 onRemoveLargePaste={removeLargePaste}
@@ -6615,6 +6703,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 disabled={!targetCanCompose || caps.transferInFlight || isInterruptedTurnRecoveryInFlight}
                 contexts={contexts}
                 onRemoveContext={removeContext}
+                onRestoreContexts={restoreContexts}
                 onContextTriggerStateChange={setContextTriggerState}
                 onInlineTriggerStateChange={setInlineTriggerState}
                 data-testid="chat-input-textarea"
@@ -6933,7 +7022,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   ref={agentBoostRef}
                 >
                   {canUsePromptCommands && (
-                    <span className="openbitfun-chat-input__agent-boost-trigger" ref={boostTriggerRef} data-openbitfun-component="chat-input" data-openbitfun-part="boostTrigger" data-openbitfun-state={modeState.dropdownOpen ? 'open' : undefined}>
+                    <span className="openbitfun-chat-input__agent-boost-trigger" ref={boostTriggerRef} onPointerEnter={() => setModeSkillsWarm(true)} data-openbitfun-component="chat-input" data-openbitfun-part="boostTrigger" data-openbitfun-state={modeState.dropdownOpen ? 'open' : undefined}>
                       <Tooltip content={t('chatInput.addBoostTooltip')}>
                         <ChatComposerActionButton
                           aria-label={t('chatInput.addBoostTooltip')}
@@ -6945,6 +7034,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                             e.stopPropagation();
                             if (!modeState.dropdownOpen) {
                               void refreshWorkspaceModeCatalog();
+                              if (modeSkillsWarm) retryResolvedModeSkills();
+                              else setModeSkillsWarm(true);
                             }
                             dispatchMode({ type: 'TOGGLE_DROPDOWN' });
                           }}

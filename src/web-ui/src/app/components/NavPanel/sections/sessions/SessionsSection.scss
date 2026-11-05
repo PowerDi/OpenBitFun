@@ -74,6 +74,7 @@
   }
 
   &__inline-loading {
+    animation: openbitfun-nav-inline-loading-reveal 160ms ease-out 200ms both;
     display: flex;
     align-items: center;
     gap: 5px;
@@ -292,8 +293,9 @@
     }
 
     // Preserve title geometry while the project name yields to row actions.
-    .openbitfun-nav-panel__inline-item:hover .openbitfun-nav-panel__inline-item-workspace-name,
-    .openbitfun-nav-panel__inline-item:focus-within .openbitfun-nav-panel__inline-item-workspace-name,
+    // Rows without actions keep their name visible.
+    .openbitfun-nav-panel__inline-item:has(.openbitfun-nav-panel__inline-item-actions):hover .openbitfun-nav-panel__inline-item-workspace-name,
+    .openbitfun-nav-panel__inline-item:has(.openbitfun-nav-panel__inline-item-actions):focus-within .openbitfun-nav-panel__inline-item-workspace-name,
     .openbitfun-nav-panel__inline-item.is-menu-open .openbitfun-nav-panel__inline-item-workspace-name {
       visibility: hidden;
     }
@@ -321,6 +323,11 @@
   &__inline-item-btw-badge,
   &__inline-item-source-badge {
     flex: 0 0 auto;
+  }
+
+  &__inline-item-archived-badge {
+    flex: 0 0 auto;
+    margin-inline-start: var(--openbitfun-space-1);
   }
 
   &__inline-item-dispatch-badge {
@@ -942,4 +949,11 @@
   &__inline-item-edit-btn {
     @include nav-font.nav-panel-text-icon;
   }
+}
+
+// A wait that ends quickly shows nothing: the indicator fades in only once
+// the wait has lasted long enough to be noticed.
+@keyframes openbitfun-nav-inline-loading-reveal {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }

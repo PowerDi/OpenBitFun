@@ -4,6 +4,7 @@ use crate::embedded_relay_host::DesktopEmbeddedRelayHost;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use openbitfun_core::agentic::tools::account_login_capability::set_account_login_available;
 use openbitfun_core::agentic::tools::page_deploy_host::set_page_deploy_handler;
+use openbitfun_core::agentic::tools::page_manage_host::set_page_manage_handler;
 use openbitfun_core::agentic::tools::page_publish_host::set_page_publish_handler;
 use openbitfun_core::service::dispatch::{
     DispatchAccountDaemonIdentity, DispatchAccountDaemonProvisionRequest,
@@ -27,13 +28,15 @@ use openbitfun_services_integrations::remote_connect::{
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::RwLock;
 
+#[cfg(test)]
+mod page_tool_tests;
 mod relay_routes;
 #[cfg(test)]
 mod relay_routes_tests;
@@ -491,8 +494,9 @@ async fn fanout_peer_device_event_current(item: PeerEventFanoutItem) {
         }
     };
     for target in targets {
-        let (encrypted_data, nonce) = match session
-            .encrypt_for_peer(&relay_url, &target, &envelope)
+        let before_send = session.peer_message_guard();
+        let (encrypted_data, nonce, uses_zstd) = match session
+            .encrypt_for_peer_with_encoding(&relay_url, &target, &envelope)
             .await
         {
             Ok(value) => value,
@@ -508,6 +512,7 @@ async fn fanout_peer_device_event_current(item: PeerEventFanoutItem) {
             &correlation_id,
             &encrypted_data,
             &nonce,
+            || before_send(uses_zstd),
         )
         .await
         {
@@ -595,6 +600,7 @@ async fn send_device_message_with_routing_lease(
     correlation_id: &str,
     encrypted_data: &str,
     nonce: &str,
+    before_send: impl Fn() -> anyhow::Result<()>,
 ) -> Result<(), String> {
     if !device_routing_owner_is_current(owner).await {
         return Err("device routing changed".to_string());
@@ -607,12 +613,13 @@ async fn send_device_message_with_routing_lease(
         .as_ref()
         .ok_or_else(|| "remote connect service not initialized".to_string())?;
     let sent = service
-        .send_device_message_if_connection(
+        .send_device_message_if_connection_guarded(
             owner.service_connection_id,
             target_device_id,
             correlation_id,
             encrypted_data,
             nonce,
+            before_send,
         )
         .await
         .map_err(|error| error.to_string())?;
@@ -628,6 +635,7 @@ async fn send_rpc_envelope(
     session: &AccountSession,
     source_device_id: &str,
     correlation_id: &str,
+    accepts_zstd: bool,
     resp_value: serde_json::Value,
 ) -> bool {
     if !device_routing_owner_is_current(owner).await {
@@ -648,7 +656,7 @@ async fn send_rpc_envelope(
         return false;
     };
     match session
-        .encrypt_for_peer(&relay_url, source_device_id, &resp_json)
+        .encrypt_reply(&relay_url, source_device_id, &resp_json, accepts_zstd)
         .await
     {
         Ok((enc_resp, resp_nonce)) => {
@@ -658,6 +666,7 @@ async fn send_rpc_envelope(
                 correlation_id,
                 &enc_resp,
                 &resp_nonce,
+                || Ok(()),
             )
             .await
             {
@@ -680,6 +689,7 @@ async fn send_rpc_error(
     session: &AccountSession,
     source_device_id: &str,
     correlation_id: &str,
+    accepts_zstd: bool,
     message: impl Into<String>,
 ) {
     send_rpc_envelope(
@@ -687,6 +697,7 @@ async fn send_rpc_error(
         session,
         source_device_id,
         correlation_id,
+        accepts_zstd,
         serde_json::json!({
             "resp": "error",
             "message": message.into(),
@@ -754,6 +765,25 @@ async fn invalidate_local_account_session_if_current(
 
 fn sync_account_login_capability(logged_in: bool) {
     set_account_login_available(logged_in);
+}
+
+fn register_page_manage_host() {
+    set_page_manage_handler(Arc::new(|request| {
+        Box::pin(async move {
+            if TOKEN_EXPIRED.load(Ordering::Relaxed) {
+                return Err("Pages account session expired; sign in again".into());
+            }
+            let generation = account_context_generation();
+            let (session, relay_url) = read_account_context_for_generation(generation).await?;
+            openbitfun_core::product_runtime::account_pages::manage_with_account_context(
+                &relay_url,
+                &session.token,
+                request,
+                || account_context_is_current(generation),
+            )
+            .await
+        })
+    }));
 }
 
 fn register_page_deploy_host() {
@@ -1331,6 +1361,96 @@ fn get_service_holder() -> &'static Arc<RwLock<Option<RemoteConnectService>>> {
     RelayRoute::Official.service()
 }
 
+fn bot_control() -> &'static openbitfun_core::service::remote_connect::control::RemoteBotControl {
+    static CONTROL: OnceLock<openbitfun_core::service::remote_connect::control::RemoteBotControl> =
+        OnceLock::new();
+    CONTROL.get_or_init(|| {
+        openbitfun_core::service::remote_connect::control::RemoteBotControl::new(
+            get_service_holder().clone(),
+        )
+    })
+}
+
+/// ProductControl adapter: all mutations execute on this host without requiring
+/// a visible window. Account login remains a separate user-owned flow.
+pub(crate) async fn execute_remote_control(
+    request: openbitfun_product_domains::remote_control::RemoteControlRequest,
+) -> Result<serde_json::Value, String> {
+    use openbitfun_product_domains::remote_control::{
+        RemoteControlMethod as Method, RemoteControlRequest as Request,
+    };
+    use serde_json::json;
+    ensure_service().await?;
+    if matches!(request, Request::Status) {
+        let mut status = bot_control()
+            .status()
+            .await
+            .map_err(|error| error.to_string())?;
+        status["host"] = json!({"kind":"desktop"});
+        status["connections"] = serde_json::to_value(remote_connect_status().await?)
+            .map_err(|error| error.to_string())?;
+        return Ok(status);
+    }
+    // Do not open an unanswerable host-only login dialog from a remote Agent.
+    read_account_context().await.map_err(|_| {
+        "account_required: Sign in to OpenBitFun on the executing Desktop host first".to_string()
+    })?;
+    match request {
+        Request::Start {
+            method: Method::MobileWeb,
+            ..
+        } => {
+            let result = remote_connect_start(StartRemoteConnectRequest {
+                method: "openbitfun_server".into(),
+                lan_ip: None,
+            })
+            .await?;
+            serde_json::to_value(result).map_err(|error| error.to_string())
+        }
+        Request::Start {
+            method: Method::Lan,
+            lan_ip,
+        } => {
+            let result = remote_connect_start(StartRemoteConnectRequest {
+                method: "lan".into(),
+                lan_ip,
+            })
+            .await?;
+            serde_json::to_value(result).map_err(|error| error.to_string())
+        }
+        Request::Stop {
+            method: Method::MobileWeb,
+        } => {
+            remote_connect_stop(Some(StopRemoteConnectRequest {
+                method: "openbitfun_server".into(),
+            }))
+            .await?;
+            Ok(json!({"stopped":true,"method":"mobile_web"}))
+        }
+        Request::Stop {
+            method: Method::Lan,
+        } => {
+            remote_connect_stop(Some(StopRemoteConnectRequest {
+                method: "lan".into(),
+            }))
+            .await?;
+            Ok(json!({"stopped":true,"method":"lan"}))
+        }
+        other => {
+            let generation = account_context_generation();
+            let _account_guard = lock_account_operation(generation).await?;
+            let (session, _) = read_account_context_for_generation(generation).await?;
+            if let Some(service) = get_service_holder().read().await.as_ref() {
+                service.set_bot_account(Some(session.user_id)).await;
+            }
+            bot_control()
+                .execute(other)
+                .await
+                .map_err(|error| error.to_string())
+        }
+    }
+}
+
 /// Called from Tauri setup to register the resolved resource directory path
 /// for the bundled mobile-web files.
 pub fn set_mobile_web_resource_path(path: PathBuf) {
@@ -1377,9 +1497,14 @@ async fn register_delegated_identity_providers() {
     });
 }
 
-pub fn init_on_startup() {
+fn register_page_tool_hosts() {
+    register_page_manage_host();
     register_page_deploy_host();
     register_page_publish_host();
+}
+
+pub fn init_on_startup() {
+    register_page_tool_hosts();
     tokio::spawn(async {
         let startup_generation = account_context_generation();
         // Restore persisted account session (if any) before anything else
@@ -1525,8 +1650,6 @@ fn new_remote_connect_service(config: RemoteConnectConfig) -> anyhow::Result<Rem
 
 /// Restore any bot connections that were previously saved to disk.
 async fn restore_saved_bots() {
-    use openbitfun_core::service::remote_connect::bot;
-
     let generation = account_context_generation();
     let Ok(_account_guard) = lock_account_operation(generation).await else {
         return;
@@ -1534,31 +1657,8 @@ async fn restore_saved_bots() {
     let Ok((session, _)) = read_account_context_for_generation(generation).await else {
         return;
     };
-    let data = bot::load_bot_persistence();
-    if data.connections.is_empty() {
-        return;
-    }
-
-    let holder = get_service_holder();
-    let guard = holder.read().await;
-    let Some(service) = guard.as_ref() else {
-        return;
-    };
-
-    service.set_bot_account(Some(session.user_id.clone())).await;
-    for conn in &data.connections {
-        if !conn.chat_state.paired || conn.account_user_id != session.user_id {
-            continue;
-        }
-        log::info!(
-            "Restoring {} bot connection for chat_id={}",
-            conn.bot_type,
-            conn.chat_id
-        );
-        let result = service.restore_bot(conn).await;
-        if let Err(e) = result {
-            log::warn!("Failed to restore {} bot: {e}", conn.bot_type);
-        }
+    if let Err(error) = bot_control().restore(&session.user_id).await {
+        log::warn!("Failed to restore saved bot state: {error}");
     }
 }
 
@@ -1996,13 +2096,18 @@ pub async fn remote_connect_start(
         let generation = account_context_generation();
         let _account_guard = lock_account_operation(generation).await?;
         let (session, _) = read_account_context_for_generation(generation).await?;
-        let holder = get_service_holder().read().await;
-        let service = holder.as_ref().ok_or("service not initialized")?;
-        service.set_bot_account(Some(session.user_id)).await;
-        return service
-            .start(method)
+        if let Some(service) = get_service_holder().read().await.as_ref() {
+            service.set_bot_account(Some(session.user_id)).await;
+        }
+        let bot_type = match method {
+            ConnectionMethod::BotFeishu => "feishu",
+            ConnectionMethod::BotTelegram => "telegram",
+            _ => "weixin",
+        };
+        return bot_control()
+            .start_connection(bot_type)
             .await
-            .map_err(|e| format!("start remote connect: {e}"));
+            .map_err(|error| error.to_string());
     }
     if matches!(method, ConnectionMethod::Lan { .. }) {
         return relay_routes::start_lan(method).await;
@@ -2071,13 +2176,12 @@ pub async fn remote_connect_stop(request: Option<StopRemoteConnectRequest>) -> R
 
 #[tauri::command]
 pub async fn remote_connect_stop_bot() -> Result<(), String> {
-    let holder = get_service_holder();
-    let guard = holder.read().await;
-    if let Some(service) = guard.as_ref() {
-        service.stop_bots().await;
+    for method in ["weixin", "telegram", "feishu"] {
+        bot_control()
+            .stop(method)
+            .await
+            .map_err(|error| error.to_string())?;
     }
-    // Remove persistence so the bot is not auto-restored
-    bot::update_bot_persistence(|data| data.connections.clear());
     Ok(())
 }
 
@@ -2174,9 +2278,7 @@ pub struct WeixinQrPollRequest {
 
 #[tauri::command]
 pub async fn remote_connect_configure_bot(request: ConfigureBotRequest) -> Result<(), String> {
-    let holder = get_service_holder();
-    let mut guard = holder.write().await;
-
+    ensure_service().await?;
     let bot_config = match request.bot_type.as_str() {
         "feishu" => BotConfig::Feishu {
             app_id: request.app_id.unwrap_or_default(),
@@ -2193,31 +2295,10 @@ pub async fn remote_connect_configure_bot(request: ConfigureBotRequest) -> Resul
         _ => return Err(format!("unknown bot type: {}", request.bot_type)),
     };
 
-    if guard.is_none() {
-        let config = match bot_config {
-            BotConfig::Feishu { .. } => RemoteConnectConfig {
-                mobile_web_dir: detect_mobile_web_dir(),
-                bot_feishu: Some(bot_config),
-                ..RemoteConnectConfig::default()
-            },
-            BotConfig::Telegram { .. } => RemoteConnectConfig {
-                mobile_web_dir: detect_mobile_web_dir(),
-                bot_telegram: Some(bot_config),
-                ..RemoteConnectConfig::default()
-            },
-            BotConfig::Weixin { .. } => RemoteConnectConfig {
-                mobile_web_dir: detect_mobile_web_dir(),
-                bot_weixin: Some(bot_config),
-                ..RemoteConnectConfig::default()
-            },
-        };
-        let service = new_remote_connect_service(config).map_err(|e| format!("init: {e}"))?;
-        *guard = Some(service);
-    } else if let Some(service) = guard.as_mut() {
-        service.update_bot_config(bot_config);
-    }
-
-    Ok(())
+    bot_control()
+        .configure(bot_config)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -2601,8 +2682,10 @@ async fn connect_route_devices(route: RelayRoute) -> Result<Vec<OnlineDeviceInfo
     let (mut event_rx, auth_device_id, service_connection_id) = match service
         .start_device_connection(
             &relay_url,
-            &session.token,
+            &session,
             &device_name,
+            // Desktop serves the device ahead of a CLI/daemon on this machine.
+            openbitfun_core::service::remote_connect::relay_client::DeviceRoutingPriority::Primary,
             Arc::new(DesktopHostStreamNotifier(route)),
         )
         .await
@@ -2691,7 +2774,6 @@ async fn connect_route_devices(route: RelayRoute) -> Result<Vec<OnlineDeviceInfo
                     break;
                 }
                 RelayEvent::DevicePresence { devices } => {
-                    event_session.clear_peer_keys().await;
                     let Some(_routing_effect) = lock_current_device_routing(&event_owner).await
                     else {
                         break 'routing_events;
@@ -2707,6 +2789,13 @@ async fn connect_route_devices(route: RelayRoute) -> Result<Vec<OnlineDeviceInfo
                             devices.iter().map(|d| d.device_id.clone()).collect();
                         hub.retain_online(&online);
                     }
+                    // Peer controllers are presence-scoped as well. A controller
+                    // that dropped off must stop being a fanout target, otherwise
+                    // every peer event for it is rejected by the relay and the log
+                    // fills with failures that never resolve on their own.
+                    let online_ids: HashSet<String> =
+                        devices.iter().map(|d| d.device_id.clone()).collect();
+                    crate::api::peer_host_invoke::retain_online_controllers(route, &online_ids);
                     // Offline presence does not revoke an account device or its
                     // permission mailbox. Reconnect resumes the same ownership.
                     if !device_routing_owner_is_current(&event_owner).await {
@@ -2719,15 +2808,17 @@ async fn connect_route_devices(route: RelayRoute) -> Result<Vec<OnlineDeviceInfo
                 RelayEvent::DeviceMessageReceived {
                     source_device_id,
                     correlation_id,
+                    encoding_offer,
                     encrypted_data,
                     nonce,
                 } => {
                     match event_session
-                        .decrypt_from_peer(
+                        .decrypt_peer_message(
                             &event_relay_url,
                             &source_device_id,
                             &encrypted_data,
                             &nonce,
+                            encoding_offer,
                         )
                         .await
                     {
@@ -2857,79 +2948,83 @@ async fn connect_route_devices(route: RelayRoute) -> Result<Vec<OnlineDeviceInfo
                                     let ping_generation = control_ping_generation(&rpc_owner);
                                     let ping_received_at = std::time::Instant::now();
                                     tokio::spawn(async move {
-                                        tokio::select! {
-                                            biased;
-                                            _ = cancelled.changed() => {},
-                                            _ = async move {
-                                        // A transition cancels this future before
-                                        // taking the write lease. Captured account
-                                        // ownership cannot cross into its replacement.
+                                        use openbitfun_core::service::remote_connect::rpc_execution::run_rpc_stage;
+
+                                        // Keep the routing lease until an accepted
+                                        // model write finishes, even after retirement.
                                         let _routing_effect = routing_effect;
-                                        // Host streams are answered from this host's
-                                        // memory for the requesting device; every
-                                        // other command goes to the local dispatcher.
-                                        let hub = route_host_stream_hub(route).await;
-                                        let execution = match openbitfun_core::service::remote_connect::handle_host_stream_command(
-                                            hub.as_ref(),
-                                            &source_device_id,
-                                            &cmd,
-                                        )
-                                        .await
-                                        {
-                                            Some(response) => serde_json::to_value(response)
-                                                .map_err(anyhow::Error::from),
-                                            None => execute_local_remote_command(&cmd, route, &source_device_id).await,
+                                        let model_write =
+                                            matches!(&cmd, RemoteCommand::SetSessionModel { .. });
+                                        let execute = async {
+                                            let hub = route_host_stream_hub(route).await;
+                                            match openbitfun_core::service::remote_connect::handle_host_stream_command(
+                                                hub.as_ref(),
+                                                &source_device_id,
+                                                &cmd,
+                                            )
+                                            .await
+                                            {
+                                                Some(response) => serde_json::to_value(response)
+                                                    .map_err(anyhow::Error::from),
+                                                None => execute_local_remote_command(&cmd, route, &source_device_id).await,
+                                            }
                                         };
-                                        // Returning drops this reply only. The loop
-                                        // re-checks ownership at the top of every
-                                        // iteration, so a stale connection is still
-                                        // retired there — just not from in here.
-                                        if !device_routing_owner_is_current(&rpc_owner).await {
+                                        let Some(execution) =
+                                            run_rpc_stage(&mut cancelled, model_write, execute)
+                                                .await
+                                        else {
                                             return;
-                                        }
-                                        match execution {
-                                            Ok(resp_value) => {
-                                                let control_ping =
-                                                    is_successful_control_ping(&cmd, &resp_value);
-                                                let sent = send_rpc_envelope(
-                                                    &rpc_owner,
-                                                    &rpc_session,
-                                                    &source_device_id,
-                                                    &correlation_id,
-                                                    resp_value,
-                                                )
-                                                .await;
-                                                if let Some(generation) =
-                                                    ping_generation.filter(|_| sent && control_ping)
-                                                {
-                                                    record_control_ping_if_owner(
-                                                        &rpc_owner,
-                                                        generation,
-                                                        ping_received_at,
-                                                        match &cmd {
-                                                            RemoteCommand::Ping { client } => {
-                                                                client.as_ref()
-                                                            }
-                                                            _ => None,
-                                                        },
+                                        };
+                                        let reply = async {
+                                            if !device_routing_owner_is_current(&rpc_owner).await {
+                                                return;
+                                            }
+                                            match execution {
+                                                Ok(resp_value) => {
+                                                    let control_ping = is_successful_control_ping(
+                                                        &cmd,
+                                                        &resp_value,
                                                     );
+                                                    let sent = send_rpc_envelope(
+                                                        &rpc_owner,
+                                                        &rpc_session,
+                                                        &source_device_id,
+                                                        &correlation_id,
+                                                        encoding_offer.accepts_zstd(),
+                                                        resp_value,
+                                                    )
+                                                    .await;
+                                                    if let Some(generation) = ping_generation
+                                                        .filter(|_| sent && control_ping)
+                                                    {
+                                                        record_control_ping_if_owner(
+                                                            &rpc_owner,
+                                                            generation,
+                                                            ping_received_at,
+                                                            match &cmd {
+                                                                RemoteCommand::Ping { client } => {
+                                                                    client.as_ref()
+                                                                }
+                                                                _ => None,
+                                                            },
+                                                        );
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    log::warn!("RPC: execute command failed: {e}");
+                                                    send_rpc_error(
+                                                        &rpc_owner,
+                                                        &rpc_session,
+                                                        &source_device_id,
+                                                        &correlation_id,
+                                                        encoding_offer.accepts_zstd(),
+                                                        format!("RPC execute failed: {e}"),
+                                                    )
+                                                    .await;
                                                 }
                                             }
-                                            Err(e) => {
-                                                log::warn!("RPC: execute command failed: {e}");
-                                                send_rpc_error(
-                                                    &rpc_owner,
-                                                    &rpc_session,
-                                                    &source_device_id,
-                                                    &correlation_id,
-                                                    format!("RPC execute failed: {e}"),
-                                                )
-                                                .await;
-                                            }
-                                        }
-
-                                            } => {}
-                                        }
+                                        };
+                                        let _ = run_rpc_stage(&mut cancelled, false, reply).await;
                                     });
                                 }
                                 Err(e) => {
@@ -2945,6 +3040,7 @@ async fn connect_route_devices(route: RelayRoute) -> Result<Vec<OnlineDeviceInfo
                                             &event_session,
                                             &source_device_id,
                                             &correlation_id,
+                                            encoding_offer.accepts_zstd(),
                                             format!("invalid RPC command: {e}"),
                                         )
                                         .await;
@@ -2968,6 +3064,7 @@ async fn connect_route_devices(route: RelayRoute) -> Result<Vec<OnlineDeviceInfo
                                     &event_session,
                                     &source_device_id,
                                     &correlation_id,
+                                    false, // The request could not be authenticated.
                                     format!("failed to decrypt RPC request: {e}"),
                                 )
                                 .await;
@@ -3076,8 +3173,9 @@ pub async fn account_execute_on_device(
     if !device_routing_owner_is_current(&routing_owner).await {
         return Err("device routing changed".to_string());
     }
-    let (encrypted_data, nonce) = session
-        .encrypt_for_peer(&relay_url, &target_device_id, &envelope)
+    let before_send = session.peer_message_guard();
+    let (encrypted_data, nonce, uses_zstd) = session
+        .encrypt_for_peer_with_encoding(&relay_url, &target_device_id, &envelope)
         .await
         .map_err(|e| format!("{e}"))?;
 
@@ -3088,6 +3186,7 @@ pub async fn account_execute_on_device(
         &correlation_id,
         &encrypted_data,
         &nonce,
+        || before_send(uses_zstd),
     )
     .await
 }
@@ -3222,13 +3321,17 @@ pub async fn account_delete_device(targetDeviceId: String) -> Result<(), String>
 /// Returns the decrypted response JSON.
 const ACCOUNT_DEVICE_RPC_DEFAULT_TIMEOUT_MS: u64 = 120_000;
 const ACCOUNT_DEVICE_RPC_MIN_TIMEOUT_MS: u64 = 1_000;
+/// Upper bound for a controller-requested deadline. Ordinary commands keep
+/// the 120 s default; Browser Control setup asks for 185 s because it waits
+/// on browser-owned consent (see `peer_host_invoke::invoke_timeout_for`).
+const ACCOUNT_DEVICE_RPC_MAX_TIMEOUT_MS: u64 = 190_000;
 
 fn account_device_rpc_timeout_ms(requested: Option<u64>) -> u64 {
     requested
         .unwrap_or(ACCOUNT_DEVICE_RPC_DEFAULT_TIMEOUT_MS)
         .clamp(
             ACCOUNT_DEVICE_RPC_MIN_TIMEOUT_MS,
-            ACCOUNT_DEVICE_RPC_DEFAULT_TIMEOUT_MS,
+            ACCOUNT_DEVICE_RPC_MAX_TIMEOUT_MS,
         )
 }
 
@@ -3242,9 +3345,18 @@ pub async fn account_device_rpc(
     let (session, relay_url) = read_account_context_for_generation(account_generation).await?;
     let client = AccountClient::new();
     let timeout_ms = account_device_rpc_timeout_ms(timeout_ms);
+    let timeout = std::time::Duration::from_millis(timeout_ms);
+    // The relay forwards this deadline to the target as `timeoutMs`; the local
+    // guard below only bounds the controller wait for the same budget.
     let response = tokio::time::timeout(
-        std::time::Duration::from_millis(timeout_ms),
-        client.device_rpc(&relay_url, &session, &target_device_id, &command_json),
+        timeout + std::time::Duration::from_secs(5),
+        client.device_rpc_with_timeout(
+            &relay_url,
+            &session,
+            &target_device_id,
+            &command_json,
+            timeout,
+        ),
     )
     .await
     .map_err(|_| format!("device RPC timed out after {timeout_ms}ms"))?
@@ -3590,7 +3702,15 @@ mod sync_state_tests {
         );
         assert_eq!(
             account_device_rpc_timeout_ms(Some(u64::MAX)),
-            ACCOUNT_DEVICE_RPC_DEFAULT_TIMEOUT_MS
+            ACCOUNT_DEVICE_RPC_MAX_TIMEOUT_MS
+        );
+        // Browser Control setup's Peer budget must survive the clamp and
+        // still exceed the host invoke limit for those commands.
+        assert_eq!(account_device_rpc_timeout_ms(Some(185_000)), 185_000);
+        assert!(
+            account_device_rpc_timeout_ms(Some(185_000))
+                > crate::api::peer_host_invoke::BROWSER_CONTROL_SETUP_INVOKE_TIMEOUT.as_millis()
+                    as u64
         );
     }
 

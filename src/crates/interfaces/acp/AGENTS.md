@@ -34,6 +34,10 @@ Keep these role features additive and do not replace either closure with
   requests, client choices, and lifecycle state may not.
 - If a future contract is needed, make it observational: environment identity,
   capability facts, and request/response DTOs only.
+- Session options may include `availableCommands` from the same metadata read.
+  Keep it optional: missing means an older host uses the commands endpoint;
+  an empty list is a supported combined snapshot. Do not infer this capability
+  from a package version. Frontends share in-flight reads, not settled snapshots.
 
 ## Verification
 
@@ -42,6 +46,7 @@ cargo check -p openbitfun-acp --no-default-features --features client
 cargo check -p openbitfun-acp --no-default-features --features server
 cargo test -p openbitfun-acp
 cargo test -p openbitfun-acp --no-default-features --features client,openbitfun-core/git --lib client::prompt::tests
+cargo test -p openbitfun-acp --no-default-features --features client,openbitfun-core/git --lib client::session_options::tests
 ```
 
 The focused client prompt tests cover protocol errors, retry, cancellation,
@@ -60,3 +65,6 @@ runtime port in [`native-agents.md`](../../../../docs/architecture/native-agents
 replaces it. The external-CLI utilities this crate shares with native drivers
 (`cli_probe`, `cli_status`, `process_tree`, `remote_shell`, `session_options`,
 `session_persistence`, `tool_card`) are owned by `openbitfun-native-agents`.
+
+The session-options tests cover legacy payload round trips and the additive
+combined metadata response. They do not establish live Agent startup latency.

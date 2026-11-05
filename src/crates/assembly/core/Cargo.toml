@@ -174,15 +174,14 @@ product-full = [
     "tools-miniapp",
     "tools-pages",
     "tools-creation",
-    "tools-canvas",
     "tools-agent-control",
     "function-agents",
-    "canvas-runtime",
     "external-sources",
     "plugin-runtime",
     "opencode-plugin-host",
     "file-watch",
     "workspace-watch",
+    "workspace-icons",
     "ssh-remote",
     "dispatch-store",
     "ptc-runtime",
@@ -402,10 +401,6 @@ tools-pages = [
 tools-creation = [
     "openbitfun-tool-packs/creation",
 ]
-tools-canvas = [
-    "openbitfun-tool-packs/canvas",
-    "canvas-runtime",
-]
 tools-agent-control = [
     "openbitfun-tool-packs/agent-control",
     "scheduled-jobs",
@@ -444,10 +439,6 @@ function-agents = [
     "openbitfun-services-integrations/function-agents",
     "runtime-services",
 ]
-canvas-runtime = [
-    "dep:openbitfun-product-domains",
-    "openbitfun-services-integrations/canvas-runtime",
-]
 runtime-services = ["dep:openbitfun-runtime-services"]
 legacy-migration = ["dep:openbitfun-legacy-migration-adapters"]
 file-watch = ["openbitfun-services-integrations/file-watch"]
@@ -461,6 +452,7 @@ filesystem = ["openbitfun-services-core/filesystem"]
 local-storage = ["dep:openbitfun-agent-tools", "openbitfun-services-core/local-storage"]
 process-runtime = ["openbitfun-services-core/process-runtime"]
 terminal = ["dep:terminal-core"]
+workspace-icons = ["workspace-runtime", "openbitfun-services-core/workspace-icons"]
 workspace-runtime = [
     "openbitfun-services-core/workspace-persistence",
     "dep:serde_yaml",

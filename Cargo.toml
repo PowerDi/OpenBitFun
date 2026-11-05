@@ -33,6 +33,7 @@ members = [
     "src/crates/adapters/webdriver",
     "src/crates/adapters/transport",
     "src/crates/services/services-core",
+    "src/crates/services/computer-use",
     "src/crates/services/services-integrations",
     "src/crates/services/legacy-migration",
     "src/crates/services/legacy-migration-adapters",
@@ -68,7 +69,7 @@ resolver = "2"
 
 # Shared package metadata — single source of truth for version
 [workspace.package]
-version = "1.0.8" # x-release-please-version
+version = "1.0.9" # x-release-please-version
 authors = ["OpenBitFun Team"]
 edition = "2021"
 
@@ -91,6 +92,8 @@ undocumented_unsafe_blocks = "warn"
 
 # Shared dependency versions to keep all crates aligned
 [workspace.dependencies]
+pkg-config = "0.3"
+x11rb = { version = "0.13", default-features = false }
 # Async runtime
 tokio = { version = "1.52", default-features = false }
 tokio-stream = { version = "0.1.18", default-features = false }
@@ -236,13 +239,10 @@ keepawake = "0.6.0"
 
 # Desktop support
 screenshots = "0.8"
-enigo = "0.2"
+enigo = { version = "0.2", default-features = false }
 resvg = { version = "0.47", default-features = false }
 atspi = "0.29"
-gstreamer = { version = "0.24", default-features = false }
-gstreamer-app = { version = "0.24", default-features = false }
 cc = { version = "1", default-features = false }
-leptess = "0.14"
 core-foundation = "0.9"
 core-graphics = { version = "0.23", features = ["elcapitan", "highsierra"] }
 foreign-types = "0.5"
@@ -257,6 +257,7 @@ tempfile = "3"
 webview2-com = "0.38"
 windows = "0.61"
 windows-core = "0.61"
+windows-version = "0.1"
 glib = "0.18"
 gtk = "0.18"
 webkit2gtk = "2.0"
@@ -310,7 +311,6 @@ russh = "0.45"
 russh-sftp = "2.1"
 russh-keys = "0.45"
 shellexpand = "3"
-ssh_config = "0.1"
 rustls = { version = "0.23", default-features = false }
 
 [patch.crates-io]

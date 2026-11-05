@@ -13,7 +13,7 @@ const styles = readFileSync(
 );
 
 describe('ModelSettingsPage dialog presentation', () => {
-  it('uses the same Panel Dialog preset throughout model management workflows', () => {
+  it('uses the shared panel preset throughout model management workflows', () => {
     const owners = [
       '../../../app/scenes/settings/pages/ai/ModelSettingsPage.tsx',
       '../../../app/scenes/settings/pages/ai/ModelDiscoveryPicker.tsx',
@@ -39,7 +39,7 @@ describe('ModelSettingsPage dialog presentation', () => {
     }
   });
 
-  it('keeps model configuration editors at a moderate responsive size', () => {
+  it('keeps model editors on the shared centered panel spacing and floating actions', () => {
     const editorDialogStart = source.indexOf('open={isEditing && !!editingConfig}');
     const editorDialog = source.slice(editorDialogStart, source.indexOf('<ConfirmDialog', editorDialogStart));
     const editingFormStart = source.indexOf('const renderEditingForm = () => {');
@@ -52,6 +52,7 @@ describe('ModelSettingsPage dialog presentation', () => {
     expect(editingFormStart).toBeGreaterThan(-1);
     expect(editorDialog).toContain('className="openbitfun-model-settings__editor-dialog"');
     expect(editorDialog).toContain('preset="panel"');
+    expect(editorDialog).not.toContain('size="lg"');
     expect(editorDialog).toContain('<DialogHeaderLeading>');
     expect(editorDialog).toContain('<DialogHeaderActions>');
     expect(editorDialog).not.toContain('size="2xl"');
@@ -67,7 +68,7 @@ describe('ModelSettingsPage dialog presentation', () => {
     );
     expect(editorDialog).toContain('<DialogClose disabled={isEditorSaving || !!(managingSubscriptionProvider && loggingInProvider)} />');
     expect(editorDialog).toContain('loading={isEditorSaving}');
-    expect(editingForm.match(/fieldSurface="default"/g)).toHaveLength(3);
+    expect(editingForm.match(/fieldSurface="filled"/g)).toHaveLength(4);
     expect(editingForm).not.toContain('<ScrollArea');
     expect(editingForm).toContain('className="openbitfun-model-settings__form-content"');
     expect(editorDialog).not.toContain('openbitfun-model-settings__editor-dialog-footer');
@@ -83,7 +84,7 @@ describe('ModelSettingsPage dialog presentation', () => {
     expect(source).toContain('if (editingModalHasUnsavedChanges) {');
     expect(source).toContain('setDraftCloseConfirmOpen(true);');
     expect(source).toContain('onConfirm={preserveEditingDraftAndClose}');
-    expect(source).toContain('onSecondary={closeEditingModal}');
+    expect(source).toContain('onSecondary={discardEditingDraftAndClose}');
     expect(source).toContain("confirmText={t('draftClose.keepAndClose')}");
     expect(source).toContain("cancelText={t('draftClose.continueEditing')}");
     expect(source).toContain("statusMessage={t('draftClose.retainedHint')}");

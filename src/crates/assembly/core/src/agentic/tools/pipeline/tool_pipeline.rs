@@ -32,13 +32,15 @@ use openbitfun_agent_tools::{
     build_tool_execution_timeout_presentation,
     build_user_rejected_tool_presentation_with_instruction,
     build_user_steering_interrupted_presentation, build_write_tail_closure_notice,
-    render_ptc_loaded_tool_typescript_sdk, render_tool_result_for_assistant,
+    render_ptc_loaded_tool_sdk, render_tool_result_for_assistant,
     validate_tool_execution_admission, DynamicToolInfo, LoadedDeferredToolSpec, PermissionIntent,
     PtcToolContract, ResolvedToolInvocation, ToolExecutionAdmissionRejection,
     ToolExecutionAdmissionRequest, ToolExecutionErrorPresentation, CALL_DEFERRED_TOOL_NAME,
-    GET_TOOL_SPEC_TOOL_NAME, PTC_NESTED_ALLOWED_TOOLS_CONTEXT_KEY,
+    GET_TOOL_SPEC_TOOL_NAME, PTC_LANGUAGE_CONTEXT_KEY, PTC_NESTED_ALLOWED_TOOLS_CONTEXT_KEY,
     USER_STEERING_INTERRUPTED_MESSAGE,
 };
+#[cfg(feature = "ptc-runtime")]
+use openbitfun_core_types::PtcLanguage;
 use openbitfun_runtime_ports::{
     PermissionReply, PermissionRequest, PermissionRequestSource, PermissionRequestSourceKind,
     PermissionResourceCaseSensitivity, RoundInjectionToolPreemption,
@@ -50,6 +52,8 @@ use openbitfun_runtime_ports::{
 };
 #[cfg(feature = "ptc-runtime")]
 use openbitfun_services_integrations::ptc_runtime::NodePtcRuntime;
+#[cfg(feature = "ptc-runtime")]
+use openbitfun_services_integrations::python_ptc_runtime::PythonPtcRuntime;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
@@ -183,9 +187,13 @@ fn convert_tool_result_with_metadata(
             // "completed successfully" can hide fields the model needs for the
             // next decision.
             let assistant_text = result_for_assistant.or_else(|| {
+                let mut assistant_visible_data = assistant_data.clone();
+                if let Some(object) = assistant_visible_data.as_object_mut() {
+                    object.remove("__ptc_language");
+                }
                 Some(render_tool_result_for_assistant(
                     effective_tool_name,
-                    &assistant_data,
+                    &assistant_visible_data,
                 ))
             });
             // Tools with a typed response envelope can report a recoverable
@@ -636,7 +644,7 @@ pub fn permission_project_id_for_workspace_identity(
 
     Ok(
         openbitfun_services_core::workspace_identity::remote_workspace_stable_id(
-            &identity.hostname,
+            &identity.identity_host(),
             identity.logical_workspace_path(),
         ),
     )
@@ -727,6 +735,7 @@ fn native_hook_session_facts<'a>(
             .is_some_and(|workspace| workspace.is_remote()),
         model: &context.primary_model_facts.model_id,
         bypass_permissions: options.auto_approve_ask,
+        workspace_services: context.workspace_services.as_ref(),
     }
 }
 
@@ -752,6 +761,14 @@ struct PtcPipelineToolCallHandler {
     options: ToolExecutionOptions,
     parent_tool_id: String,
     loaded_deferred_tool_specs: Arc<TokioMutex<Vec<LoadedDeferredToolSpec>>>,
+}
+
+#[cfg(feature = "ptc-runtime")]
+fn build_ptc_tool_spec_response(language: PtcLanguage, sdk_source: String) -> serde_json::Value {
+    serde_json::json!({
+        "language": language.as_str(),
+        "sdk_source": sdk_source,
+    })
 }
 
 #[cfg(feature = "ptc-runtime")]
@@ -886,12 +903,20 @@ impl PtcToolCallHandler for PtcPipelineToolCallHandler {
             .cloned()
             .unwrap_or_else(|| serde_json::json!({}));
         let output_schema = tool.output_schema();
-        let typescript_sdk = render_ptc_loaded_tool_typescript_sdk(&PtcToolContract::new(
-            tool_name.clone(),
-            description,
-            input_schema,
-            output_schema,
-        ));
+        let language = if self
+            .context
+            .context_vars
+            .get(PTC_LANGUAGE_CONTEXT_KEY)
+            .is_some_and(|language| language.eq_ignore_ascii_case("python"))
+        {
+            PtcLanguage::Python
+        } else {
+            PtcLanguage::TypeScript
+        };
+        let sdk_source = render_ptc_loaded_tool_sdk(
+            &PtcToolContract::new(tool_name.clone(), description, input_schema, output_schema),
+            language,
+        );
 
         let mut loaded = self.loaded_deferred_tool_specs.lock().await;
         if let Some(existing) = loaded.iter_mut().find(|spec| spec.tool_name == tool_name) {
@@ -902,9 +927,7 @@ impl PtcToolCallHandler for PtcPipelineToolCallHandler {
                 catalog_generation,
             });
         }
-        Ok(serde_json::json!({
-            "typescript_sdk": typescript_sdk,
-        }))
+        Ok(build_ptc_tool_spec_response(language, sdk_source))
     }
 }
 
@@ -2974,7 +2997,12 @@ impl ToolPipeline {
             .effective_arguments()
             .get("timeout_ms")
             .and_then(serde_json::Value::as_u64);
-        let runtime = if context.is_remote() {
+        let use_python = context
+            .custom_data
+            .get(PTC_LANGUAGE_CONTEXT_KEY)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|language| language.eq_ignore_ascii_case("python"));
+        let runtime: Box<dyn PtcRuntime> = if context.is_remote() {
             #[cfg(feature = "ssh-remote")]
             {
                 let workspace = context.workspace.as_ref().ok_or_else(|| {
@@ -3002,7 +3030,11 @@ impl ToolPipeline {
                             "Remote SSH services are not initialized".to_string(),
                         )
                     })?;
-                NodePtcRuntime::for_remote(ssh_manager, connection_id)
+                if use_python {
+                    Box::new(PythonPtcRuntime::for_remote(ssh_manager, connection_id))
+                } else {
+                    Box::new(NodePtcRuntime::for_remote(ssh_manager, connection_id))
+                }
             }
             #[cfg(not(feature = "ssh-remote"))]
             {
@@ -3011,7 +3043,11 @@ impl ToolPipeline {
                 ));
             }
         } else {
-            NodePtcRuntime::discover()
+            if use_python {
+                Box::new(PythonPtcRuntime::discover())
+            } else {
+                Box::new(NodePtcRuntime::discover())
+            }
         };
         let operation_id = task.tool_call.tool_id.clone();
         let handler = Arc::new(PtcPipelineToolCallHandler {
@@ -3055,6 +3091,34 @@ impl ToolPipeline {
                 "logs": response.logs,
             })
         };
+        // Persist the source language alongside the result so replayed RunCode
+        // cards can select the correct syntax highlighter even though the
+        // provider's original arguments only contain `code`.
+        let ptc_language = context
+            .custom_data
+            .get(PTC_LANGUAGE_CONTEXT_KEY)
+            .map(|value| {
+                if value
+                    .as_str()
+                    .is_some_and(|value| value.eq_ignore_ascii_case("python"))
+                {
+                    PtcLanguage::Python
+                } else {
+                    PtcLanguage::TypeScript
+                }
+            })
+            .unwrap_or_default();
+        if let Some(object) = data.as_object_mut() {
+            object.insert(
+                "__ptc_language".to_string(),
+                serde_json::Value::String(ptc_language.as_str().to_string()),
+            );
+        } else {
+            data = serde_json::json!({
+                "value": data,
+                "__ptc_language": ptc_language.as_str(),
+            });
+        }
         let loaded_deferred_tool_specs = handler.loaded_deferred_tool_specs.lock().await.clone();
         if !loaded_deferred_tool_specs.is_empty() {
             let loaded_specs_value = serde_json::to_value(&loaded_deferred_tool_specs)
@@ -4222,6 +4286,7 @@ mod tests {
             attempt_index: None,
             agent_type: "agent".to_string(),
             workspace: None,
+            model_client: None,
             primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
             context_vars: HashMap::new(),
             subagent_parent_info: None,
@@ -4360,6 +4425,23 @@ mod tests {
     }
 
     #[cfg(feature = "ptc-runtime")]
+    #[test]
+    fn ptc_tool_spec_response_uses_one_language_neutral_sdk_field() {
+        for language in [PtcLanguage::TypeScript, PtcLanguage::Python] {
+            let response = build_ptc_tool_spec_response(language, "sdk".to_string());
+            assert_eq!(
+                response,
+                json!({
+                    "language": language.as_str(),
+                    "sdk_source": "sdk",
+                })
+            );
+            assert!(response.get("typescript_sdk").is_none());
+            assert!(response.get("python_sdk").is_none());
+        }
+    }
+
+    #[cfg(feature = "ptc-runtime")]
     #[tokio::test]
     async fn ptc_run_code_dispatches_nested_calls_through_the_pipeline() {
         let pipeline = test_tool_pipeline();
@@ -4396,7 +4478,11 @@ mod tests {
             results[0].tool_name,
             openbitfun_agent_tools::PTC_RUN_CODE_TOOL_NAME
         );
-        assert_eq!(results[0].result.result, json!({"content": "ok"}));
+        assert_eq!(results[0].result.result["content"], json!("ok"));
+        assert_eq!(
+            results[0].result.result["__ptc_language"],
+            json!("typescript")
+        );
 
         let nested = pipeline
             .state_manager
@@ -4517,12 +4603,24 @@ mod tests {
     #[tokio::test]
     async fn presentation_tools_follow_permission_mode_without_weakening_denials() {
         use crate::agentic::tools::implementations::{
-            DesktopCardTool, PageDeployTool, PagePublishTool,
+            DesktopCardTool, PageDeployTool, PageManageTool, PagePublishTool,
         };
         use openbitfun_agent_runtime::permission::PERMISSION_MODE_CONTEXT_KEY;
         use openbitfun_runtime_ports::PermissionMode;
 
         let tools: Vec<(Box<dyn Tool>, serde_json::Value)> = vec![
+            (
+                Box::new(PageManageTool::new()),
+                json!({"action": "permissions", "slug": "demo", "visibility": "public"}),
+            ),
+            (
+                Box::new(PageManageTool::new()),
+                json!({"action": "update", "slug": "demo", "files": {"index.html": "Updated"}, "deploy": true}),
+            ),
+            (
+                Box::new(PageManageTool::new()),
+                json!({"action": "delete", "slug": "demo"}),
+            ),
             (
                 Box::new(DesktopCardTool::new()),
                 json!({"action": "create", "card": {

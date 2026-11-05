@@ -25,17 +25,6 @@ export function delegationToolKind(toolName: string): DelegationToolKind | undef
   return parsed?.serverId === DELEGATION_TOOL_SERVER ? KINDS[parsed.toolName] : undefined;
 }
 
-/** Product names of the native agents; brand names are not translated. */
-const AGENT_NAMES: Record<string, string> = {
-  'claude-native': 'Claude Code',
-  'codex-native': 'Codex',
-  'pi-native': 'Pi',
-};
-
-export function delegationAgentName(clientId: string): string {
-  return AGENT_NAMES[clientId] ?? clientId;
-}
-
 /**
  * Child status words of the delegation tools and notices
  * (`delegation/snapshot.rs`), as session lineage lifecycles.

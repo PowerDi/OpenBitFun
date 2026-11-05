@@ -11,10 +11,15 @@ async function loadSource(relativePath, imports = {}) {
   code = code.replace(/from (['"])([^'"]+)\1/g, (_, quote, specifier) => (
     `from ${JSON.stringify(imports[specifier] ?? import.meta.resolve(specifier))}`
   ));
+  code = code.replace(/import\((['"])([^'"]+)\1\)/g, (_, quote, specifier) => (
+    `import(${JSON.stringify(imports[specifier] ?? import.meta.resolve(specifier))})`
+  ));
   return { url: `data:text/javascript;base64,${Buffer.from(code).toString('base64')}`, source };
 }
 
 const links = await loadSource('../src/services/pairingLink.ts');
+const relayEncoding = await loadSource('../src/services/relayMessageEncoding.ts');
+const encryptionImports = { './relayMessageEncoding': relayEncoding.url };
 const selection = await loadSource('../src/services/accountDeviceSelection.ts');
 const { selectAccountDevice } = await import(selection.url);
 // The shared build module reads the workspace version from package.json; the
@@ -90,7 +95,7 @@ test('online selection preserves exact QR targeting and supports later device av
 });
 
 test('GitHub login registers the browser store key without generating another identity', async () => {
-  const encryption = await loadSource('../src/services/E2EEncryption.ts');
+  const encryption = await loadSource('../src/services/E2EEncryption.ts', encryptionImports);
   const { deriveDeviceMessageKey } = await import(encryption.url);
   const { x25519 } = await import('@noble/curves/ed25519.js');
   const authModule = await loadSource('../src/services/CloudAccountClient.ts', { './E2EEncryption': encryption.url, './pairingLink': links.url, ...clientBuildImports });
@@ -165,7 +170,7 @@ test('alias editing replaces the device row instead of repeating its name', asyn
 });
 
 test('authorization follows the central GitHub OAuth URL and rejects lookalike destinations', async () => {
-  const encryption = await loadSource('../src/services/E2EEncryption.ts');
+  const encryption = await loadSource('../src/services/E2EEncryption.ts', encryptionImports);
   const authModule = await loadSource('../src/services/CloudAccountClient.ts', { './E2EEncryption': encryption.url, './pairingLink': links.url, ...clientBuildImports });
   const { CloudAccountClient } = await import(authModule.url);
   const previous = { fetch: globalThis.fetch, window: globalThis.window, setTimeout: globalThis.setTimeout };
@@ -284,7 +289,7 @@ function memoryStorage() {
   };
 }
 
-const encryptionModule = await loadSource('../src/services/E2EEncryption.ts');
+const encryptionModule = await loadSource('../src/services/E2EEncryption.ts', encryptionImports);
 const accountStoreModule = await loadSource('../src/services/CloudAccountSessionStore.ts', {
   './E2EEncryption': encryptionModule.url, './pairingLink': links.url,
 });
@@ -442,4 +447,25 @@ test('a dropped connection mid-sign-in is retried instead of ending the attempt'
   assert.ok(offline.error instanceof CloudAccountTransportError);
   assert.equal(offline.error.message, 'Could not reach the account service.');
   assert.equal(offline.polls.length, 60);
+});
+
+test('restored session workspace is additive: old records stay readable and bad values are dropped', () => {
+  const scope = { accountId: 'a', controllerDeviceId: 'c', relayUrl: 'r', routeKey: 'k' };
+  const stored = (session) => ({
+    getItem: () => JSON.stringify({ version: 1, ...scope, deviceId: 'device', session }),
+    setItem() {}, removeItem() {},
+  });
+  const old = { id: 's', name: 'Session', agentType: 'Claw' };
+  assert.deepEqual(loadMobileNavigation(scope, stored(old)).session, old);
+  assert.deepEqual(loadMobileNavigation(scope, stored({ ...old, workspace: 'bad' })).session, old);
+  assert.deepEqual(loadMobileNavigation(scope, stored({ ...old, workspace: { path: 42, name: null } })).session, old);
+  assert.deepEqual(
+    loadMobileNavigation(scope, stored({
+      ...old, workspace: { workspace_id: 'ws', name: 'Nova', workspace_kind: 'future-kind' },
+    })).session.workspace,
+    {
+      workspace_id: 'ws', path: undefined, remote_connection_id: undefined,
+      remote_ssh_host: undefined, name: 'Nova', workspace_kind: undefined,
+    },
+  );
 });

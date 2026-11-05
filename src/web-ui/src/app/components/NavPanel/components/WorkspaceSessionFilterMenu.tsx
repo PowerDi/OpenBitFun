@@ -1,3 +1,5 @@
+import { deviceWorkspaceCatalog } from '@/infrastructure/peer-device/deviceWorkspaceCatalog';
+import { getActiveSurfaceId } from '@/infrastructure/peer-device/deviceSurface';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { RotateCcw } from 'lucide-react';
 
@@ -129,7 +131,7 @@ const WorkspaceSessionFilterMenu: React.FC = () => {
       kind: 'single', value: view.ordering, options: ['updated', 'status', 'created', 'name'] as WorkspaceSessionOrdering[], choose: value => view.setOrdering(value as WorkspaceSessionOrdering),
     },
     show: {
-      kind: 'single', value: view.show, options: ['all', 'unread', 'attention'] as WorkspaceSessionShow[], choose: value => view.setShow(value as WorkspaceSessionShow),
+      kind: 'single', value: view.show, options: ['all', 'unread', 'attention', 'archived'] as WorkspaceSessionShow[], choose: value => view.setShow(value as WorkspaceSessionShow),
     },
     status: {
       filter: 'hiddenStatuses',
@@ -295,6 +297,11 @@ const WorkspaceSessionFilterMenu: React.FC = () => {
         <MenuItem
           onClick={() => {
             flowChatStore.clearAllSessionUnreadCompletions();
+            // The sidebar lists every device: mark theirs read on their hosts too.
+            const rendered = getActiveSurfaceId();
+            for (const surfaceId of deviceWorkspaceCatalog.loadedSurfaces()) {
+              if (surfaceId !== rendered) void deviceWorkspaceCatalog.markAllRead(surfaceId);
+            }
             close();
           }}
         >

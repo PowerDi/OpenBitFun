@@ -190,20 +190,6 @@
     transition: color var(--openbitfun-motion-duration-fast) var(--openbitfun-motion-easing-standard),
                 background var(--openbitfun-motion-duration-fast) var(--openbitfun-motion-easing-standard),
                 box-shadow var(--openbitfun-motion-duration-fast) var(--openbitfun-motion-easing-standard);
-
-
-
-    &:hover {
-      .openbitfun-nav-panel__workspace-item-icon-default {
-        opacity: 0;
-        transform: scale(0.7);
-      }
-
-      .openbitfun-nav-panel__workspace-item-icon-toggle {
-        opacity: 1;
-        transform: scale(1);
-      }
-    }
   }
 
   &__workspace-item:not(.is-active) &__workspace-item-card {
@@ -242,16 +228,6 @@
 
     &:hover {
       background: color-mix(in srgb, var(--openbitfun-color-action-neutral-surface-hover) 60%, transparent);
-
-      .openbitfun-nav-panel__workspace-item-icon-default {
-        opacity: 0;
-        transform: scale(0.7);
-      }
-
-      .openbitfun-nav-panel__workspace-item-icon-toggle {
-        opacity: 1;
-        transform: scale(1);
-      }
     }
   }
 
@@ -358,22 +334,9 @@
       opacity: 1;
       transform: scale(1);
     }
-
-    .openbitfun-nav-panel__workspace-item-icon-toggle {
-      position: absolute;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      inset: 0;
-      opacity: 0;
-      transform: scale(0.7);
-      color: var(--openbitfun-color-content-primary);
-
-    }
   }
 
   &__workspace-item-icon {
-    position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -384,28 +347,6 @@
     /* The row color already communicates inactive, hover, and active states.
      * Compact one-pixel icon strokes must not be attenuated a second time. */
     opacity: 1;
-  }
-
-  &__workspace-item-icon-default,
-  &__workspace-item-icon-toggle {
-    position: absolute;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    transition: opacity var(--openbitfun-motion-duration-fast) var(--openbitfun-motion-easing-standard),
-                transform var(--openbitfun-motion-duration-fast) var(--openbitfun-motion-easing-standard);
-  }
-
-  &__workspace-item-icon-default {
-    opacity: 1;
-    transform: scale(1);
-  }
-
-  &__workspace-item-icon-toggle {
-    opacity: 0;
-    transform: scale(0.7);
-    color: inherit;
-
   }
 
   &__workspace-item-label {
@@ -445,26 +386,32 @@
   &__workspace-item-name-line {
     display: flex;
     align-items: center;
+    gap: var(--openbitfun-space-2);
     min-width: 0;
     flex: 1 1 0;
     overflow: hidden;
+  }
+
+  &__workspace-item-name-line > &__workspace-item-label {
+    flex: 0 1 auto;
   }
 
   &__workspace-item[data-openbitfun-state~='remote'] &__workspace-item-label {
     text-overflow: clip;
   }
 
+  /**
+   * The folder name owns the row; the remote chip is secondary metadata. It may
+   * shrink to an ellipsis (full details stay in its tooltip) and never takes
+   * more than a bounded share of the row.
+   */
   &__workspace-item-remote {
     display: inline-flex;
     align-items: center;
     gap: var(--openbitfun-space-2);
-    /* The directory name identifies the row; the chip is metadata. The chip
-     * yields first and the host label ellipsizes so a long address can never
-     * squeeze the name to unreadable. */
     flex: 0 1 auto;
     min-width: 0;
-    max-width: 55%;
-    overflow: hidden;
+    max-width: 45%;
     margin-left: auto;
     min-height: 24px;
     padding: 0 var(--openbitfun-space-2);
@@ -477,11 +424,6 @@
     transition:
       background var(--openbitfun-motion-duration-fast) var(--openbitfun-motion-easing-standard),
       color var(--openbitfun-motion-duration-fast) var(--openbitfun-motion-easing-standard);
-
-    &.is-connected {
-      background: var(--openbitfun-color-status-success-surface);
-      color: var(--openbitfun-color-status-success-content);
-    }
 
     &.is-error,
     &.is-disconnected {
@@ -499,8 +441,8 @@
     flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
+    text-overflow: ellipsis;
   }
 
   &__workspace-item-remote-status {
@@ -835,18 +777,7 @@
   }
 
   &__workspace-item-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
     flex-shrink: 0;
-    padding: 1px 6px;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--openbitfun-color-action-secondary-hover) 88%, transparent);
-    color: var(--openbitfun-color-content-secondary);
-    font-size: var(--openbitfun-type-micro-font-size);
-    font-weight: var(--openbitfun-type-heading-page-font-weight);
-    line-height: var(--openbitfun-type-modifier-leading-ui-line-height);
-    white-space: nowrap;
   }
 
   &__workspace-item-branch {
@@ -944,15 +875,6 @@
     min-width: 0;
     max-width: 100%;
     overflow-x: clip;
-    transition: opacity var(--openbitfun-motion-duration-fast) var(--openbitfun-motion-easing-standard);
-    opacity: 1;
-
-    &.is-collapsed {
-      max-height: 0;
-      opacity: 0;
-      overflow: hidden;
-      pointer-events: none;
-    }
 
     .openbitfun-nav-panel__inline-list {
       // Let the row own the full selection surface; indent only its content below.
@@ -973,6 +895,31 @@
     .openbitfun-nav-panel__inline-empty {
       padding-left: var(--openbitfun-space-1);
     }
+  }
+
+  &__workspace-item-sessions--project {
+    display: grid;
+    grid-template-rows: 1fr;
+    overflow: clip;
+    opacity: 1;
+    transition:
+      grid-template-rows var(--openbitfun-motion-duration-normal) var(--openbitfun-motion-easing-standard),
+      opacity var(--openbitfun-motion-duration-normal) var(--openbitfun-motion-easing-standard);
+
+    &.is-collapsed {
+      grid-template-rows: 0fr;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      transition: none;
+    }
+  }
+
+  &__workspace-item-sessions-inner {
+    min-block-size: 0;
+    min-inline-size: 0;
   }
 
   &__workspace-drop-target {
@@ -1283,7 +1230,8 @@
 
   // Workspace activity selects the group and its current session together. When
   // the nested row is visible as the selection owner, avoid a competing parent fill.
-  &__workspace-item.is-active:has(&__workspace-item-sessions &__inline-item.is-active) &__workspace-item-card {
+  &__workspace-item.is-active:has(&__workspace-item-sessions &__inline-item.is-active) &__workspace-item-card,
+  &__assistant-item.is-active:has(&__workspace-item-sessions &__inline-item.is-active) &__assistant-item-card {
     background: transparent;
   }
 
@@ -1303,10 +1251,6 @@
     transition:
       background 120ms ease,
       color 120ms ease;
-  }
-
-  &__workspace-item-sessions {
-    transition: none;
   }
 
   &__workspace-item-menu-popover {
@@ -1334,7 +1278,8 @@
     @include shell-surfaces.navigation-selection-feedback;
   }
 
-  .openbitfun-nav-panel__workspace-item.is-active:has(.openbitfun-nav-panel__workspace-item-sessions .openbitfun-nav-panel__inline-item.is-active) .openbitfun-nav-panel__workspace-item-card:hover {
+  .openbitfun-nav-panel__workspace-item.is-active:has(.openbitfun-nav-panel__workspace-item-sessions .openbitfun-nav-panel__inline-item.is-active) .openbitfun-nav-panel__workspace-item-card:hover,
+  .openbitfun-nav-panel__assistant-item.is-active:has(.openbitfun-nav-panel__workspace-item-sessions .openbitfun-nav-panel__inline-item.is-active) .openbitfun-nav-panel__assistant-item-card:hover {
     background: transparent;
   }
 }
@@ -1388,16 +1333,17 @@
     @include nav-font.nav-panel-text-row-active;
   }
 
-  &__workspace-item.is-active:has(&__workspace-item-sessions &__inline-item.is-active) &__workspace-item-label {
+  &__workspace-item.is-active:has(&__workspace-item-sessions &__inline-item.is-active) &__workspace-item-label,
+  &__assistant-item.is-active:has(&__workspace-item-sessions &__inline-item.is-active) &__assistant-item-label {
     @include nav-font.nav-panel-text-row;
   }
 
-  &__workspace-item.is-active:has(&__workspace-item-sessions &__inline-item.is-active) &__workspace-item-icon {
+  &__workspace-item.is-active:has(&__workspace-item-sessions &__inline-item.is-active) &__workspace-item-icon,
+  &__assistant-item.is-active:has(&__workspace-item-sessions &__inline-item.is-active) &__assistant-item-avatar {
     color: var(--openbitfun-color-content-secondary);
   }
 
-  &__workspace-item-remote,
-  &__workspace-item-badge {
+  &__workspace-item-remote {
     @include nav-font.nav-panel-text-meta;
 
     font-size: var(--openbitfun-type-meta-font-size);
@@ -1428,8 +1374,8 @@
 .openbitfun-nav-panel__workspace-item[data-openbitfun-state~='remote'] .openbitfun-nav-panel__workspace-item-name-action {
   flex: 1 1 0;
   max-width: none;
-  /* Hard floor paired with the host chip's 55% cap: the directory name keeps
-   * a guaranteed share of the row no matter how long the host address is. */
+  /* Hard floor paired with the host chip's cap: the directory name keeps a
+   * guaranteed share of the row no matter how long the host label is. */
   min-width: 40%;
 }
 

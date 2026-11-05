@@ -31,6 +31,8 @@ vi.mock('../AgenticEventListener', () => ({
 }));
 
 import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
+import { activateSurface, LOCAL_SURFACE_ID } from '@/infrastructure/peer-device/deviceSurface';
+import { beginDeviceOpen, endDeviceOpen } from '@/infrastructure/peer-device/deviceOpenIntent';
 import { sessionStream } from '../../session-stream/SessionStream';
 import { FlowChatStore } from '../../store/FlowChatStore';
 import {
@@ -686,6 +688,129 @@ describe('PeerSessionRefreshModule dead subscription recovery', () => {
 
     expect(ensureLiveSubscription).not.toHaveBeenCalled();
     cleanup();
+  });
+});
+
+describe('PeerSessionRefreshModule draft subscription', () => {
+  type DraftPhase = 'editing' | 'creating' | 'ready';
+
+  function contextWithDraft(phase: DraftPhase) {
+    const loadRelaySessionHistory = vi.fn(async () => {});
+    const selectorListeners: Array<{ select: (value: any) => string; notify: () => void; last: string }> = [];
+    let state = {
+      activeSessionId: 'draft-1',
+      sessions: new Map([['draft-1', {
+        sessionId: 'draft-1',
+        workspaceId: 'workspace-1',
+        historyState: 'new',
+        isHistorical: false,
+        isTransient: false,
+        draft: { workspaceId: 'workspace-1', phase, turnId: 'turn-1' },
+      }]]),
+    };
+    const context = {
+      flowChatStore: {
+        getState: () => state,
+        subscribeSelector: vi.fn((select: (value: any) => string, notify: () => void) => {
+          selectorListeners.push({ select, notify, last: select(state) });
+          return () => {};
+        }),
+        loadRelaySessionHistory,
+      },
+      eventBatcher: { flushNow: vi.fn(), clear: vi.fn() },
+      contentBuffers: new Map(),
+      activeTextItems: new Map(),
+    } as any;
+    return {
+      context,
+      loadRelaySessionHistory,
+      setPhase(next: DraftPhase) {
+        const session = state.sessions.get('draft-1')!;
+        state = {
+          ...state,
+          sessions: new Map([['draft-1', { ...session, draft: { ...session.draft, phase: next } }]]),
+        };
+        for (const listener of selectorListeners) {
+          const value = listener.select(state);
+          if (value !== listener.last) { listener.last = value; listener.notify(); }
+        }
+      },
+    };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    peerModeMock.active = true;
+    activateSurface('peer-device');
+    vi.stubGlobal('document', {
+      visibilityState: 'visible',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+    vi.stubGlobal('window', { addEventListener: vi.fn(), removeEventListener: vi.fn() });
+  });
+
+  afterEach(() => {
+    activateSurface(LOCAL_SURFACE_ID);
+    vi.clearAllMocks();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('does not subscribe a reserved draft id the host has never seen', async () => {
+    const { context, loadRelaySessionHistory, setPhase } = contextWithDraft('editing');
+    const cleanup = installPeerSessionRefresh(context);
+
+    await vi.advanceTimersByTimeAsync(0);
+    setPhase('creating');
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(loadRelaySessionHistory).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it('subscribes exactly once when the host accepts the draft', async () => {
+    const { context, loadRelaySessionHistory, setPhase } = contextWithDraft('creating');
+    const cleanup = installPeerSessionRefresh(context);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(loadRelaySessionHistory).not.toHaveBeenCalled();
+
+    setPhase('ready');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(loadRelaySessionHistory).toHaveBeenCalledTimes(1);
+    expect(loadRelaySessionHistory).toHaveBeenCalledWith('draft-1');
+    cleanup();
+  });
+
+  it.each(['new:workspace-1', 'session:another-session'])('defers the previous tab while opening %s and resumes after a failed open', async key => {
+    const { context, loadRelaySessionHistory } = contextWithDraft('ready');
+    const intent = beginDeviceOpen({ surfaceId: 'peer-device', key,
+      sessionId: key.startsWith('session:') ? 'another-session' : undefined });
+    const cleanup = installPeerSessionRefresh(context);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(loadRelaySessionHistory).not.toHaveBeenCalled();
+      endDeviceOpen(intent);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(loadRelaySessionHistory).toHaveBeenCalledWith('draft-1');
+    } finally {
+      cleanup();
+      endDeviceOpen(intent);
+    }
+  });
+
+  it('starts the requested session while its open intent is still active', async () => {
+    const { context, loadRelaySessionHistory } = contextWithDraft('ready');
+    const intent = beginDeviceOpen({ surfaceId: 'peer-device', key: 'session:draft-1', sessionId: 'draft-1' });
+    const cleanup = installPeerSessionRefresh(context);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(loadRelaySessionHistory).toHaveBeenCalledWith('draft-1');
+    } finally {
+      cleanup();
+      endDeviceOpen(intent);
+    }
   });
 });
 

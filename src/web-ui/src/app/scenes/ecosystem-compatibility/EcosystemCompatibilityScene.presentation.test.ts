@@ -15,21 +15,20 @@ function source(relativePath: string): string {
 }
 
 describe('ecosystem compatibility scene presentation contract', () => {
-  it('opens as a standalone scene instead of a settings destination', () => {
+  it('opens inside Settings and removes the standalone menu entry', () => {
     const footerActions = source('../../components/NavPanel/components/PersistentFooterActions.tsx');
-    const activator = source('../../global-search/productActionActivator.ts');
     const navigation = source('./ecosystemCompatibilityStore.ts');
-    const viewport = source('../SceneViewport.tsx');
+    const page = source('../settings/pages/tools/ExternalImportSettingsPage.tsx');
+    const scene = source('./EcosystemCompatibilityScene.tsx');
+    const content = source('./ExternalAgentContent.tsx');
 
-    expect(footerActions).toContain("activateProductAction('surface.ecosystemCompatibility.open')");
-    expect(footerActions).not.toContain("activateProductAction('settings.external-sources.open')");
-    expect(footerActions).toContain('useExternalAppAwareness(');
-    expect(footerActions).toContain('openbitfun-nav-panel__top-action-unseen');
-    expect(activator).toContain("case 'surface.ecosystemCompatibility.open':");
-    expect(activator).toContain('openEcosystemCompatibility();');
-    expect(navigation).toContain("openScene('ecosystem-compatibility')");
-    expect(viewport).toContain("case 'ecosystem-compatibility':");
-    expect(viewport).toContain('<EcosystemCompatibilityScene />');
+    expect(footerActions).not.toContain('data-testid="ecosystem-compatibility-tab"');
+    expect(navigation).toContain("openPage('tools.external-import')");
+    expect(navigation).toContain("openScene('settings')");
+    expect(page).toContain('<SettingsPage pageId="tools.external-import">');
+    expect(scene).not.toContain('ecosystem-compatibility__scroll');
+    expect(scene).toContain('<ConfigPageSection');
+    expect(content).toContain('<FieldGroup appearance="subtle" fieldSurface="ambient" dividers={false}');
   });
 
   it('uses real external-source import and ACP owners while keeping unfinished actions explicit', () => {
@@ -64,7 +63,7 @@ describe('ecosystem compatibility scene presentation contract', () => {
     expect(model).toContain("dsh: ['skill', 'hook', 'mcp']");
   });
 
-  it('retires the duplicate Settings page and redirects legacy management links', () => {
+  it('preserves legacy management links while registering the settings destination', () => {
     const registry = source('../settings/settingsRegistry.ts');
     const settingsTypes = source('../settings/settingsTypes.ts');
     const destination = source('../settings/settingsDestination.ts');
@@ -72,7 +71,7 @@ describe('ecosystem compatibility scene presentation contract', () => {
     const agents = source('../agents/AgentsScene.tsx');
     const externalMcp = source('../../../infrastructure/config/components/ExternalMcpOverview.tsx');
 
-    expect(registry).not.toContain("id: 'tools.integrations'");
+    expect(registry).toContain("id: 'tools.external-import'");
     expect(settingsTypes).not.toContain("| 'tools.integrations'");
     expect(destination).toContain("'external-sources'");
     expect(destination).toContain("'tools.integrations'");

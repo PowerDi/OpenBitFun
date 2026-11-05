@@ -6,6 +6,13 @@
 .user-message-item-shell {
   @include transcriptLayout.content-column;
 
+  // Keep the right-aligned bubble a flex item so native selection does not
+  // paint its surrounding layout gaps. Auto inline margins still own alignment;
+  // the gallery and action row retain their full reading-column layout.
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+
   --_user-message-radius: var(--openbitfun-control-flow-chat-user-message-radius);
   --_user-message-padding-inline: var(--_user-message-radius);
 
@@ -38,6 +45,12 @@
    * it changes only paint on the contents, never this row's measured layout.
    */
   position: relative;
+}
+
+.user-message-item:not(.user-message-item--expanded):not(.user-message-item--editing) {
+  // Wrapped previews stay compact; explicit lines beyond the preview leave
+  // layout below, so shorter visible lines determine the content-fit width.
+  max-width: min(28rem, var(--openbitfun-control-flow-chat-user-message-max-width));
 }
 
 .user-message-item__surface {
@@ -136,6 +149,13 @@
   gap: var(--openbitfun-control-flow-chat-inline-gap);
 }
 
+.user-message-item__host-evidence {
+  margin: 0;
+  color: var(--openbitfun-color-content-secondary);
+  font-size: var(--openbitfun-type-flow-meta-font-size);
+  line-height: var(--openbitfun-type-flow-meta-line-height);
+}
+
 // Bridges children to `.user-message-item__main` flex without an extra layout box.
 .user-message-item__main-contents-bridge {
   display: contents;
@@ -199,6 +219,24 @@
   max-height: 4.75em; /* Collapsed: up to 3 compact lines. */
   user-select: text;
   transition: none;
+}
+
+// Keep the full text in DOM order for selection offsets and source references,
+// but remove hidden lines from intrinsic sizing. The ellipsis is paint only.
+.user-message-item__content-preview::after {
+  content: '\2026';
+}
+
+.user-message-item__content-overflow {
+  display: none;
+}
+
+.user-message-item--expanded .user-message-item__content-preview::after {
+  content: none;
+}
+
+.user-message-item--expanded .user-message-item__content-overflow {
+  display: contents;
 }
 
 // Expanded state (outer scroll area).
@@ -489,4 +527,9 @@
 .user-message-item__lightbox-close[data-openbitfun-component='icon-button'] {
   &::before { content: none; }
   > [data-openbitfun-part='icon'] { display: contents; }
+}
+
+.user-message-item__large-paste-text {
+  min-height: 280px;
+  font-family: var(--openbitfun-type-code-md-font-family);
 }

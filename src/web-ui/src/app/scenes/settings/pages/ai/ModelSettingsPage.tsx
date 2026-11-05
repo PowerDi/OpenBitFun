@@ -6,6 +6,13 @@ import { ModelPoolCardActions } from './ModelPoolCardActions';
 import { ZcodeSubscriptionGroup } from './ZcodeSubscriptionGroup';
 import { SubscriptionProviderPicker } from './SubscriptionProviderPicker';
 import { OpenCodeModelQuota } from './OpenCodeModelQuota';
+import {
+  endpointPresetsForFormat,
+  findSelectedEndpointPreset,
+  previewRequestUrl,
+  remapBaseUrlForFormat,
+  resolveRequestUrl,
+} from './modelRequestUrl';
 import { SubscriptionQuotaPanel } from './SubscriptionQuotaPanel';
 import { SubscriptionAuthorizationExpiry } from './SubscriptionAuthorizationExpiry';
 import { SubscriptionCapsuleList } from './SubscriptionCapsuleList';
@@ -42,7 +49,6 @@ import { matchesImageModel } from '@/infrastructure/config/components/image-gene
 import ModelTagsField from '@/infrastructure/config/components/ModelTagsField';
 import {
   configsNeedingAutoTest,
-  providerConnectionChanged,
   stableJson,
 } from '@/infrastructure/config/components/modelConnectionTestPlan';
 import { ModelDiscoveryCoordinator } from '@/infrastructure/config/components/modelDiscoveryCoordinator';
@@ -101,7 +107,6 @@ import {
   ReasoningCatalogProjection,
   ReasoningConfig,
 } from '@/infrastructure/config/types';
-import { supportsResponsesReasoning } from '@/infrastructure/config/utils/reasoning';
 import {
   canonicalReasoningConfig,
   cloneReasoningConfig,
@@ -153,7 +158,7 @@ import {
   Tooltip,
   type ComboboxOption,
 } from '@openbitfun/ui';
-import { AlertTriangle, EyeOff, FolderOpen, Loader, Wifi } from 'lucide-react';
+import { AlertTriangle, EyeOff, FolderOpen, Loader, Undo2, Wifi } from 'lucide-react';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
 const log = createLogger('ModelSettings');
@@ -247,10 +252,6 @@ function subscriptionLoginCancelledError(): Error {
   const error = new Error('Login cancelled');
   error.name = 'SubscriptionLoginCancelled';
   return error;
-}
-
-function isResponsesProvider(provider?: string): boolean {
-  return supportsResponsesReasoning(provider);
 }
 
 function createModelDraft(
@@ -355,59 +356,36 @@ function dedupeSelectedModelDraftsByModelName(drafts: SelectedModelDraft[]): Sel
   return out;
 }
 
-/**
- * Compute the stored request URL from a base URL and provider format.
- * For Gemini, stores the bare base without the /v1beta/models/... suffix;
- * the backend dynamically appends /v1beta/models/{model}:streamGenerateContent?alt=sse.
- */
-function resolveRequestUrl(baseUrl: string, provider: string, _modelName = ''): string {
-  const trimmed = baseUrl.trim().replace(/\/+$/, '');
-  if (trimmed.endsWith('#')) {
-    return trimmed.slice(0, -1).replace(/\/+$/, '');
-  }
-  if (provider === 'openai') {
-    return trimmed.endsWith('chat/completions') ? trimmed : `${trimmed}/chat/completions`;
-  }
-  if (isResponsesProvider(provider)) {
-    return trimmed.endsWith('responses') ? trimmed : `${trimmed}/responses`;
-  }
-  if (provider === 'anthropic') {
-    if (trimmed.endsWith('/messages')) return trimmed;
-    return trimmed.endsWith('/v1') ? `${trimmed}/messages` : `${trimmed}/v1/messages`;
-  }
-  if (provider === 'gemini') {
-    return geminiBaseUrl(trimmed);
-  }
-  return trimmed;
-}
-
-/** Strip /v1beta/models/... or /models/... suffix from a gemini URL to get the bare host+path root. */
-function geminiBaseUrl(url: string): string {
-  return url
-    .replace(/\/v1beta(?:\/models(?:\/[^/?#]*(?::(?:stream)?[Gg]enerateContent)?(?:\?[^]*)?)?)?$/, '')
-    .replace(/\/models(?:\/[^/?#]*(?::(?:stream)?[Gg]enerateContent)?(?:\?[^]*)?)?$/, '')
-    .replace(/\/+$/, '');
-}
-
-/**
- * Build a human-readable preview URL for display in the UI.
- * For Gemini, show the full streaming endpoint with a model placeholder when needed.
- */
-function previewRequestUrl(baseUrl: string, provider: string, modelName?: string): string {
-  const trimmed = baseUrl.trim().replace(/\/+$/, '');
-  if (provider === 'gemini' && !trimmed.endsWith('#')) {
-    const model = modelName?.trim();
-    return `${geminiBaseUrl(trimmed)}/v1beta/models/${model ? encodeURIComponent(model) : '{model}'}:streamGenerateContent?alt=sse`;
-  }
-  return resolveRequestUrl(baseUrl, provider);
-}
-
 function hasHttpUrlScheme(value: string): boolean {
   return /^https?:\/\//i.test(value.trim());
 }
 
 function normalizeComparableString(value: string | undefined): string {
   return (value || '').trim();
+}
+
+// Normalize effective defaults only for comparison; retain the saved shape.
+function comparableRequestSettings(config: Partial<AIModelConfigType>): ModelEditorRequestSettings {
+  return {
+    ...getModelEditorRequestSettings(config),
+    custom_headers: config.custom_headers || {},
+    custom_headers_mode: config.custom_headers_mode || 'merge',
+    custom_request_body: normalizeComparableString(config.custom_request_body),
+    custom_request_body_mode: config.custom_request_body_mode || 'merge',
+  };
+}
+
+// Only editable provider values belong in the baseline. Request URLs are derived,
+// and opening disclosures or reselecting a default must not create a draft.
+function providerEditorSnapshot(config: Partial<AIModelConfigType>): string {
+  return stableJson({
+    name: normalizeComparableString(config.name),
+    provider: config.provider || 'openai',
+    base_url: normalizeComparableString(config.base_url),
+    api_key: normalizeComparableString(config.api_key),
+    auth: config.auth || { type: 'api_key' },
+    ...comparableRequestSettings(config),
+  });
 }
 
 function modelDraftHasUnsavedChanges(
@@ -428,7 +406,7 @@ function modelDraftHasUnsavedChanges(
     draft.maxTokens !== persisted.max_tokens ||
     stableJson(normalizeChannelRouting(draft.channelRouting)) !== stableJson(normalizeChannelRouting(persisted.channel_routing)) ||
     stableJson(draft.reasoning) !== stableJson(canonicalReasoningConfig(persisted)) ||
-    stableJson(draft.requestSettings) !== stableJson(getModelEditorRequestSettings(persisted)) ||
+    stableJson(comparableRequestSettings(draft.requestSettings)) !== stableJson(comparableRequestSettings(persisted)) ||
     (draft.userTags !== undefined && stableJson(draft.userTags) !== stableJson(getModelUserTags(persisted)))
   );
 }
@@ -505,6 +483,11 @@ const ModelSettingsPage: React.FC = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [isEditorSaving, setIsEditorSaving] = useState(false);
   const [editingConfig, setEditingConfig] = useState<Partial<AIModelConfigType> | null>(null);
+  const newProviderInitialSnapshotRef = React.useRef<string | null>(null);
+  const initializeNewProvider = useCallback((config: Partial<AIModelConfigType>) => {
+    newProviderInitialSnapshotRef.current = providerEditorSnapshot(config);
+    setEditingConfig(config);
+  }, []);
   const [editingTargetKey, setEditingTargetKey] = useState<string | null>(null);
   const [draftCloseConfirmOpen, setDraftCloseConfirmOpen] = useState(false);
   const [draftConflictConfirmOpen, setDraftConflictConfirmOpen] = useState(false);
@@ -528,6 +511,16 @@ const ModelSettingsPage: React.FC = () => {
   const [creationMode, setCreationMode] = useState<'selection' | 'form' | null>(null);
   const [providerQuery, setProviderQuery] = useState('');
   const [showAllProviders, setShowAllProviders] = useState(false);
+  const providerSelectionRef = React.useRef<HTMLDivElement | null>(null);
+  const returnProviderFocusIdRef = React.useRef<string | null>(null);
+  useEffect(() => {
+    if (creationMode !== 'selection' || !returnProviderFocusIdRef.current) return;
+    const providerId = returnProviderFocusIdRef.current;
+    const trigger = Array.from(providerSelectionRef.current?.querySelectorAll<HTMLButtonElement>('button[data-provider-id]') || [])
+      .find(button => button.dataset.providerId === providerId);
+    trigger?.focus();
+    returnProviderFocusIdRef.current = null;
+  }, [creationMode]);
 
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
   const [proxyConfig, setProxyConfig] = useState<ProxyConfig>(initialProxy);
@@ -674,6 +667,28 @@ const ModelSettingsPage: React.FC = () => {
   const editorSavingRef = React.useRef(false);
   const pendingEditorOpenRef = React.useRef<PendingEditorOpen | null>(null);
   const activeConnectionTestsRef = React.useRef<Record<string, ActiveConnectionTest>>({});
+  const connectionTestEpochRef = React.useRef(accountSurface.epoch);
+  useEffect(() => {
+    const invalidate = () => {
+      activeConnectionTestsRef.current = {};
+      setTestingConfigs({});
+      setTestResults({});
+    };
+    connectionTestEpochRef.current = accountSurface.epoch;
+    invalidate();
+    const unsubscribe = configManager.onConfigChange(path => {
+      if (!accountSurface.isCurrent()) return;
+      if (!path || path === 'ai' || [
+        'ai.model_routing', 'ai.proxy', 'ai.stream_idle_timeout_secs', 'ai.stream_ttft_timeout_secs',
+      ].some(owner => path === owner || path.startsWith(`${owner}.`))) invalidate();
+    });
+    accountSurface.signal.addEventListener('abort', invalidate);
+    return () => {
+      unsubscribe();
+      accountSurface.signal.removeEventListener('abort', invalidate);
+      activeConnectionTestsRef.current = {};
+    };
+  }, [accountSurface]);
 
   const requestFormatOptions = useMemo(
     () => [
@@ -1016,12 +1031,17 @@ const ModelSettingsPage: React.FC = () => {
     const persistedModels = editingConfig.id
       ? aiModels.filter(model => model.id === editingConfig.id)
       : aiModels.filter(model => editingProviderModelIds.has(model.id || ''));
-    if (persistedModels.length === 0) return true;
+    if (persistedModels.length === 0) {
+      // Missing persisted records remain dirty; only new editors have a baseline.
+      if (!editingTargetKey?.startsWith('new-provider:')) return true;
+      return selectedModelDrafts.length > 0
+        || providerEditorSnapshot(editingConfig) !== newProviderInitialSnapshotRef.current;
+    }
 
     const persisted = persistedModels[0];
     const comparableConfig = { ...persisted, ...editingConfig } as AIModelConfigType;
-    const providerFieldsChanged = providerConnectionChanged(persisted, comparableConfig)
-      || normalizeComparableString(editingConfig.name) !== normalizeComparableString(getProviderDisplayName(persisted));
+    const providerFieldsChanged = providerEditorSnapshot(comparableConfig)
+      !== providerEditorSnapshot({ ...persisted, name: getProviderDisplayName(persisted) });
     const draftFieldsChanged = selectedModelDrafts.some(draft => modelDraftHasUnsavedChanges(draft, aiModels));
     const persistedIds = new Set(persistedModels.map(model => model.id).filter(Boolean));
     const draftIds = new Set(selectedModelDrafts.map(draft => draft.configId).filter(Boolean));
@@ -1029,7 +1049,7 @@ const ModelSettingsPage: React.FC = () => {
       || Array.from(persistedIds).some(id => !draftIds.has(id));
 
     return providerFieldsChanged || draftFieldsChanged || selectionChanged;
-  }, [aiModels, editingConfig, editingProviderModelIds, isAddingCustomModel, manualModelInput, selectedModelDrafts]);
+  }, [aiModels, editingConfig, editingProviderModelIds, editingTargetKey, isAddingCustomModel, manualModelInput, selectedModelDrafts]);
 
   const createDraftsFromConfigs = (configs: AIModelConfigType[]) => (
     configs.map(config => createModelDraft(config.model_name, config, {
@@ -1450,7 +1470,7 @@ const ModelSettingsPage: React.FC = () => {
       setShowApiKey(false);
       setSelectedProviderId(null);
       setEditingTargetKey(targetKey);
-      setEditingConfig({
+      initializeNewProvider({
         name: subscriptionConnectionName(account),
         provider: account.suggested_format,
         base_url: account.provider === 'opencode' ? 'https://opencode.ai/zen/v1' : account.suggested_base_url,
@@ -1478,7 +1498,7 @@ const ModelSettingsPage: React.FC = () => {
       setCreationMode('form');
       setIsEditing(true);
     });
-  }, [requestEditorOpen, resetRemoteModelDiscovery, subscriptionConnectionName]);
+  }, [initializeNewProvider, requestEditorOpen, resetRemoteModelDiscovery, subscriptionConnectionName]);
 
   const loginCoordinatorRef = React.useRef(new SubscriptionLoginCoordinator());
   const subscriptionLoginMountedRef = React.useRef(true);
@@ -1877,7 +1897,7 @@ const ModelSettingsPage: React.FC = () => {
     // Dynamically get translated name
     const providerName = t(`providers.${template.id}.name`);
 
-    setEditingConfig({
+    initializeNewProvider({
       name: providerName,
       base_url: template.baseUrl,
       request_url: '',
@@ -1907,10 +1927,10 @@ const ModelSettingsPage: React.FC = () => {
     setShowApiKey(false);
     setSelectedProviderId(null);
     setEditingTargetKey('new-provider:custom');
-    setEditingConfig({
+    initializeNewProvider({
       name: '',
-      base_url: 'https://open.bigmodel.cn/api/paas/v4',
-      request_url: resolveRequestUrl('https://open.bigmodel.cn/api/paas/v4', 'openai'),
+      base_url: '',
+      request_url: '',
       api_key: '',
       model_name: '',
       provider: 'openai',
@@ -2022,7 +2042,8 @@ const ModelSettingsPage: React.FC = () => {
     const configId = config.id;
     if (!configId || !connectionTestSupported) return;
 
-    const signature = stableJson(config);
+    const scope = getActiveSurfaceScope();
+    const signature = stableJson([scope.key('model-connection-test'), config]);
     const activeTest = activeConnectionTestsRef.current[configId];
     if (activeTest?.signature === signature) return;
 
@@ -2033,7 +2054,7 @@ const ModelSettingsPage: React.FC = () => {
 
     try {
       const result = await aiApi.testAIConfigConnection(config);
-      if (activeConnectionTestsRef.current[configId]?.token !== token) return;
+      if (!scope.isCurrent() || activeConnectionTestsRef.current[configId]?.token !== token) return;
 
       const baseMessage = result.success ? t('messages.testSuccess') : t('messages.testFailed');
       let message = baseMessage + (result.response_time_ms ? ` (${result.response_time_ms}ms)` : '');
@@ -2053,7 +2074,7 @@ const ModelSettingsPage: React.FC = () => {
         [configId]: { success: result.success, message },
       }));
     } catch (error) {
-      if (activeConnectionTestsRef.current[configId]?.token !== token) return;
+      if (!scope.isCurrent() || activeConnectionTestsRef.current[configId]?.token !== token) return;
       const message = `${t('messages.testFailed')}\n${t('messages.errorDetails')}: ${error}`;
       setTestResults(previous => ({
         ...previous,
@@ -2061,7 +2082,7 @@ const ModelSettingsPage: React.FC = () => {
       }));
       log.warn('Model connection test failed', { configId, error });
     } finally {
-      if (activeConnectionTestsRef.current[configId]?.token === token) {
+      if (scope.isCurrent() && activeConnectionTestsRef.current[configId]?.token === token) {
         delete activeConnectionTestsRef.current[configId];
         setTestingConfigs(previous => ({ ...previous, [configId]: false }));
       }
@@ -2532,13 +2553,25 @@ const ModelSettingsPage: React.FC = () => {
     setIsEditing(false);
   };
 
+  const discardEditingDraftAndClose = () => {
+    const returnToProviderSelection = editingTargetKey?.startsWith('new-provider:')
+      && !editingTargetKey.startsWith('new-provider:subscription:');
+    closeEditingModal();
+    if (returnToProviderSelection) {
+      returnProviderFocusIdRef.current = selectedProviderId || 'custom';
+      setCreationMode('selection');
+      setProviderQuery(providerQuery);
+      setShowAllProviders(showAllProviders);
+    }
+  };
+
   const requestCloseEditingModal = () => {
     if (editorSavingRef.current) return;
     if (editingModalHasUnsavedChanges) {
       setDraftCloseConfirmOpen(true);
       return;
     }
-    closeEditingModal();
+    discardEditingDraftAndClose();
   };
 
   const continueEditingCurrentDraft = () => {
@@ -2722,11 +2755,26 @@ const ModelSettingsPage: React.FC = () => {
     return (
       <ConfigPageLayout className="openbitfun-model-settings" data-openbitfun-component="model-settings" data-openbitfun-part="root" data-openbitfun-view="selection">
         <ConfigPageHeader
+          className="openbitfun-model-settings__selection-header"
           title={t('providerSelection.title')}
+          extra={(
+            <div className="openbitfun-model-settings__selection-actions" data-openbitfun-component="model-settings" data-openbitfun-part="selectionActions">
+              <Tooltip content={t('actions.back')} trigger="hover-focus">
+                <IconButton
+                  variant="quiet"
+                  size="sm"
+                  aria-label={t('actions.back')}
+                  data-testid="settings-model-provider-back-btn"
+                  icon={<Icon glyph={Undo2} size="sm" />}
+                  onClick={() => setCreationMode(null)}
+                />
+              </Tooltip>
+            </div>
+          )}
         />
 
         <ConfigPageContent className="openbitfun-model-settings__content openbitfun-model-settings__content--selection">
-          <div className="openbitfun-model-settings__provider-selection" data-openbitfun-component="model-settings" data-openbitfun-part="providerSelection">
+          <div ref={providerSelectionRef} className="openbitfun-model-settings__provider-selection" data-openbitfun-component="model-settings" data-openbitfun-part="providerSelection">
 
             <button
               type="button"
@@ -2833,12 +2881,6 @@ const ModelSettingsPage: React.FC = () => {
                 </button>
               )}
             </div>
-
-            <div className="openbitfun-model-settings__selection-actions" data-openbitfun-component="model-settings" data-openbitfun-part="selectionActions">
-              <Button variant="fill" size="sm" onClick={() => setCreationMode(null)}>
-                {t('actions.cancel')}
-              </Button>
-            </div>
           </div>
         </ConfigPageContent>
       </ConfigPageLayout>
@@ -2848,6 +2890,18 @@ const ModelSettingsPage: React.FC = () => {
   const renderEditingForm = () => {
     if (!isEditing || !editingConfig) return null;
     const isFromTemplate = !editingConfig.id && !!currentTemplate;
+    // Presets are filtered by the request format so the picker only chooses a
+    // host/plan; the format select stays the single owner of the API format.
+    const endpointPresetOptions = isFromTemplate
+      ? endpointPresetsForFormat(currentTemplate?.baseUrlOptions, editingConfig.provider || 'openai')
+      : [];
+    const selectedEndpointPreset = findSelectedEndpointPreset(
+      endpointPresetOptions,
+      editingConfig.base_url || '',
+      editingConfig.provider || 'openai',
+    );
+    const showEndpointPresetPicker = endpointPresetOptions.length > 1
+      || (endpointPresetOptions.length === 1 && !selectedEndpointPreset);
     const zenOAuth = isOpenCodeZenOAuth(editingConfig);
     const routeConfig = editingConfig;
     const automaticOpenCodeRouting = zenOAuth || isOpenCodeApiKeyConfig(routeConfig);
@@ -3655,9 +3709,9 @@ const ModelSettingsPage: React.FC = () => {
         <FieldGroup
           data-testid="settings-model-editor"
           className="openbitfun-model-settings__single-model-fields"
-          appearance="subtle"
+          appearance="plain"
           dividers={false}
-          fieldSurface="default"
+          fieldSurface="filled"
         >
           <ConfigPageRow label={t('form.modelName')} required align="center">
             <Input
@@ -3698,7 +3752,7 @@ const ModelSettingsPage: React.FC = () => {
           onOpenChange={setShowAdvancedSettings}
         >
           {showAdvancedSettings && (
-            <FieldGroup appearance="subtle" dividers={false}>
+            <FieldGroup appearance="plain" dividers={false} fieldSurface="filled">
               {(editingConfig.provider === 'openai' || editingConfig.provider === 'anthropic') && (
                 <ConfigPageRow
                   label={t('advancedSettings.inlineThinkInText.label')}
@@ -3920,7 +3974,8 @@ const ModelSettingsPage: React.FC = () => {
               <ConfigPageSection
                 title={t('editProviderSettingsTitle')}
                 className="openbitfun-model-settings__edit-section openbitfun-model-settings__connection-section"
-                fieldSurface="default"
+                bodySurface={false}
+                fieldSurface="filled"
               >
                 <div className={[
                   'openbitfun-model-settings__connection-row',
@@ -3968,11 +4023,22 @@ const ModelSettingsPage: React.FC = () => {
                             onValueChange={(value) => {
                               const provider = value as string;
                               resetRemoteModelDiscovery();
-                              setEditingConfig(prev => ({
-                                ...prev,
-                                provider,
-                                request_url: resolveRequestUrl(prev?.base_url || '', provider, prev?.model_name || '')
-                              }));
+                              setEditingConfig(prev => {
+                                // Saved providers move too, but only while their URL is still a preset.
+                                const base_url = remapBaseUrlForFormat(
+                                  currentTemplate?.baseUrlOptions,
+                                  prev?.base_url || '',
+                                  prev?.provider || 'openai',
+                                  provider,
+                                  currentTemplate?.baseUrl,
+                                );
+                                return {
+                                  ...prev,
+                                  provider,
+                                  base_url,
+                                  request_url: resolveRequestUrl(base_url, provider, prev?.model_name || '')
+                                };
+                              });
                             }}
                             placeholder={t('form.providerPlaceholder')}
                             options={requestFormatOptions}
@@ -3984,23 +4050,22 @@ const ModelSettingsPage: React.FC = () => {
                     <ConfigPageRow label={t('form.baseUrl')} required wide className="openbitfun-model-settings__endpoint-row">
                       <div className="openbitfun-model-settings__control-stack">
                         <div className="openbitfun-model-settings__endpoint-inputs">
-                          {isFromTemplate && currentTemplate?.baseUrlOptions && currentTemplate.baseUrlOptions.length > 0 && (
+                          {showEndpointPresetPicker && (
                             <Combobox
+                              data-testid="settings-model-endpoint-preset-select"
                               invalid={showModelValidation && missingModelFields.baseUrl}
-                              value={currentTemplate.baseUrlOptions.some(opt => opt.url === editingConfig.base_url) ? editingConfig.base_url : ''}
+                              value={selectedEndpointPreset?.url ?? ''}
                               onValueChange={(value) => {
-                                const selectedOption = currentTemplate.baseUrlOptions!.find(opt => opt.url === value);
-                                const newProvider = selectedOption?.format || editingConfig.provider || 'openai';
+                                const url = value as string;
                                 resetRemoteModelDiscovery();
                                 setEditingConfig(prev => ({
                                   ...prev,
-                                  base_url: value as string,
-                                  request_url: resolveRequestUrl(value as string, newProvider, editingConfig.model_name || ''),
-                                  provider: newProvider
+                                  base_url: url,
+                                  request_url: resolveRequestUrl(url, prev?.provider || 'openai', prev?.model_name || ''),
                                 }));
                               }}
                               placeholder={t('form.baseUrl')}
-                              options={currentTemplate.baseUrlOptions.map(opt => ({
+                              options={endpointPresetOptions.map(opt => ({
                                 label: opt.note || requestFormatLabelMap[opt.format] || opt.format,
                                 value: opt.url,
                               }))}
@@ -4022,7 +4087,7 @@ const ModelSettingsPage: React.FC = () => {
                               }));
                             }}
                             onFocus={(e) => e.target.select()}
-                            placeholder={isFromTemplate ? currentTemplate?.baseUrl : 'https://open.bigmodel.cn/api/paas/v4/chat/completions'}
+                            placeholder={isFromTemplate ? currentTemplate?.baseUrl : t('form.baseUrlPlaceholder')}
                             size="sm"
                           />
                         </div>
@@ -4046,7 +4111,7 @@ const ModelSettingsPage: React.FC = () => {
                 title={t('title')}
                 className="openbitfun-model-settings__edit-section openbitfun-model-settings__model-section"
                 bodySurface={false}
-                fieldSurface="default"
+                fieldSurface="filled"
                 extra={(
                   <div className="openbitfun-model-settings__model-selection-actions">
                     <ModelDiscoveryPicker
@@ -4065,7 +4130,7 @@ const ModelSettingsPage: React.FC = () => {
                     <Button
                       ref={manualModelAddButtonRef}
                       data-testid="settings-model-add-custom-btn"
-                      variant="outline"
+                      variant="fill"
                       size="xs"
                       disabled={isEditorSaving || isAddingCustomModel}
                       onClick={startManualModelDraft}
@@ -4408,8 +4473,9 @@ const ModelSettingsPage: React.FC = () => {
 
   const renderModelCollectionItem = (config: AIModelConfigType, presentation: 'row' | 'card' = 'row') => {
     const isExpanded = expandedIds.has(config.id || '');
-    const testResult = config.id ? testResults[config.id] : null;
-    const isTesting = config.id ? !!testingConfigs[config.id] : false;
+    const currentActivation = connectionTestEpochRef.current === accountSurface.epoch;
+    const testResult = currentActivation && config.id ? testResults[config.id] : null;
+    const isTesting = currentActivation && config.id ? !!testingConfigs[config.id] : false;
     const providerDisplayName = getProviderDisplayName(config);
     const modelDisplayName = getModelDisplayName(config);
     const modelLabel = config.model_name || modelDisplayName;
@@ -4725,8 +4791,10 @@ const ModelSettingsPage: React.FC = () => {
     : undefined;
   const editorBrandId = editorProviderId === 'openai' ? 'codex'
     : editorProviderId === 'anthropic' ? 'claude-code' : editorProviderId;
-  const editorProviderName = editingConfig ? getProviderDisplayName(editingConfig) : t('newProvider');
   const editorUsesSubscription = !!editingConfig && !!subscriptionProviderOf(editingConfig.auth);
+  const editorProviderName = editingTargetKey === 'new-provider:custom' && !editorUsesSubscription
+    ? t('providerSelection.customTitle')
+    : editingConfig ? getProviderDisplayName(editingConfig) : t('newProvider');
 
   return (
     <ConfigPageLayout className="openbitfun-model-settings" data-openbitfun-component="model-settings" data-openbitfun-part="root" data-openbitfun-view="settings">
@@ -5519,7 +5587,7 @@ const ModelSettingsPage: React.FC = () => {
                   onClick={() => modelPanelDraft ? finishModelPanel() : void handleSave()}
                   loading={isEditorSaving}
                 >
-                  {t(modelPanelDraft ? 'actions.done' : 'actions.save')}
+                  {t('actions.save')}
                 </Button>
               </>
             )}
@@ -5530,7 +5598,8 @@ const ModelSettingsPage: React.FC = () => {
         open={draftCloseConfirmOpen}
         onOpenChange={(open) => { if (!open) setDraftCloseConfirmOpen(false); }}
         onConfirm={preserveEditingDraftAndClose}
-        onSecondary={closeEditingModal}
+        onSecondary={discardEditingDraftAndClose}
+        secondaryActionPlacement="start"
         title={t('draftClose.title')}
         message={t('draftClose.message')}
         confirmText={t('draftClose.keepAndClose')}

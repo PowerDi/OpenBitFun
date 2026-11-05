@@ -250,16 +250,16 @@
       "name": "OpenBitFun 服务",
       "description": "OpenBitFun 大模型平台",
       "urlOptions": {
-        "default": "Anthropic格式",
-        "openai": "OpenAI兼容格式-默认"
+        "default": "官方接口",
+        "openai": "官方接口"
       }
     },
     "openai": {
       "name": "OpenAI",
       "description": "OpenAI GPT 与推理模型",
       "urlOptions": {
-        "default": "Responses API（默认）",
-        "chatCompletions": "Chat Completions API"
+        "default": "官方接口",
+        "chatCompletions": "官方接口"
       }
     },
     "gemini": {
@@ -274,52 +274,52 @@
       "name": "MiniMax",
       "description": "MiniMax 系列模型",
       "urlOptions": {
-        "default": "国内-Anthropic格式-默认",
-        "openai": "国内-OpenAI兼容格式",
-        "intl": "海外-Anthropic格式",
-        "intlOpenai": "海外-OpenAI兼容格式"
+        "default": "国内-默认",
+        "openai": "国内",
+        "intl": "海外",
+        "intlOpenai": "海外"
       }
     },
     "xiaomi": {
       "name": "Xiaomi MiMo",
       "description": "小米 MiMo 系列模型，API 与 Token Plan 密钥不可混用",
       "urlOptions": {
-        "default": "API - OpenAI Chat Completions（默认）",
-        "responses": "API - OpenAI Responses",
-        "anthropic": "API - Anthropic Messages",
-        "tokenPlan": "国内 - Token Plan - OpenAI",
-        "tokenPlanAnthropic": "国内 - Token Plan - Anthropic"
+        "default": "API-默认",
+        "responses": "API",
+        "anthropic": "API",
+        "tokenPlan": "国内 - Token Plan",
+        "tokenPlanAnthropic": "国内 - Token Plan"
       }
     },
     "moonshot": {
       "name": "月之暗面",
       "description": "月之暗面 Kimi 系列模型",
       "urlOptions": {
-        "default": "国内-OpenAI格式-默认",
-        "anthropic": "国内-Anthropic格式",
-        "intl": "海外-OpenAI格式",
-        "intlAnthropic": "海外-Anthropic格式",
+        "default": "国内-默认",
+        "anthropic": "国内",
+        "intl": "海外",
+        "intlAnthropic": "海外",
         "kimiForCoding": "Kimi For Coding 套餐（模型 k3 / kimi-for-coding）",
-        "kimiForCodingAnthropic": "Kimi For Coding 套餐 - Anthropic格式"
+        "kimiForCodingAnthropic": "Kimi For Coding 套餐"
       }
     },
     "deepseek": {
       "name": "DeepSeek",
       "description": "DeepSeek 系列模型",
       "urlOptions": {
-        "default": "OpenAI格式-默认",
-        "anthropic": "Anthropic格式"
+        "default": "官方接口-默认",
+        "anthropic": "官方接口"
       }
     },
     "zhipu": {
       "name": "智谱AI",
       "description": "智谱AI GLM 系列模型",
       "urlOptions": {
-        "default": "国内-OpenAI格式-默认",
-        "anthropic": "国内-Anthropic格式",
+        "default": "国内-默认",
+        "anthropic": "国内",
         "codingPlan": "国内-Coding Plan",
-        "intl": "海外(Z.AI)-OpenAI格式",
-        "intlAnthropic": "海外(Z.AI)-Anthropic格式",
+        "intl": "海外(Z.AI)",
+        "intlAnthropic": "海外(Z.AI)",
         "intlCodingPlan": "海外(Z.AI)-Coding Plan"
       }
     },
@@ -327,10 +327,10 @@
       "name": "通义千问",
       "description": "阿里云百炼大模型平台",
       "urlOptions": {
-        "default": "国内-OpenAI格式-默认",
-        "intl": "海外(国际站)-OpenAI格式",
+        "default": "国内-默认",
+        "intl": "海外(国际站)",
         "codingPlan": "国内-Coding Plan",
-        "codingPlanAnthropic": "国内-Coding Plan-Anthropic格式",
+        "codingPlanAnthropic": "国内-Coding Plan",
         "intlCodingPlan": "海外-Coding Plan"
       }
     },
@@ -347,9 +347,9 @@
       "name": "硅基流动",
       "description": "硅基流动大模型平台",
       "urlOptions": {
-        "default": "国内-OpenAI格式-默认",
-        "anthropic": "国内-Anthropic格式",
-        "intl": "海外-OpenAI格式"
+        "default": "国内-默认",
+        "anthropic": "国内",
+        "intl": "海外"
       }
     },
     "nvidia": {
@@ -402,6 +402,7 @@
     "modelSelection": "选择模型",
     "modelNameHint": "智谱 GLM-ASR 使用 glm-asr，其他语音模型填写对应的模型名称",
     "baseUrl": "API地址",
+    "baseUrlPlaceholder": "https://api.example.com/v1",
     "resolvedUrlLabel": "实际请求地址：",
     "forceUrlHint": "以 # 结尾可强制使用输入地址",
     "apiKey": "API密钥",
@@ -596,7 +597,7 @@
   "draftClose": {
     "title": "保留这次编辑草稿？",
     "message": "这些修改尚未写入模型配置。保留草稿不会触发连接测试，再次打开此编辑器时可以继续。",
-    "keepAndClose": "保留草稿并关闭",
+    "keepAndClose": "保留草稿",
     "discard": "放弃修改",
     "continueEditing": "继续编辑",
     "discardDraft": "放弃草稿",
@@ -848,6 +849,14 @@
     "title": "智能模式配置",
     "service": "Router 服务模型",
     "serviceHint": "先在模型设置中添加支持分类协议的 API 服务，再在这里选择；普通聊天模型和 Coding Plan 不一定支持",
+    "protocol": "Router 兼容模式",
+    "protocolLogprobs": "标准 Router（token logprobs）",
+    "protocolClassifier": "分类头 Router",
+    "protocolUnknown": "暂不支持：{{protocol}}",
+    "protocolUnsupported": "当前执行主机不支持所选 Router 模式，请升级或选择标准 Router",
+    "classifierHint": "从 router 字段读取分类概率，按单并发发送请求",
+    "timeout": "超时（秒）",
+    "timeoutInvalid": "请输入大于 0 的超时秒数",
     "summary": "辅助摘要",
     "summaryHint": "开启后使用经济模型整理路由历史，会产生额外模型调用",
     "on": "开启",
@@ -863,7 +872,7 @@
       "unconfigured": "未配置可用模型"
     },
     "connectionFailures": {
-      "protocol": "请选择支持 OpenAI Chat Completions 且返回 token IDs 和 logprobs 的分类服务",
+      "protocol": "请检查 Router 兼容模式是否与服务返回格式一致",
       "authentication": "Router 认证失败，请检查 API Key 和服务访问权限",
       "addressOrModel": "请检查 Router 服务地址和模型名称，接口或模型可能不存在",
       "rateLimited": "Router 请求受到限流，请稍后重试",

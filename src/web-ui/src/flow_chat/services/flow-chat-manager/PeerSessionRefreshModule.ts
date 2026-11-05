@@ -10,6 +10,7 @@ import {
   isSurfaceChangedError,
 } from '@/infrastructure/peer-device/deviceSurface';
 import { isSurfaceReconcileEnabled } from '@/infrastructure/peer-device/deviceSurfaceReconcile';
+import { getDeviceOpenIntent, useDeviceOpenIntent } from '@/infrastructure/peer-device/deviceOpenIntent';
 import { remoteConnectAPI } from '@/infrastructure/api/service-api/RemoteConnectAPI';
 import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
 import type {
@@ -33,6 +34,7 @@ import {
   SessionExecutionState,
 } from '../../state-machine/types';
 import type { AnyFlowItem, DialogTurn, FlowToolItem, Session } from '../../types/flow-chat';
+import { isUnmaterializedSessionDraft } from '../../utils/sessionDraft';
 import { installLiveSessionInteractionMailbox } from '../liveSessionInteractionStore';
 import { agenticEventListener } from '../AgenticEventListener';
 import { pendingQueueManager } from './PendingQueueModule';
@@ -414,6 +416,13 @@ export function installPeerSessionRefresh(context: FlowChatContext): () => void 
     const surface = getActiveSurfaceScope();
     const sessionId = context.flowChatStore.getState().activeSessionId;
     if (surface.surfaceId === 'local' || !sessionId) return;
+    const open = getDeviceOpenIntent();
+    // Surface activation temporarily selects its previous tab. Let the
+    // explicit open choose its target before starting another history read.
+    if (open?.surfaceId === surface.surfaceId && open.sessionId !== sessionId) return;
+    // A draft's reserved ID is unknown to the host until creation is accepted.
+    // The active-session selector below re-enters here after materialization.
+    if (isUnmaterializedSessionDraft(context.flowChatStore.getState().sessions.get(sessionId))) return;
     void context.flowChatStore.loadRelaySessionHistory(sessionId).then(() => {
       retryDelay = 1000;
     }).catch(error => {
@@ -770,6 +779,9 @@ export function installPeerSessionRefresh(context: FlowChatContext): () => void 
 
   installedRefreshRequester = scheduleRefresh;
   const unsubscribeSourceGap = remoteConnectAPI.onSessionGap(event => scheduleRefresh(event.sessionId));
+  const unsubscribeOpenIntent = useDeviceOpenIntent.subscribe((state, previous) => {
+    if (previous.intent && !state.intent) scheduleRefresh();
+  });
 
   const unsubscribeActiveSession = context.flowChatStore.subscribeSelector(
     state => {
@@ -781,6 +793,7 @@ export function installPeerSessionRefresh(context: FlowChatContext): () => void 
         session?.workspaceId ?? '',
         session?.isTransient === true,
         session?.isHistorical === true,
+        isUnmaterializedSessionDraft(session),
       ]);
     },
     () => scheduleRefresh(),
@@ -822,6 +835,7 @@ export function installPeerSessionRefresh(context: FlowChatContext): () => void 
     unsubscribeActiveSession();
     unsubscribeRuntimeGaps();
     unsubscribeSourceGap();
+    unsubscribeOpenIntent();
     if (typeof window !== 'undefined') {
       window.removeEventListener('peer-mode:changed', handlePeerModeChanged);
     }

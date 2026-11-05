@@ -1,7 +1,7 @@
+import { WorkspaceIcon as ProjectWorkspaceIcon } from '../components/WorkspaceIcon';
+import { SessionTypeIcon } from '../components/SessionTypeIcon';
 import { subscribeHostCatalog } from '../services/HostCatalogSubscription';
 import {
-  AppWindow as LucideAppWindow,
-  Bot as LucideBot,
   Check as LucideCheck,
   ChevronRight as LucideChevronRight,
   ChevronsUpDown as LucideChevronsUpDown,
@@ -10,7 +10,6 @@ import {
   FolderOpen as LucideFolderOpen,
   LoaderCircle as LucideLoaderCircle,
   LogOut as LucideLogOut,
-  MessageSquare as LucideMessageSquare,
   MessageCircle as LucideMessageCircle,
   Monitor as LucideMonitor,
   Moon as LucideMoon,
@@ -21,7 +20,6 @@ import {
   Sun as LucideSun,
   Terminal as LucideTerminal,
   User as LucideUser,
-  Users as LucideUsers,
   Wrench as LucideWrench,
   X as LucideX,
 } from 'lucide-react';
@@ -61,10 +59,19 @@ import { createRemoteCacheScope, remoteCache } from '../services/RemoteCache';
 import { describeRemoteError } from '../services/remoteErrorPresentation';
 // Device-directory read failures share the device pages' relay-failure copy.
 import { deviceFailurePresentation } from '../services/deviceFailureCopy';
+import { nearestSurvivingSession, type SessionDeletionGroup } from '../services/sessionDeletionNavigation';
 import {
+  isClawAgent,
+  isCoworkAgent,
   sameWorkspace,
+  sessionIconKind,
+  selectedSessionWorkspaceContext,
   sessionMatchesWorkspace,
+  sessionWorkspaceContext,
+  workspaceContext,
   workspaceIdentityKey,
+  type SessionWorkspaceContext,
+  type SessionWorkspaceFacts,
   type WorkspaceReference,
 } from '../services/workspaceIdentity';
 import { useTheme } from '../theme';
@@ -92,7 +99,13 @@ interface SessionListPageProps {
     sessionName?: string,
     isNew?: boolean,
     agentType?: string,
+    workspace?: SessionWorkspaceContext,
   ) => void;
+  /**
+   * The open session was deleted. `next` is the nearest surviving session in
+   * the same list, or null when the detail pane should show the empty panel.
+   */
+  onActiveSessionDeleted?: (next: ActiveSessionReplacement | null) => void;
   onOpenWorkspace: () => void;
   onOpenDeviceTools: () => void;
   onDisconnect: () => void;
@@ -101,6 +114,13 @@ interface SessionListPageProps {
 }
 
 type CompactDevice = RelayDeviceInfo;
+
+export interface ActiveSessionReplacement {
+  sessionId: string;
+  sessionName: string;
+  agentType: string;
+  workspace?: SessionWorkspaceContext;
+}
 
 
 function compactSelectedDeviceIdForClient(client?: RelayHttpClient): string | null {
@@ -135,6 +155,17 @@ function commandIdentity(
     workspaceId: workspace?.workspace_id,
     remoteConnectionId: workspace?.remote_connection_id,
     remoteSshHost: workspace?.remote_ssh_host,
+  };
+}
+
+function createdSessionFacts(path: string, identity: RemoteWorkspaceIdentity): SessionWorkspaceFacts {
+  return {
+    workspace_id: identity.workspaceId,
+    workspace_path: path,
+    workspace_identity: {
+      remote_connection_id: identity.remoteConnectionId,
+      remote_ssh_host: identity.remoteSshHost,
+    },
   };
 }
 
@@ -208,14 +239,6 @@ function agentLabel(agentType: string, t: (key: string) => string): string {
   }
 }
 
-function isCoworkAgent(agentType: string): boolean {
-  return agentType === 'cowork' || agentType === 'Cowork';
-}
-
-function isClawAgent(agentType: string): boolean {
-  return agentType === 'claw' || agentType === 'Claw';
-}
-
 /** Pick first workspace suitable for Expert mode (exclude Claw assistant roots when kind is known). */
 function pickFirstProWorkspace(list: RecentWorkspaceEntry[]): RecentWorkspaceEntry | undefined {
   if (list.length === 0) return undefined;
@@ -232,24 +255,6 @@ function truncateMiddle(str: string, maxLen: number): string {
   const head = Math.ceil(keep * 0.6);
   const tail = keep - head;
   return str.slice(0, head) + '...' + str.slice(-tail);
-}
-
-function SessionTypeIcon({ agentType }: { agentType: string }) {
-  if (isCoworkAgent(agentType)) {
-    return (
-      <LucideUsers width="18" height="18" stroke="currentColor" aria-hidden="true" />
-    );
-  }
-
-  if (isClawAgent(agentType)) {
-    return (
-      <LucideAppWindow width="18" height="18" stroke="currentColor" aria-hidden="true" />
-    );
-  }
-
-  return (
-    <LucideMessageSquare width="18" height="18" stroke="currentColor" aria-hidden="true" />
-  );
 }
 
 /* Mode Selection Icons */
@@ -275,6 +280,7 @@ const SessionListPage: React.FC<SessionListPageProps> = ({
   compact = false,
   activeSessionId,
   onSelectSession,
+  onActiveSessionDeleted,
   onOpenWorkspace,
   onOpenDeviceTools,
   onDisconnect,
@@ -318,6 +324,9 @@ const SessionListPage: React.FC<SessionListPageProps> = ({
   const [assistantList, setAssistantList] = useState<AssistantEntry[]>([]);
   const [showAssistantPicker, setShowAssistantPicker] = useState(false);
   const [workspaceList, setWorkspaceList] = useState<RecentWorkspaceEntry[]>([]);
+  useEffect(() => {
+    useMobileStore.getState().setKnownWorkspaces(workspaceList);
+  }, [workspaceList]);
   const [showWorkspacePicker, setShowWorkspacePicker] = useState(false);
   const [workspaceCatalogSource, setWorkspaceCatalogSource] = useState<'opened' | 'recent' | null>(null);
 
@@ -433,15 +442,33 @@ const SessionListPage: React.FC<SessionListPageProps> = ({
     clearLongPressTimer();
   }, []);
 
-  const handleSessionClick = useCallback((s: SessionInfo, e: React.MouseEvent) => {
+  // The flat list is scoped by the selected mode; compact rows name their own owner.
+  const listWorkspaceOwner = useMemo(() => {
+    if (displayMode === 'assistant') {
+      return currentAssistant ? workspaceContext({ ...currentAssistant, workspace_kind: 'assistant' }) : undefined;
+    }
+    return currentWorkspace ? workspaceContext(currentWorkspace) : undefined;
+  }, [currentAssistant, currentWorkspace, displayMode]);
+
+  const listedSessionWorkspace = useCallback((session: SessionInfo) => (
+    selectedSessionWorkspaceContext(session, listWorkspaceOwner)
+  ), [listWorkspaceOwner]);
+
+  const handleSessionClick = useCallback((s: SessionInfo, e: React.MouseEvent, owner?: RecentWorkspaceEntry) => {
     if (longPressTriggeredRef.current) {
       e.preventDefault();
       e.stopPropagation();
       longPressTriggeredRef.current = false;
       return;
     }
-    onSelectSession(s.session_id, s.name, false, s.agent_type);
-  }, [onSelectSession]);
+    onSelectSession(
+      s.session_id,
+      s.name,
+      false,
+      s.agent_type,
+      owner ? sessionWorkspaceContext(s, workspaceContext(owner)) : listedSessionWorkspace(s),
+    );
+  }, [listedSessionWorkspace, onSelectSession]);
 
   // ── Session actions ─────────────────────────────────────────────
   const showToast = useCallback((msg: string) => {
@@ -498,6 +525,26 @@ const SessionListPage: React.FC<SessionListPageProps> = ({
     try {
       await sessionMgr.deleteSession(deleteConfirmTarget.session_id);
       if (!isSessionListCurrent(targetEpoch)) return;
+      if (deleteConfirmTarget.session_id === activeSessionId) {
+        // Leave the deleted session before its chat page reads it again.
+        const groups: SessionDeletionGroup<SessionInfo, RecentWorkspaceEntry>[] = [
+          ...workspaceList.map((workspace) => ({
+            owner: workspace,
+            sessions: compactWorkspaceSessions[compactWorkspaceKey(workspace)]
+              ?? sessions.filter((session) => sessionMatchesWorkspace(session, workspace, workspaceList)),
+          })),
+          { sessions },
+        ];
+        const next = nearestSurvivingSession(groups, deleteConfirmTarget.session_id);
+        onActiveSessionDeleted?.(next ? {
+          sessionId: next.session.session_id,
+          sessionName: next.session.name,
+          agentType: next.session.agent_type,
+          workspace: next.owner
+            ? sessionWorkspaceContext(next.session, workspaceContext(next.owner))
+            : listedSessionWorkspace(next.session),
+        } : null);
+      }
       useMobileStore.getState().removeSession(deleteConfirmTarget.session_id);
       setCompactWorkspaceSessions((current) => Object.fromEntries(
         Object.entries(current).map(([key, workspaceSessions]) => [
@@ -518,7 +565,7 @@ const SessionListPage: React.FC<SessionListPageProps> = ({
     } finally {
       if (isSessionListCurrent(targetEpoch)) setDeleting(false);
     }
-  }, [cacheScope, captureSessionListEpoch, deleteConfirmTarget, isSessionListCurrent, sessionMgr, showToast, t]);
+  }, [activeSessionId, cacheScope, captureSessionListEpoch, compactWorkspaceSessions, deleteConfirmTarget, isSessionListCurrent, listedSessionWorkspace, onActiveSessionDeleted, sessionMgr, sessions, showToast, t, workspaceList]);
 
   const [pullDistance, setPullDistance] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
@@ -1030,7 +1077,7 @@ const SessionListPage: React.FC<SessionListPageProps> = ({
         workspaceIdentity: createdIdentity,
         replaceWorkspace: true,
       });
-      onSelectSession(created.session_id, t(isClawAgent(agentType) ? 'sessions.remoteClawSession' : isCoworkAgent(agentType) ? 'sessions.remoteCoworkSession' : 'sessions.remoteCodeSession'), true, agentType);
+      onSelectSession(created.session_id, t(isClawAgent(agentType) ? 'sessions.remoteClawSession' : isCoworkAgent(agentType) ? 'sessions.remoteCoworkSession' : 'sessions.remoteCodeSession'), true, agentType, sessionWorkspaceContext(createdSessionFacts(createdPath, createdIdentity), workspaceContext(workspace)));
     } catch (error: unknown) {
       if (isSessionListCurrent(targetEpoch) && !isRemoteControlTargetChangedError(error)) {
         setError(describeRemoteError(error, t));
@@ -1429,14 +1476,15 @@ const SessionListPage: React.FC<SessionListPageProps> = ({
         remoteConnectionId: created.remote_connection_id ?? identity.remoteConnectionId,
         remoteSshHost: created.remote_ssh_host ?? identity.remoteSshHost,
       };
-      await loadFirstPage(created.workspace_path ?? workspacePath, searchQuery, createdIdentity);
+      const createdPath = created.workspace_path ?? workspacePath;
+      await loadFirstPage(createdPath, searchQuery, createdIdentity);
       if (!isSessionListCurrent(targetEpoch)) return;
       const label = isClawAgent(agentType)
         ? t('sessions.remoteClawSession')
         : isCoworkAgent(agentType)
           ? t('sessions.remoteCoworkSession')
           : t('sessions.remoteCodeSession');
-      onSelectSession(created.session_id, label, true, agentType);
+      onSelectSession(created.session_id, label, true, agentType, selectedSessionWorkspaceContext(createdSessionFacts(createdPath, createdIdentity), listWorkspaceOwner));
     } catch (e: any) {
       if (isSessionListCurrent(targetEpoch) && !isRemoteControlTargetChangedError(e)) {
         setError(describeRemoteError(e, t));
@@ -1451,6 +1499,7 @@ const SessionListPage: React.FC<SessionListPageProps> = ({
     currentAssistant,
     displayMode,
     isSessionListCurrent,
+    listWorkspaceOwner,
     loadFirstPage,
     onSelectSession,
     searchQuery,
@@ -1659,8 +1708,8 @@ const SessionListPage: React.FC<SessionListPageProps> = ({
                         <MobileButton appearance="plain" block className="harmony-sidebar__workspace-main" onClick={() => void handleToggleCompactWorkspace(workspace)}>
                           <span className="harmony-sidebar__folder-icon" aria-hidden="true">
                             {workspace.workspace_kind === 'assistant'
-                              ? <LucideBot width="21" height="21" stroke="currentColor" aria-hidden="true" />
-                              : <LucideFolder width="21" height="21" stroke="currentColor" aria-hidden="true" />}
+                              ? <SessionTypeIcon workspaceKind="assistant" size={21} />
+                              : <ProjectWorkspaceIcon manager={sessionMgr} workspace={workspace} />}
                           </span>
                           <span className="harmony-sidebar__workspace-copy">
                             <span className="harmony-sidebar__row-label">{workspace.name || workspace.path}</span>
@@ -1685,8 +1734,12 @@ const SessionListPage: React.FC<SessionListPageProps> = ({
                               key={session.session_id}
                               onContextMenu={(event) => { event.preventDefault(); setMenuSession(session); }}
                             >
-                              <MobileButton appearance="plain" block className="harmony-sidebar__session-main" onClick={(event) => handleSessionClick(session, event)}>
-                                <span className="harmony-sidebar__session-icon" aria-hidden="true"><LucideMessageCircle width="18" height="18" stroke="currentColor" /></span>
+                              <MobileButton appearance="plain" block className="harmony-sidebar__session-main" onClick={(event) => handleSessionClick(session, event, workspace)}>
+                                <span className="harmony-sidebar__session-icon" aria-hidden="true">
+                                  {sessionIconKind(session.agent_type, workspace.workspace_kind) === 'assistant'
+                                    ? <SessionTypeIcon agentType={session.agent_type} workspaceKind={workspace.workspace_kind} />
+                                    : <LucideMessageCircle width="18" height="18" stroke="currentColor" />}
+                                </span>
                                 <span className="harmony-sidebar__row-label">{session.name || t('sessions.untitledSession')}</span>
                               </MobileButton>
                               <MobileIconButton
@@ -1858,7 +1911,7 @@ const SessionListPage: React.FC<SessionListPageProps> = ({
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
-                onSelectSession(sessions[0].session_id, sessions[0].name, false, sessions[0].agent_type);
+                onSelectSession(sessions[0].session_id, sessions[0].name, false, sessions[0].agent_type, listedSessionWorkspace(sessions[0]));
               }
             }}
           >
@@ -1907,7 +1960,9 @@ const SessionListPage: React.FC<SessionListPageProps> = ({
               }}
             >
               <span className="session-list__workspace-icon">
-                <WorkspaceIcon />
+                {currentWorkspace?.workspace_id
+                  ? <ProjectWorkspaceIcon manager={sessionMgr} workspace={currentWorkspace} />
+                  : <WorkspaceIcon />}
               </span>
               <div className="session-list__workspace-copy">
                 <span className="session-list__workspace-label">{t('shared.features.workspace')}</span>
@@ -1944,7 +1999,7 @@ const SessionListPage: React.FC<SessionListPageProps> = ({
                   label: workspace.remote_ssh_host
                     ? `${workspace.name} · ${workspace.remote_ssh_host}`
                     : workspace.name,
-                  leading: <span className="session-list__picker-item-icon"><WorkspaceIcon /></span>,
+                  leading: <span className="session-list__picker-item-icon"><ProjectWorkspaceIcon manager={sessionMgr} workspace={workspace} /></span>,
                   trailing: selected ? <LucideCheck width="16" height="16" stroke="currentColor" aria-hidden="true" /> : undefined,
                   value: String(index),
                 };

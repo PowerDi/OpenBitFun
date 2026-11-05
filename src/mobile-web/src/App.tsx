@@ -3,7 +3,7 @@ import { MobileBanner, MobileButton, MobileScrim, MobileStatus } from '@openbitf
 import PairingPage, { type BrowserAccountBinding } from './pages/PairingPage';
 import WorkspacePage from './pages/WorkspacePage';
 import DeviceToolsPage from './pages/DeviceToolsPage';
-import SessionListPage from './pages/SessionListPage';
+import SessionListPage, { type ActiveSessionReplacement } from './pages/SessionListPage';
 import DevicesPage from './pages/DevicesPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { I18nProvider, useI18n } from './i18n';
@@ -25,6 +25,7 @@ import { useConnectionHealth } from './hooks/useConnectionHealth';
 import { useMobileViewport } from './hooks/useMobileViewport';
 import { useWideLayout } from './hooks/useWideLayout';
 import { useMobileStore } from './services/store';
+import type { SessionWorkspaceContext } from './services/workspaceIdentity';
 import RemoteHomePanel from './components/RemoteHomePanel';
 import './styles/index.scss';
 
@@ -55,6 +56,7 @@ const AppContent: React.FC = () => {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [activeSessionName, setActiveSessionName] = useState<string>('Session');
   const [activeSessionAgentType, setActiveSessionAgentType] = useState('Standard');
+  const [activeSessionWorkspace, setActiveSessionWorkspace] = useState<SessionWorkspaceContext | undefined>();
   const [chatAutoFocus, setChatAutoFocus] = useState(false);
   const [compactSidebarOpen, setCompactSidebarOpen] = useState(false);
   const isWideLayout = useWideLayout();
@@ -195,6 +197,7 @@ const AppContent: React.FC = () => {
         setActiveSessionId(null);
         setActiveSessionName('Session');
         setActiveSessionAgentType('Standard');
+        setActiveSessionWorkspace(undefined);
         setChatAutoFocus(false);
         setPrevPage(null);
         setNavDir(null);
@@ -216,7 +219,10 @@ const AppContent: React.FC = () => {
   // Pop navigation handlers that can be called from both UI buttons and popstate
   const doPopFromChat = useCallback(() => {
     navigateTo('sessions', 'pop');
-    setTimeout(() => setActiveSessionId(null), NAV_DURATION);
+    setTimeout(() => {
+      setActiveSessionId(null);
+      setActiveSessionWorkspace(undefined);
+    }, NAV_DURATION);
   }, [navigateTo]);
 
   const doPopFromWorkspace = useCallback(() => {
@@ -279,11 +285,13 @@ const AppContent: React.FC = () => {
     sessionName?: string,
     isNew?: boolean,
     agentType = 'Standard',
+    workspace?: SessionWorkspaceContext,
   ) => {
     useMobileStore.getState().setError(null);
     setActiveSessionId(sessionId);
     setActiveSessionName(sessionName || 'Session');
     setActiveSessionAgentType(agentType);
+    setActiveSessionWorkspace(workspace);
     setChatAutoFocus(!!isNew);
     setCompactSidebarOpen(false);
     if (isWideLayout) {
@@ -300,9 +308,31 @@ const AppContent: React.FC = () => {
     navigateTo('chat', 'push');
   }, [isWideLayout, navigateTo, page]);
 
+  // The open session was deleted from the session list. Swap the detail pane
+  // in place (no navigation entry, sidebar left as the user had it) so the
+  // chat page never keeps reading a session the host no longer has.
+  const handleActiveSessionDeleted = useCallback((next: ActiveSessionReplacement | null) => {
+    useMobileStore.getState().setError(null);
+    setChatAutoFocus(false);
+    if (next) {
+      setActiveSessionId(next.sessionId);
+      setActiveSessionName(next.sessionName || 'Session');
+      setActiveSessionAgentType(next.agentType || 'Standard');
+      setActiveSessionWorkspace(next.workspace);
+      return;
+    }
+    setActiveSessionId(null);
+    setActiveSessionName('Session');
+    setActiveSessionAgentType('Standard');
+    setActiveSessionWorkspace(undefined);
+  }, []);
+
   const handleBackToSessions = useCallback(() => {
     navigateTo('sessions', 'pop');
-    setTimeout(() => setActiveSessionId(null), NAV_DURATION);
+    setTimeout(() => {
+      setActiveSessionId(null);
+      setActiveSessionWorkspace(undefined);
+    }, NAV_DURATION);
   }, [navigateTo]);
 
   const handleControlTargetChanged = useCallback(() => {
@@ -315,6 +345,7 @@ const AppContent: React.FC = () => {
       setActiveSessionId(restored.session.id);
       setActiveSessionName(restored.session.name);
       setActiveSessionAgentType(restored.session.agentType);
+      setActiveSessionWorkspace(restored.session.workspace);
       setChatAutoFocus(false);
       setPrevPage(null);
       setNavDir(null);
@@ -327,6 +358,7 @@ const AppContent: React.FC = () => {
     setActiveSessionId(null);
     setActiveSessionName('Session');
     setActiveSessionAgentType('Standard');
+    setActiveSessionWorkspace(undefined);
     setChatAutoFocus(false);
     setPrevPage(null);
     setNavDir(null);
@@ -352,6 +384,7 @@ const AppContent: React.FC = () => {
     setActiveSessionId(null);
     setActiveSessionName('Session');
     setActiveSessionAgentType('Standard');
+    setActiveSessionWorkspace(undefined);
     setChatAutoFocus(false);
     setCompactSidebarOpen(false);
     setPrevPage(null);
@@ -429,6 +462,7 @@ const AppContent: React.FC = () => {
     setActiveSessionId(null);
     setActiveSessionName('Session');
     setActiveSessionAgentType('Standard');
+    setActiveSessionWorkspace(undefined);
     setChatAutoFocus(false);
     setCompactSidebarOpen(false);
     setPrevPage(null);
@@ -454,9 +488,10 @@ const AppContent: React.FC = () => {
         id: activeSessionId,
         name: activeSessionName,
         agentType: activeSessionAgentType,
+        workspace: activeSessionWorkspace,
       } : undefined,
     });
-  }, [accountDirectoryOpen, activeSessionAgentType, activeSessionId, activeSessionName, controlTarget, page]);
+  }, [accountDirectoryOpen, activeSessionAgentType, activeSessionId, activeSessionName, activeSessionWorkspace, controlTarget, page]);
 
   const isAnimating = navDir !== null;
   const currentPage: Page = page;
@@ -469,6 +504,7 @@ const AppContent: React.FC = () => {
       compact
       activeSessionId={activeSessionId}
       onSelectSession={handleSelectSession}
+      onActiveSessionDeleted={handleActiveSessionDeleted}
       onOpenWorkspace={handleOpenWorkspace}
       onOpenDeviceTools={handleOpenDeviceTools}
       onDisconnect={handleDisconnect}
@@ -500,6 +536,7 @@ const AppContent: React.FC = () => {
             sessionId={activeSessionId}
             sessionName={activeSessionName}
             agentType={activeSessionAgentType}
+            workspace={activeSessionWorkspace}
             onBack={isWideLayout ? handleBackToSessions : () => setCompactSidebarOpen(true)}
             autoFocus={chatAutoFocus}
             wideLayout={isWideLayout}

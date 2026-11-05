@@ -64,6 +64,25 @@
     "remoteConnectRequiresWorkspace": "Open a workspace before using remote control."
   },
   "nav": {
+    "devices": {
+      "thisDevice": "This device",
+      "current": "Shown in this window",
+      "expand": "Expand {{name}}",
+      "collapse": "Collapse {{name}}",
+      "hostDesktop": "Desktop",
+      "hostCli": "CLI",
+      "platform": {
+        "mac": "Mac",
+        "windows": "Win",
+        "linux": "Linux"
+      },
+      "loadFailed": "Couldn't load this device's workspaces",
+      "sessionsLoadFailed": "Couldn't load sessions",
+      "noSessions": "No sessions yet",
+      "sessionUnavailable": "This session is no longer on that device.",
+      "sessionActionFailed": "Couldn't do that on the other device. Try again.",
+      "connecting": "Connecting to {{name}}…"
+    },
     "aria": {
       "navControl": "Navigation controls",
       "mainNav": "Main navigation"
@@ -87,7 +106,8 @@
       "terminal": "Shell",
       "git": "Git",
       "miniApps": "Mini App",
-      "insights": "Insights"
+      "insights": "Insights",
+      "discoverSkills": "Discover skills"
     },
     "tooltips": {
       "persona": "Smart Members — expand role- and memory-based member sessions",
@@ -217,7 +237,7 @@
       "files": "Files",
       "terminals": "Terminals",
       "local": "Local",
-      "remote": "Remote workspace",
+      "remote": "Connected environment",
       "peer": "Peer device",
       "switchWorkspace": "Switch workspace",
       "chooseShell": "Choose a shell",
@@ -332,7 +352,8 @@
           "label": "Show",
           "all": "All sessions",
           "unread": "Unread sessions",
-          "attention": "Needs attention"
+          "attention": "Needs attention",
+          "archived": "Archived sessions"
         },
         "filters": {
           "label": "Filters",
@@ -354,7 +375,7 @@
         "environment": {
           "label": "Environment",
           "local": "Local",
-          "remote": "Remote workspace",
+          "remote": "Connected environment",
           "detached": "Detached execution"
         },
         "source": {
@@ -369,10 +390,7 @@
       },
       "rename": "Rename",
       "renameOutcomeUnknown": "The rename result is uncertain. Refresh or reopen the session list, then check the current title before retrying.",
-      "copySessionId": "Copy ID",
-      "copySessionIdSuccess": "Session ID copied",
-      "copySessionIdFailed": "Failed to copy session ID",
-      "duplicate": "Copy session",
+      "duplicate": "Create copy",
       "duplicateSuccess": "Copied to “{{name}}”",
       "duplicateFailed": "Failed to copy session",
       "duplicateCreatedRefreshFailed": "Copied to “{{name}}”. Refresh the session list to see it; copying again creates another copy.",
@@ -387,9 +405,6 @@
       "exportMarkdown": "Export as Markdown",
       "exportMarkdownFull": "Export full process",
       "exportMarkdownResult": "Export result",
-      "delete": "Delete",
-      "deleteConfirmTitle": "Delete session permanently?",
-      "deleteConfirmMessage": "“{{name}}” and its child sessions will be permanently deleted. This action cannot be undone.",
       "confirmEdit": "Confirm",
       "cancelEdit": "Cancel",
       "loading": "Loading...",
@@ -455,6 +470,7 @@
       "batchChildSession": "Child session",
       "batchTurnsLabel": "{{count}} turns",
       "archive": "Archive",
+      "archivedBadge": "Archived",
       "assistantBootstrapDraft": "Please follow BOOTSTRAP.md and help me set up this assistant.",
       "archiveAll": "Archive All Sessions",
       "archiveSelected": "Archive Selected",
@@ -482,7 +498,7 @@
       "restore": "Restore",
       "restoreSucceeded": "Restored “{{name}}” in {{workspace}}.",
       "restoreRefreshFailed": "The session was restored, but the session list could not refresh. Refresh the workspace manually.",
-      "archivedAll": "Archived {{count}} sessions. View them in Settings → Archived Sessions.",
+      "archivedAll": "Archived {{count}} sessions. View or delete them in Settings → Archived Sessions.",
       "restoreFailed": "Failed to restore session",
       "deleteArchivedFailed": "Failed to delete session",
       "deleteAllArchivedFailed": "Failed to delete all archived sessions",
@@ -612,6 +628,10 @@
         "minute": "Minutes",
         "hour": "Hours",
         "day": "Days"
+      },
+      "columns": {
+        "status": "Status",
+        "actions": "Actions"
       }
     },
     "workspaces": {
@@ -632,7 +652,9 @@
       "revealFailed": "Failed to reveal workspace folder",
       "copyPathFailed": "Failed to copy path",
       "createSessionFailed": "Failed to create session",
-      "startingAcpSession": "Session starting",
+      "startingAcpSession": "Starting agent; the first start may need to prepare its adapter…",
+      "initializingAcpSession": "Initializing session and loading models and commands…",
+      "retryAcpSession": "Retry",
       "acpSessionStarted": "Session started",
       "acpSessionStartFailed": "Session failed to start",
       "renameFailed": "Failed to rename project",
@@ -662,8 +684,8 @@
         "manageAssistant": "Manage assistant",
         "closeAssistant": "Hide assistant",
         "resetWorkspace": "Reset workspace",
-        "manageRelatedPaths": "Related directories",
-        "manageProjectPermissions": "Project permissions",
+        "projectResources": "Project resources",
+        "openDirectory": "Open directory",
         "rename": "Rename project",
         "copyPath": "Copy path",
         "reveal": "Reveal in explorer",
@@ -693,7 +715,12 @@
           "add": "Add directory",
           "selectDirectoryTitle": "Select related directory",
           "pathPlaceholder": "Directory path",
-          "descriptionLabel": "Description (optional)"
+          "descriptionLabel": "Description (optional)",
+          "columns": {
+            "directory": "Directory",
+            "description": "Description",
+            "actions": "Actions"
+          }
         },
         "messages": {
           "externalLoadFailed": "Could not load OpenCode references.",
@@ -713,6 +740,56 @@
         "title": "Reset {{name}}?",
         "message": "This will clear everything inside the workspace directory and restore the default persona files without deleting the workspace directory itself.",
         "pathLabel": "Workspace path"
+      },
+      "icon": {
+        "title": "Change icon",
+        "description": "Customize the icon for {{name}}. Changes are saved on the workspace host.",
+        "default": "Built-in icons",
+        "chooseIcon": "Choose icon",
+        "builtinIcons": "Icon",
+        "glyphsUnsupported": "This host does not yet support choosing built-in icons.",
+        "workIcons": "Work & study",
+        "lifeIcons": "Life & hobbies",
+        "chooseLightImage": "Choose light image",
+        "chooseDarkImage": "Choose dark image",
+        "themedImagesUnsupported": "This host supports a single image for both themes. Upgrade the host to set a separate dark image.",
+        "glyphs": {
+          "default": "Default", "code": "Code", "learning": "Learning", "design": "Design",
+          "documents": "Documents", "research": "Research", "web": "Website", "mobile": "Mobile app",
+          "games": "Games", "data": "Data", "business": "Business", "tools": "Tools",
+          "travel": "Travel", "food": "Food", "fitness": "Fitness", "music": "Music", "reading": "Reading", "home": "Home", "finance": "Finance", "photography": "Photography", "pets": "Pets", "nature": "Nature", "shopping": "Shopping", "movies": "Movies"
+        },
+        "image": "Custom image",
+        "preview": "Icon preview",
+        "colors": "Icon colors",
+        "customColor": "Custom color",
+        "colorValue": "Color value",
+        "lightness": "Lightness",
+        "presetColors": "Preset colors",
+        "chooseImage": "Choose image",
+        "imageHint": "PNG, JPEG or WebP, up to 5 MB. Images are stored with the workspace; the original file is no longer needed.",
+        "crop": "Fill square crop",
+        "zoom": "Zoom",
+        "reset": "Restore default",
+        "retry": "Retry",
+        "loading": "Loading icon…",
+        "unsupported": "This host does not support workspace icon customization. Update the host or use a supported Desktop or CLI host.",
+        "loadFailed": "The custom icon could not be loaded. The default icon is shown; your settings are preserved.",
+        "invalidImage": "Choose a PNG, JPEG or WebP image under 5 MB and 20 megapixels.",
+        "saveFailed": "Could not save the icon: {{reason}}",
+        "palette": {
+          "default": "Default",
+          "blue": "Blue",
+          "cyan": "Cyan",
+          "green": "Green",
+          "yellow": "Yellow",
+          "orange": "Orange",
+          "red": "Red",
+          "purple": "Purple",
+          "pink": "Pink"
+        },
+        "light": "Light preview",
+        "dark": "Dark preview"
       }
     },
     "agents": {
@@ -737,11 +814,16 @@
     "notifications": "Notifications",
     "settingsMenu": {
       "floatingWindow": "Floating Window",
-      "theme": "Theme",
-      "themeConfiguration": "Theme Settings",
-      "appearanceSwitchFailed": "Could not switch the theme. Try again.",
+      "feedback": "Feedback",
+      "feedbackUnavailable": "User feedback is not configured.",
+      "feedbackOpenFailed": "Could not open user feedback.",
       "openSettings": "$t(shared:features.settings)",
       "about": "About OpenBitFun"
+    },
+    "customization": {
+      "localDesktopOnly": "Available on the local desktop only. Your pin is kept when switching devices.",
+      "unavailableEntry": "Unavailable entry ({{id}})",
+      "openFailed": "Could not open {{name}}. Try again."
     }
   },
   "window": {
@@ -769,7 +851,6 @@
     "currentHostHint": "Files and commands stay on the current work host.",
     "otherHostHint": "Connect to a remote host or container over SSH. Native WSL is only available on the current Windows work host.",
     "wslHint": "Next, select a Linux distribution on the current Windows work host.",
-    "foldersLockedHint": "Remove folders to switch.",
     "connectionChoice": "Connection setup",
     "availableOptions": "Available connections and environments",
     "refreshOptions": "Refresh available options",
@@ -1687,7 +1768,6 @@
     "panelView": "Panel View"
   },
   "sceneBar": {
-    "recentSessions": "Recently opened sessions",
     "tabsLabel": "Scene tabs",
     "scrollPrevious": "Scroll tabs left",
     "scrollNext": "Scroll tabs right",
@@ -1872,7 +1952,7 @@
   "ssh": {
     "remote": {
       "title": "Remote SSH",
-      "connect": "Connect Remote Project",
+      "connect": "Connect",
       "connecting": "Connecting...",
       "connected": "Connected",
       "disconnect": "Disconnect",
@@ -1930,6 +2010,9 @@
       "privateKey": "Private Key",
       "sshAgent": "SSH Agent",
       "keyboardInteractive": "Keyboard-interactive",
+      "noAuth": "No authentication",
+      "noAuthHint": "The server accepts the connection without credentials. Use this for tunnels that are already authenticated, such as a Coder workspace agent.",
+      "noAuthUnsupported": "This host must be updated before it can connect without authentication.",
       "privateKeyPath": "Private Key File Path",
       "certificatePath": "OpenSSH certificate",
       "certificatePathOptional": "Optional certificate file",
@@ -1973,6 +2056,7 @@
       "hostRequired": "Host is required",
       "usernameRequired": "Username is required",
       "portInvalid": "Port must be a number between 1 and 65535",
+      "portScopedIdentityUnsupported": "The connected device cannot keep separate profiles for SSH ports on the same host and user, so saving would replace \"{{connection}}\". Update OpenBitFun on that device, or edit the existing profile instead.",
       "passwordRequired": "Password is required",
       "keyPathRequired": "Private key path is required",
       "enterPassword": "Enter Password",
@@ -2002,7 +2086,7 @@
     "portForward": {
       "menuEntry": "Forward a Port",
       "title": "Port Forwarding",
-      "intro": "Reach a port listening on the remote host from this machine. Nothing is forwarded automatically — only the mappings you add here.",
+      "intro": "Reach a port listening on the remote host from this machine. Forwards are created only when you add one here or open a localhost link from a remote terminal.",
       "detectedTitle": "Listening on the remote",
       "detecting": "Detecting remote ports…",
       "detect": "Detect again",
@@ -2261,8 +2345,19 @@
     "modifiedDragUnavailable": "Dragging with modifier keys is not supported in this preview."
   },
   "newWorkspace": {
+    "localProjectTitle": "Project on this device",
+    "localProjectDescription": "Link existing folders or start a new project.",
+    "deviceProjectTitle": "Project on another device",
+    "deviceProjectDescription": "Create on another of your online devices.",
+    "createDeviceProject": "Create a project on another device",
+    "chooseDevice": "Choose a device",
+    "noOtherDevices": "No other devices are online. Sign in to the same account in OpenBitFun on another device to choose it here.",
+    "signInForDevices": "Sign in to create projects on your other online devices.",
+    "createProjectOn": "Create a project on {{name}}",
+    "deviceCurrent": "Shown now",
+    "connecting": "Connecting…",
+    "deviceError": "Couldn't connect to this device. Try again later.",
     "title": "Create",
-    "description": "Choose what you want to create.",
     "assistantTitle": "Personal assistant",
     "assistantDescription": "An ongoing collaborator with its own memory.",
     "projectTitle": "Project",
@@ -2271,5 +2366,11 @@
     "createProject": "Create project",
     "assistantError": "Unable to create the assistant. Please try again.",
     "back": "Back to selection"
+  },
+  "peerHost": {
+    "connectionInterrupted": "The connection to the device was interrupted. Try again.",
+    "unavailable": "This feature is not available on that device.",
+    "updateRequired": "The OpenBitFun version on that device does not support this feature. Try updating OpenBitFun on that device.",
+    "withDetail": "{{message}} ({{detail}})"
   }
 }

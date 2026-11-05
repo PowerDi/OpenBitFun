@@ -27,11 +27,10 @@ import { getPrismLanguageFromAlias } from '@/infrastructure/language-detection';
 import { useAppearance } from '@/infrastructure/appearance';
 import { contextMenuController } from '@/shared/context-menu-system/core/ContextMenuController';
 import { ContextType, type CustomContext, type MenuItem } from '@/shared/context-menu-system/types';
-import { createTab, openCanvasArtifactTab, openFileInBestTarget } from '@/shared/utils/tabUtils';
+import { createTab, openFileInBestTarget } from '@/shared/utils/tabUtils';
 import { isHtmlFilePath, openHtmlFileInExternalBrowser } from '@/shared/utils/htmlFilePreview';
 import { createLogger } from '@/shared/utils/logger';
 import type { LineRange } from '@/shared/editor/LineRange';
-import { parseCanvasArtifactReference } from '@/shared/utils/canvasArtifactReference';
 import {
   isStartupRenderTraceEnabled,
   recordReactRenderProfile,
@@ -49,7 +48,6 @@ import { rehypeWindowsDrivePaths } from './rehypeWindowsDrivePaths';
 const log = createLogger('Markdown');
 const COMPUTER_LINK_PREFIX = 'computer://';
 const FILE_LINK_PREFIX = 'file://';
-const CANVAS_LINK_PREFIX = 'openbitfun-canvas://';
 const WORKSPACE_FOLDER_PLACEHOLDER = '{{workspaceFolder}}';
 
 const MarkdownMathRenderer = lazyWithRecovery(() => import('./MarkdownMathRenderer'));
@@ -66,10 +64,17 @@ function markdownUrlTransform(value: string, key?: string): string {
   // the renderer will strip the internal prefix and read it through the
   // owning workspace/session provider.
   if (/^[A-Za-z]:[\\/]/.test(value)) return `file:///${value.replace(/\\/g, '/')}`;
-  if (key === 'src' && /^data:image\/(png|jpeg|gif|webp|bmp|svg\+xml|avif);base64,/i.test(value)) return value;
-  if (value.startsWith(CANVAS_LINK_PREFIX) && parseCanvasArtifactReference(value)) {
-    return value;
+  // micromark percent-encodes backslashes in some Markdown destinations. Keep
+  // those references safe even when no rehype node position is available.
+  if (key === 'src' && /^[A-Za-z]:(?:%5C|%2F)/i.test(value)) {
+    try {
+      const decoded = decodeURIComponent(value);
+      if (/^[A-Za-z]:[\\/]/.test(decoded)) return `file:///${decoded.replace(/\\/g, '/')}`;
+    } catch {
+      // Leave malformed URLs to react-markdown's normal safety transform.
+    }
   }
+  if (key === 'src' && /^data:image\/(png|jpeg|gif|webp|bmp|svg\+xml|avif);base64,/i.test(value)) return value;
   return defaultUrlTransform(value);
 }
 
@@ -159,13 +164,13 @@ function mayNeedWorkspacePathForMarkdownLinks(content: string): boolean {
   // while false negatives could make relative local links display poorly.
   if (
     hasMarkdownLinkSyntax &&
-    /!?\[[^\]]+\]\(\s*(?!https?:|mailto:|data:|asset:|tauri:|visualization:|tab:|openbitfun-canvas:|#)[^)]+\)/i.test(content)
+    /!?\[[^\]]+\]\(\s*(?!https?:|mailto:|data:|asset:|tauri:|visualization:|tab:|#)[^)]+\)/i.test(content)
   ) {
     return true;
   }
 
   return hasRawAnchorSyntax &&
-    /<a\s+[^>]*href=["']\s*(?!https?:|mailto:|visualization:|tab:|openbitfun-canvas:|#)[^"']+["']/i.test(content);
+    /<a\s+[^>]*href=["']\s*(?!https?:|mailto:|visualization:|tab:|#)[^"']+["']/i.test(content);
 }
 
 function mayContainMarkdownMath(content: string): boolean {
@@ -285,7 +290,7 @@ const sanitizeSchema = {
   },
   protocols: {
     ...defaultSchema.protocols,
-    href: [...(defaultSchema.protocols?.href || []), 'openbitfun-canvas', 'computer', 'file', 'tab', 'visualization', 'openbitfun'],
+    href: [...(defaultSchema.protocols?.href || []), 'computer', 'file', 'tab', 'visualization', 'openbitfun'],
     src: [...(defaultSchema.protocols?.src || []), 'asset', 'data', 'http', 'https', 'tauri', 'computer', 'file', 'openbitfun'],
   },
 };
@@ -307,13 +312,12 @@ function remarkAutolinkInternalLinks() {
         || (
           !value.includes(COMPUTER_LINK_PREFIX)
           && !value.includes(FILE_LINK_PREFIX)
-          && !value.includes(CANVAS_LINK_PREFIX)
         )
       ) {
         return;
       }
 
-      const re = /(computer:\/\/|file:\/\/|openbitfun-canvas:\/\/)[^\s<>()]+/g;
+      const re = /(computer:\/\/|file:\/\/\/\/)[^\s<>()]+/g;
       let match: RegExpExecArray | null;
       let lastIndex = 0;
       const nextChildren: any[] = [];
@@ -892,6 +896,8 @@ export interface MarkdownRendererProps {
   content: string;
   /** Compact conversation images; document renderers retain their original layout. */
   imageThumbnails?: boolean;
+  /** Recycle offscreen syntax decoration; source text remains selectable. */
+  deferCodeHighlighting?: boolean;
   /** Display a region while resolving Markdown references against all content. */
   sourceRange?: MarkdownSourceRange;
   /** Owning workspace ID; content opened from links is routed by it. `basePath` is only the IO root. */
@@ -924,6 +930,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
   singleLinePreview = false,
   content, 
   imageThumbnails = false,
+  deferCodeHighlighting = false,
   sourceRange,
   workspaceId,
   basePath,
@@ -955,7 +962,6 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
   isStreamingRef.current = isStreaming;
   const basePathRef = useLiveValueRef(basePath);
   const remoteConnectionIdRef = useLiveValueRef(fileAccess ? fileAccess.scope.remoteConnectionId : remoteConnectionId);
-  const remoteSshHostRef = useLiveValueRef(remoteSshHost);
   const workspaceIdRef = useLiveValueRef(fileAccess ? fileAccess.scope.workspaceId : workspaceId);
   const currentWorkspacePathRef = useLiveValueRef(fileAccess?.scope.workspacePath ?? currentWorkspacePath);
   const expandDetailsByDefaultRef = useLiveValueRef(expandDetailsByDefault);
@@ -968,6 +974,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
   const onHttpLinkClickRef = useLiveValueRef(onHttpLinkClick);
   const traceContextRef = useLiveValueRef(traceContext);
   const sourceRangeRef = useLiveValueRef(sourceRange);
+  const deferCodeHighlightingRef = useLiveValueRef(deferCodeHighlighting);
 
   // The overlay belongs to the renderer that resolved the image bytes: a
   // Markdown image is inline content, not an independently mounted viewer.
@@ -1355,17 +1362,25 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
         fontWeight: 'inherit',
         color: syntaxThemeRef.current['code[class*="language-"]']?.color,
       };
+      // The outer transcript already bounds ordinary Markdown sections. Keep
+      // their decoration for that row's lifetime: swapping complete <pre>
+      // trees on intersection can briefly shrink WebKit's scroll range and
+      // clamp a reader at the historical edge (83/166px in native traces).
+      // Only whole semantic documents need an additional inner code budget.
+      // Indivisible huge fences remain plaintext and need no visibility swap.
+      const recycleDecoration = deferCodeHighlightingRef.current
+        && markdownContentRef.current.length > 12_000 && code.length <= 24_000;
       return (
         <div className={`code-block-wrapper${hasMultipleLines ? '' : ' code-block-wrapper--single-line'}`} data-openbitfun-component="markdown" data-openbitfun-part="codeBlock" data-openbitfun-state={streaming ? 'streaming' : undefined}>
           <div className="code-block-toolbar" data-openbitfun-component="markdown" data-openbitfun-part="codeToolbar">
             <span className="code-block-lang">{formatCodeLanguageLabel(normalizedLang)}</span>
             <CopyButton code={code} />
           </div>
-          <MarkdownCodeBody>
+          <MarkdownCodeBody deferHighlighting={!thinking && recycleDecoration}>{visible => <>
             {/* Thinking must never mount a syntax highlighter, even after completion
                 or reopening. Bulk highlighting caused measured completion stalls;
                 keep this lightweight path independent of streaming state. */}
-            {thinking ? (
+            {thinking || !visible ? (
               <CodeBlockFallback
                 code={code}
                 language={normalizedLang}
@@ -1379,7 +1394,10 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
                 showLineNumbers={false}
                 customStyle={codeBodyStyle}
                 codeTagProps={{ style: codeTagStyle }}
-                preferFallback={streaming}
+                // A single indivisible fence may be megabytes. Keep its exact
+                // native text instead of synchronously building an unbounded
+                // syntax-token tree in the scrolling transcript.
+                preferFallback={streaming || (deferCodeHighlightingRef.current && code.length > 24_000)}
                 fallback={CodeBlockFallback}
                 fallbackProps={{
                   code,
@@ -1392,7 +1410,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
                 {code}
               </AsyncPrismSyntaxHighlighter>
             )}
-          </MarkdownCodeBody>
+          </>}</MarkdownCodeBody>
         </div>
       );
     },
@@ -1405,12 +1423,11 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
       const isHashLink = typeof hrefValue === 'string' && hrefValue.startsWith('#');
       const isVisualizationLink = typeof hrefValue === 'string' && hrefValue.startsWith('visualization:');
       const isTabLink = typeof hrefValue === 'string' && hrefValue.startsWith('tab:');
-      const isCanvasLink = typeof hrefValue === 'string' && hrefValue.startsWith(CANVAS_LINK_PREFIX);
       const isHttpLink = typeof hrefValue === 'string' &&
         (hrefValue.startsWith('http://') || hrefValue.startsWith('https://'));
       const isMailtoLink = typeof hrefValue === 'string' && hrefValue.startsWith('mailto:');
 
-      if (typeof hrefValue === 'string' && !isVisualizationLink && !isTabLink && !isCanvasLink && !isHttpLink && !isMailtoLink && !isHashLink) {
+      if (typeof hrefValue === 'string' && !isVisualizationLink && !isTabLink && !isHttpLink && !isMailtoLink && !isHashLink) {
         let filePath = normalizeFileLikeHref(hrefValue);
 
         let lineRange: LineRange | undefined;
@@ -1489,35 +1506,6 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
         }
       }
 
-      if (isCanvasLink && typeof hrefValue === 'string') {
-        return (
-          <button
-            className="canvas-link"
-            data-openbitfun-component="markdown"
-            data-openbitfun-part="canvasLink"
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              const opened = openCanvasArtifactTab({
-                artifactReference: hrefValue,
-                workspaceId: workspaceIdRef.current,
-                workspacePath: basePathRef.current || currentWorkspacePathRef.current || undefined,
-                remoteConnectionId: remoteConnectionIdRef.current,
-                remoteSshHost: remoteSshHostRef.current,
-                sourceMetadata: { type: 'markdown-link' },
-                metadata: { fromMarkdown: true },
-              });
-              if (!opened) {
-                log.warn('Ignored invalid Canvas artifact link', { artifactReference: hrefValue });
-              }
-            }}
-            type="button"
-          >
-            {children}
-          </button>
-        );
-      }
-      
       if (isVisualizationLink && typeof hrefValue === 'string') {
         const vizData = hrefValue.replace('visualization:', '');
         
@@ -1688,12 +1676,26 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
       return <li {...props} className={['markdown-list-item', className].filter(Boolean).join(' ')}>{children}</li>;
     },
 
-    th({ node: _node, children, className, ...props }: any) {
-      return <th {...props} className={['markdown-header-cell', className].filter(Boolean).join(' ')}>{children}</th>;
+    th({ node: _node, children, className, align, style, ...props }: any) {
+      return (
+        <th {...props} className={['markdown-header-cell', className].filter(Boolean).join(' ')}
+          style={align ? { ...style, textAlign: align } : style}>
+          <div className="markdown-table-cell-content">
+            <div className="markdown-table-cell-body">{children}</div>
+          </div>
+        </th>
+      );
     },
 
-    td({ node: _node, children, className, ...props }: any) {
-      return <td {...props} className={['markdown-data-cell', className].filter(Boolean).join(' ')}>{children}</td>;
+    td({ node: _node, children, className, align, style, ...props }: any) {
+      return (
+        <td {...props} className={['markdown-data-cell', className].filter(Boolean).join(' ')}
+          style={align ? { ...style, textAlign: align } : style}>
+          <div className="markdown-table-cell-content">
+            <div className="markdown-table-cell-body">{children}</div>
+          </div>
+        </td>
+      );
     },
     
     p({ node: _node, children, align, style, className, ...props }: any) {
@@ -1728,11 +1730,11 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
     markdownContentRef,
     onHttpLinkClickRef,
     remoteConnectionIdRef,
-    remoteSshHostRef,
     workspaceIdRef,
     syntaxThemeRef,
     traceContextRef,
     sourceRangeRef,
+    deferCodeHighlightingRef,
   ]);
   
   const textRevealRef = useRef<HTMLDivElement>(null);
@@ -1756,7 +1758,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
     const basicFragment = (
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkAutolinkBoundaries, remarkAutolinkInternalLinks]}
-        rehypePlugins={[rehypeRaw, rehypeWindowsDrivePaths, [rehypeSanitize, sanitizeSchema]]}
+        rehypePlugins={[rehypeRaw, [rehypeWindowsDrivePaths, { markdownSource: fragment }], [rehypeSanitize, sanitizeSchema]]}
         urlTransform={markdownUrlTransform}
         components={fragmentComponents}
       >{fragment}</ReactMarkdown>
@@ -1778,7 +1780,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
   const basicMarkdownRenderer = (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, ...(!isStreaming ? [remarkCachedParse] : []), [remarkStreamingTableLinks, { isStreaming }], remarkAutolinkBoundaries, remarkAutolinkInternalLinks]}
-      rehypePlugins={[rehypeRaw, rehypeWindowsDrivePaths, [rehypeSanitize, sanitizeSchema], [rehypeSourceRange, sourceRange], [rehypeImageThumbnails, { enabled: imageThumbnails }]]}
+      rehypePlugins={[rehypeRaw, [rehypeWindowsDrivePaths, { markdownSource: markdownContent }], [rehypeSanitize, sanitizeSchema], [rehypeSourceRange, sourceRange], [rehypeImageThumbnails, { enabled: imageThumbnails }]]}
       urlTransform={markdownUrlTransform}
       components={components}
     >

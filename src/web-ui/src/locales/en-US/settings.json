@@ -87,6 +87,10 @@
       "workspaceGit": {
         "label": "Workspace & Git",
         "description": "Configure file search, commit attribution, and worktrees, and manage isolated working directories"
+      },
+      "externalImport": {
+        "label": "External import",
+        "description": "Import and manage content from other AI applications"
       }
     },
     "views": {
@@ -97,6 +101,7 @@
     "sections": {
       "text-selection": "Text selection",
       "message-sending": "Message sending",
+      "btw-close-confirmation": "Side conversation closing",
       "voice": "Voice",
       "shortcuts": "Keyboard Shortcuts",
       "session": "Session Defaults",
@@ -108,7 +113,8 @@
       "hooks": "Event Hooks",
       "pet": "Pet",
       "voice-call": "Real-time voice calls",
-      "desktop-cards": "Desktop cards"
+      "desktop-cards": "Desktop cards",
+      "sidebar-navigation": "Left sidebar"
     }
   },
   "changeGuard": {

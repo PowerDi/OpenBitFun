@@ -14,6 +14,21 @@ Every deliberate write to the FlowChat scroller goes through one register, which
 decides whether the writer may act. This document covers the register, what it
 replaced, the two writers that stand outside it, and the trail it leaves.
 
+## Coordinate conventions
+
+Public navigation targets and persisted viewport snapshots remain top-origin.
+`flowChatScrollCoordinates.ts` reads that logical offset and the register converts
+writes to the scroller's native convention. Historical scrollers have a bottom
+origin: native zero is the latest position and negative values move toward older
+content. A growing older prefix changes the logical top offset without any
+native scroll travel or deliberate viewport write.
+
+`readReaderScrollPosition` and the DOM reading anchor therefore account native
+travel, not total scroll range. `shift` is a signed native displacement in both
+conventions. Explicit history/live origin handoffs preserve an actual visible
+row through the existing register; the virtualizer receives immediate readback
+before releasing its retained window.
+
 ## Who May Move the Viewport at All
 
 Continuous movement belongs to `useFlowChatFollowOutput`; one-shot navigation
@@ -43,7 +58,8 @@ be undone.
 
 **Repairing a displacement is not on this list**, and putting it there was a
 mistake worth keeping recorded. The prepend compensation and the viewport anchor
-both use `viewportOwner.shift` — see *A Displacement Is Not a Movement* in
+both use `viewportOwner.shift`. Prepend compensation belongs only to the live
+top-origin layout; historical tail loading uses no compensation. See
 `FLOWCHAT_HISTORY_PAGING.md`.
 
 **Taking ownership and writing are one call.** Adding a writer without declaring
@@ -79,6 +95,22 @@ Only the parts that were really answering "is someone else moving the viewport"
 are gone.
 
 ## What Counts as a Gesture
+
+Native scroll and input subscriptions live for the scroller's lifetime. The
+callbacks they consume are refreshed after each React commit through a ref.
+TanStack's earlier native scroll listener can synchronously commit a new virtual
+window. If that commit tears down and rebinds the list's later listener, DOM event
+dispatch skips the removed listener and does not call its replacement for the
+same event. That loses the whole scroll observation: edge fade, follow, anchor,
+visible Turn, snapshot and history-boundary evaluation.
+
+The first-message fade regression exposed this with `scrollTop: 0` while
+`data-scroll-at-start` remained `false`. A native-event fixture with an earlier
+listener forcing a synchronous virtualizer commit reproduces the lost update;
+the ordinary scroll fixture alone does not. Keep callbacks current without
+rebinding subscriptions, and clean up when the scroller/session is replaced.
+The fix changes no scroll target, ownership priority or CSS mask, and needs no
+polling, delayed repaint or extra scroll writer.
 
 Selecting transcript text hands the viewport to the reader through the existing
 user-gesture path. The selection toolbar waits for pointer release and uses a
@@ -117,6 +149,27 @@ is reached. Previously every occurrence first centered its row and then its
 text on another frame, while the row aim could still reassert itself later.
 Gestures, a superseding search request, and session teardown abandon pending
 search resolution. Search styling owns no viewport writes.
+
+**Trajectory selection uses the same one-shot owner.** The header trajectory keeps
+only bounded event summaries; hover, range brushing and search indexing never
+activate a history window or write the transcript viewport. Selection resolves a
+stable Turn/item identity, expands its group and uses `focusItem` or
+`scrollToSearchMatch`. `prepareItemNavigation` releases follow/old aims without
+claiming a reader gesture, which would outrank and refuse the requested placement.
+Both paths acknowledge a mounted target only after the viewport register permits
+positioning; trajectory selection and detail content commit on that acknowledgement.
+Item focus carries its source row/round when needed: retry
+history opens through reader state, group filters clear before materializing the
+member, and a visible collapsed card can anchor even if its body text is hidden.
+A local history window is presented before the item is aimed;
+there is no intermediate Turn scroll. Peer bodies come from the canonical record
+replica, paging only until the selected Turn is present. Device/session changes,
+a later selection and reader gestures invalidate pending navigation. Right-panel
+range endpoint actions include the originating viewport ID to isolate split chats.
+The passive item overlay covers the full target with the semantic accent surface;
+its short marker aligns to the leading tool icon, including icons in the gutter.
+Text search retains its word highlights and current-line presentation. Repeated
+focus requests have independent lifetimes, so an older timeout cannot clear a new one.
 
 **The current Turn is not always the first visible Turn.** The top alignment
 gap can leave a sliver of the preceding Turn on screen; the content-end clamp

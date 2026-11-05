@@ -1,21 +1,25 @@
-import { useLayoutEffect, useState } from 'react';
-import { createFlowChatSearchHighlightOwner, findFlowChatFocusTextRange } from './flowChatSearchDom';
+import { useLayoutEffect, useState, type RefObject } from 'react';
+import { createFlowChatSearchHighlightOwner } from './flowChatSearchDom';
 import {
+  measureFlowChatFocusItem,
   measureFlowChatSearchLine,
   resolveFlowChatSearchPresentation,
   type FlowChatSearchLineBox,
+  type FlowChatFocusBox,
 } from './flowChatSearchPresentation';
 import type { SearchMatch } from './useFlowChatSearch';
 
 const FOCUS_LINE_EVENT = 'flowchat:focus-line';
-interface FocusLineRequest { element: HTMLElement; active: boolean }
+interface FocusLineRequest { element: HTMLElement; active: boolean; id: symbol }
+type PresentationBox = FlowChatSearchLineBox | FlowChatFocusBox;
 
-/** Reuse the row's passive search line instead of outlining the entire item. */
+/** Passive item navigation feedback; never changes the measured row geometry. */
 export function highlightFlowChatFocusTarget(element: HTMLElement): () => void {
   const wrapper = element.closest<HTMLElement>('.virtual-item-wrapper');
   if (!wrapper) return () => {};
+  const id = Symbol('item-focus');
   const publish = (active: boolean) => wrapper.dispatchEvent(new CustomEvent<FocusLineRequest>(
-    FOCUS_LINE_EVENT, { detail: { element, active } },
+    FOCUS_LINE_EVENT, { detail: { element, active, id } },
   ));
   publish(true);
   const timer = window.setTimeout(() => publish(false), 1600);
@@ -23,33 +27,41 @@ export function highlightFlowChatFocusTarget(element: HTMLElement): () => void {
   return clear;
 }
 
-function sameLine(a: FlowChatSearchLineBox | null, b: FlowChatSearchLineBox | null): boolean {
+function sameLine(a: PresentationBox | null, b: PresentationBox | null): boolean {
   return a === b || Boolean(a && b
-    && a.top === b.top && a.left === b.left && a.width === b.width && a.height === b.height);
+    && a.top === b.top && a.left === b.left && a.width === b.width && a.height === b.height
+    && ('markerTop' in a ? 'markerTop' in b && a.markerTop === b.markerTop
+      && a.markerLeft === b.markerLeft && a.markerHeight === b.markerHeight : !('markerTop' in b)));
 }
 
 /** Passive row presentation. It never scrolls, expands content, or reserves space. */
 export function useFlowChatSearchPresentation(
-  wrapper: HTMLElement | null,
+  target: HTMLElement | RefObject<HTMLElement | null> | null,
   query: string | undefined,
   matches: readonly SearchMatch[] | undefined,
   currentMatch: SearchMatch | undefined,
-): FlowChatSearchLineBox | null {
-  const [line, setLine] = useState<FlowChatSearchLineBox | null>(null);
-  const [focusSource, setFocusSource] = useState<HTMLElement | null>(null);
+): PresentationBox | null {
+  const [line, setLine] = useState<PresentationBox | null>(null);
+  const [focus, setFocus] = useState<FocusLineRequest | null>(null);
+  const focusSource = focus?.element;
 
   useLayoutEffect(() => {
+    // Resolve after refs attach: keeping a passive DOM owner in React state
+    // otherwise renders every virtual row twice on each scroll-window mount.
+    const wrapper = target && 'current' in target ? target.current : target;
     if (!wrapper) return;
     const handleFocus = (event: Event) => {
-      const { element, active } = (event as CustomEvent<FocusLineRequest>).detail;
+      const request = (event as CustomEvent<FocusLineRequest>).detail;
+      const { element, active, id } = request;
       if (active && !wrapper.contains(element)) return;
-      setFocusSource(previous => active ? element : previous === element ? null : previous);
+      setFocus(previous => active ? request : previous?.id === id ? null : previous);
     };
     wrapper.addEventListener(FOCUS_LINE_EVENT, handleFocus);
     return () => wrapper.removeEventListener(FOCUS_LINE_EVENT, handleFocus);
-  }, [wrapper]);
+  }, [target]);
 
   useLayoutEffect(() => {
+    const wrapper = target && 'current' in target ? target.current : target;
     const hasSearch = Boolean(query?.trim() && matches?.length);
     if (!wrapper || (!hasSearch && !focusSource)) {
       setLine(previous => previous === null ? previous : null);
@@ -65,13 +77,9 @@ export function useFlowChatSearchPresentation(
         wrapper, query ?? '', matches ?? [], currentMatch,
       );
       owner.update(currentRange, otherRanges);
-      const focusRange = focusSource && wrapper.contains(focusSource)
-        ? findFlowChatFocusTextRange(focusSource) : null;
-      const range = focusRange ?? currentRange;
-      const source = focusRange ? focusSource : currentRoot;
-      const next = range && source
-        ? measureFlowChatSearchLine(wrapper, source, range)
-        : null;
+      const next = focusSource && wrapper.contains(focusSource)
+        ? measureFlowChatFocusItem(wrapper, focusSource)
+        : currentRange && currentRoot ? measureFlowChatSearchLine(wrapper, currentRoot, currentRange) : null;
       setLine(previous => sameLine(previous, next) ? previous : next);
     };
     const scheduleRefresh = () => {
@@ -103,7 +111,7 @@ export function useFlowChatSearchPresentation(
       wrapper.ownerDocument.fonts?.removeEventListener('loadingdone', scheduleRefresh);
       owner.dispose();
     };
-  }, [wrapper, query, matches, currentMatch, focusSource]);
+  }, [target, query, matches, currentMatch, focusSource]);
 
   return currentMatch || focusSource ? line : null;
 }

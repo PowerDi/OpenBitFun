@@ -2,7 +2,13 @@
 //!
 //! This module manages SSH connections using the pure-Russ SSH implementation
 
-use super::sftp_file::ManagedSftpSession;
+use super::proxy_command::{expand_tokens, ProxyCommandChild};
+use super::sftp_file::{ManagedSftpFile, ManagedSftpSession};
+#[cfg(feature = "ssh_config")]
+use super::ssh_config_loader::{
+    is_host_pattern, load_merged_config_async, resolve_host_settings, split_directive,
+    strip_trailing_comment, ResolvedHostSettings,
+};
 use crate::remote_ssh::password_vault::SSHPasswordVault;
 use crate::remote_ssh::types::{
     ConnectionTestReport, ConnectionTestStage, ContainerAccess, ContainerWorkspaceConfig,
@@ -19,9 +25,9 @@ use russh_keys::PublicKeyBase64;
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::{RawSftpSession, SftpSession};
 use russh_sftp::protocol::{File as SftpFile, StatusCode as SftpStatusCode};
-#[cfg(feature = "ssh_config")]
-use ssh_config::SSHConfig;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -33,6 +39,9 @@ use tokio::time::{Duration, Instant};
 const SSH_COMMAND_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const SSH_COMMAND_INTERRUPT_DRAIN_GRACE: Duration = Duration::from_millis(500);
 const SSH_COMMAND_OWNER_DRAIN_GRACE: Duration = Duration::from_secs(2);
+/// How often a displaced ProxyCommand process checks whether its old transport
+/// has drained after a reconnect.
+const STALE_PROXY_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// The caller owns cancellation, while the spawned transport task owns the
 /// channel until interruption and draining have finished. The caller may stop
@@ -368,7 +377,7 @@ mtime=$(stat -c %Y \"$item\" 2>/dev/null || stat -f %m \"$item\" 2>/dev/null || 
 mode=$(stat -c %a \"$item\" 2>/dev/null || stat -f %Lp \"$item\" 2>/dev/null || true); \
 printf '%s\\0%s\\0%s\\0%s\\0%s\\0%s\\0' \"$name\" \"$item\" \"$kind\" \"$size\" \"$mtime\" \"$mode\";";
 
-fn sftp_error_may_be_stale_transport(error: &SftpError) -> bool {
+pub(super) fn sftp_error_may_be_stale_transport(error: &SftpError) -> bool {
     match error {
         SftpError::Status(status) => matches!(
             status.status_code,
@@ -419,24 +428,64 @@ fn truncate_at_char_boundary(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
-/// OpenSSH keyword matching is case-insensitive, but `ssh_config` stores keys as written in the file
-/// (e.g. `HostName` vs `Hostname`). Resolve by ASCII case-insensitive compare.
+/// Single-argument value of a resolved directive (see
+/// [`resolve_host_settings`], which keys by lowercase keyword).
 #[cfg(feature = "ssh_config")]
-fn ssh_cfg_get<'a>(
-    settings: &std::collections::HashMap<&'a str, &'a str>,
-    canonical_key: &str,
-) -> Option<&'a str> {
+fn resolved_value<'a>(settings: &'a ResolvedHostSettings, key: &str) -> Option<&'a str> {
     settings
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case(canonical_key))
-        .map(|(_, v)| *v)
+        .get(key)
+        .and_then(|value| parse_ssh_config_value(value))
 }
 
+/// Resolve the competing `ProxyJump` / `ProxyCommand` pair the way OpenSSH
+/// does: whichever is obtained first wins and the later one is dropped
+/// (`none` counts as obtained). Returns `(proxy_jump, proxy_command)`.
 #[cfg(feature = "ssh_config")]
-fn ssh_cfg_has(settings: &std::collections::HashMap<&str, &str>, canonical_key: &str) -> bool {
-    settings
-        .keys()
-        .any(|k| k.eq_ignore_ascii_case(canonical_key))
+fn resolved_proxy_pair(settings: &ResolvedHostSettings) -> (Option<String>, Option<String>) {
+    let jump = settings.first("proxyjump");
+    let command = settings.first("proxycommand");
+    let (jump, command) = match (jump, command) {
+        (Some(jump), Some(command)) if jump.order < command.order => (Some(jump), None),
+        (Some(_), Some(command)) => (None, Some(command)),
+        pair => pair,
+    };
+    let jump = jump
+        .and_then(|jump| parse_ssh_config_value(&jump.value))
+        .filter(|jump| !jump.eq_ignore_ascii_case("none"))
+        .map(ToOwned::to_owned);
+    let command = command
+        .and_then(|command| parse_ssh_config_command_value(&command.value))
+        .filter(|command| !command.eq_ignore_ascii_case("none"));
+    (jump, command)
+}
+
+/// Build an [`SSHConfigEntry`] from resolved settings for `host`.
+#[cfg(feature = "ssh_config")]
+fn ssh_config_entry_from_settings(host: &str, settings: &ResolvedHostSettings) -> SSHConfigEntry {
+    let (proxy_jump, proxy_command) = resolved_proxy_pair(settings);
+    // IdentityFile/CertificateFile accumulate in OpenSSH; the entry carries
+    // one, so prefer the block that names this host over `Host *` defaults.
+    let preferred_file = |key: &str| {
+        settings
+            .preferred(key)
+            .and_then(|value| parse_ssh_config_value(value))
+            .map(|file| shellexpand::tilde(file).to_string())
+    };
+    SSHConfigEntry {
+        host: host.to_string(),
+        hostname: resolved_value(settings, "hostname").map(ToOwned::to_owned),
+        port: resolved_value(settings, "port").and_then(|port| port.parse::<u16>().ok()),
+        user: resolved_value(settings, "user").map(ToOwned::to_owned),
+        identity_file: preferred_file("identityfile"),
+        agent: if proxy_command.is_some() {
+            None
+        } else {
+            Some(true)
+        },
+        certificate_file: preferred_file("certificatefile"),
+        proxy_jump,
+        proxy_command,
+    }
 }
 
 /// Extract the first value from an SSH config directive line, handling double-quoted strings.
@@ -455,25 +504,33 @@ fn parse_ssh_config_value(value: &str) -> Option<&str> {
     value.split_whitespace().next()
 }
 
+/// Extract a whole-line command value such as `ProxyCommand`'s.
+///
+/// Unlike [`parse_ssh_config_value`], the value spans every remaining token of
+/// the line and is kept verbatim, quotes included, as OpenSSH does: stripping
+/// an outer quote pair would corrupt `"a b" ssh "%h"`. POSIX `sh` treats an
+/// inline ` # comment` as a comment itself; `cmd.exe` does not, so it is
+/// removed on Windows.
 #[cfg(feature = "ssh_config")]
-fn strip_utf8_bom(content: String) -> String {
-    content
-        .strip_prefix('\u{feff}')
-        .unwrap_or(&content)
-        .to_string()
+fn parse_ssh_config_command_value(value: &str) -> Option<String> {
+    let value = if cfg!(windows) {
+        super::ssh_config_loader::strip_trailing_comment(value)
+    } else {
+        value
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(value.to_string())
 }
 
 /// Manually parse `~/.ssh/config` content into Host blocks with their direct settings.
 ///
-/// This is a fallback for when `SSHConfig::parse_str` fails — which happens when the
-/// config contains directives (e.g. `Include`, `Match`) before the first `Host` block,
-/// because `ssh_config` 0.1's `EntryParser` returns `InvalidHostEntry` for any key-value
-/// pair without a preceding `Host` directive, and `parse_str` fails the entire operation
-/// on the first parser error.
-///
-/// Only direct settings within each `Host` block are captured; pattern-matched settings
-/// from wildcard blocks (e.g. `Host *`) are not applied. Use `SSHConfig::query()` as a
-/// supplementary source when `parse_str` succeeds.
+/// This enumerates the connectable aliases (`ssh_config` 0.1 cannot list
+/// hosts). Only direct settings within each `Host` block are captured;
+/// [`resolve_host_settings`] supplies the OpenSSH-resolved values that callers
+/// layer on top. A `Match` line closes the current Host block.
 #[cfg(feature = "ssh_config")]
 fn parse_ssh_config_manually(content: &str) -> Vec<SSHConfigEntry> {
     let mut hosts = Vec::new();
@@ -484,6 +541,7 @@ fn parse_ssh_config_manually(content: &str) -> Vec<SSHConfigEntry> {
     let mut block_identity_file: Option<String> = None;
     let mut block_certificate_file: Option<String> = None;
     let mut block_proxy_jump: Option<String> = None;
+    let mut block_proxy_command: Option<String> = None;
 
     for line in content.lines() {
         let line = line.trim();
@@ -491,12 +549,12 @@ fn parse_ssh_config_manually(content: &str) -> Vec<SSHConfigEntry> {
             continue;
         }
 
-        let (keyword, value) = match line.split_once(char::is_whitespace) {
-            Some((k, v)) => (k, v.trim()),
+        let (keyword, value) = match split_directive(line) {
+            Some((k, v)) => (k, v),
             None => continue,
         };
 
-        if keyword.eq_ignore_ascii_case("Host") {
+        if keyword.eq_ignore_ascii_case("Host") || keyword.eq_ignore_ascii_case("Match") {
             // Save previous host block
             if let Some(host) = current_host.take() {
                 hosts.push(SSHConfigEntry {
@@ -508,17 +566,29 @@ fn parse_ssh_config_manually(content: &str) -> Vec<SSHConfigEntry> {
                     agent: Some(true),
                     certificate_file: block_certificate_file.take(),
                     proxy_jump: block_proxy_jump.take(),
+                    proxy_command: block_proxy_command.take(),
                 });
             }
 
-            // Start new host block — take the first alias
-            current_host = value.split_whitespace().next().map(|s| s.to_string());
+            // Start new host block — take the first connectable alias. Pure
+            // pattern blocks (`Host *`, `Host !x *.corp`) and `Match` blocks
+            // name no host, so their settings are not attributed to anyone.
+            current_host = if keyword.eq_ignore_ascii_case("Host") {
+                strip_trailing_comment(value)
+                    .split(|c: char| c.is_whitespace() || c == ',')
+                    .map(|alias| alias.trim_matches('"'))
+                    .find(|alias| !alias.is_empty() && !is_host_pattern(alias))
+                    .map(|s| s.to_string())
+            } else {
+                None
+            };
             block_hostname = None;
             block_port = None;
             block_user = None;
             block_identity_file = None;
             block_certificate_file = None;
             block_proxy_jump = None;
+            block_proxy_command = None;
         } else if current_host.is_some() {
             // Track details within the current Host block
             if keyword.eq_ignore_ascii_case("HostName") {
@@ -535,6 +605,12 @@ fn parse_ssh_config_manually(content: &str) -> Vec<SSHConfigEntry> {
                     parse_ssh_config_value(value).map(|s| shellexpand::tilde(s).to_string());
             } else if keyword.eq_ignore_ascii_case("ProxyJump") {
                 block_proxy_jump = parse_ssh_config_value(value).map(ToOwned::to_owned);
+            } else if keyword.eq_ignore_ascii_case("ProxyCommand") {
+                // Keep the raw command text: `%h`/`%p`/`%r` tokens are expanded
+                // at connect time, and shell quoting must survive intact —
+                // unlike single-token directives, the whole remainder of the
+                // line is the value.
+                block_proxy_command = parse_ssh_config_command_value(value);
             }
         }
     }
@@ -550,6 +626,7 @@ fn parse_ssh_config_manually(content: &str) -> Vec<SSHConfigEntry> {
             agent: Some(true),
             certificate_file: block_certificate_file,
             proxy_jump: block_proxy_jump,
+            proxy_command: block_proxy_command,
         });
     }
 
@@ -582,6 +659,9 @@ struct ActiveConnection {
     bounded_sftp_session: Arc<BoundedSftpCache>,
     #[allow(dead_code)]
     server_key: Option<PublicKey>,
+    /// ProxyCommand process carrying the SSH transport; dropping it kills the
+    /// proxy. Absent for every non-proxy transport.
+    proxy_child: Option<ProxyCommandChild>,
     /// Liveness flag; flipped to false from `SSHHandler::disconnected`.
     /// Allows `is_connected` and SFTP/exec entry points to detect a dead session
     /// without waiting for the next failed I/O.
@@ -592,6 +672,9 @@ struct SftpCache {
     session: tokio::sync::RwLock<Option<Arc<ManagedSftpSession>>>,
     init_lock: tokio::sync::Mutex<()>,
 }
+
+/// One replayable request issued against a cached SFTP subsystem.
+type SftpRequest<T> = Pin<Box<dyn Future<Output = Result<T, SftpError>> + Send>>;
 
 impl SftpCache {
     fn new() -> Self {
@@ -662,6 +745,9 @@ struct EstablishedSession {
     server_info: Option<ServerInfo>,
     effective_config: SSHConnectionConfig,
     unpublished: UnpublishedSshSession,
+    /// ProxyCommand process carrying the SSH transport, kept alive exactly as
+    /// long as the session. `None` for every non-proxy transport.
+    proxy_child: Option<ProxyCommandChild>,
 }
 
 /// Owns authenticated transports until the complete chain is published. A
@@ -672,6 +758,9 @@ struct UnpublishedSshSession {
     // Creation order is first jump through final target. One guard owns the
     // whole chain so cancellation cannot race independent hop cleanups.
     handles: Vec<Arc<Handle<SSHHandler>>>,
+    // ProxyCommand children spawned for transports that have not been
+    // published yet; the guard's Drop tears them down with the handles.
+    proxy_children: Vec<ProxyCommandChild>,
 }
 
 impl UnpublishedSshSession {
@@ -681,6 +770,11 @@ impl UnpublishedSshSession {
 
     fn disarm(&mut self) {
         self.handles.clear();
+        self.proxy_children.clear();
+    }
+
+    fn take_proxy_child(&mut self) -> Option<ProxyCommandChild> {
+        self.proxy_children.pop()
     }
 }
 
@@ -690,11 +784,18 @@ impl Drop for UnpublishedSshSession {
             return;
         }
         let handles = std::mem::take(&mut self.handles);
+        // The proxy processes carry the transports being told goodbye, so
+        // they move into the task and are torn down only after it; dropping
+        // them here would cut the pipe before the disconnect message is sent.
+        let proxy_children = std::mem::take(&mut self.proxy_children);
         match tokio::runtime::Handle::try_current() {
             Ok(runtime) => {
                 runtime.spawn(async move {
                     let chain = handles.iter().rev().map(Arc::as_ref).collect();
                     SSHConnectionManager::shutdown_handle_chain(chain).await;
+                    for child in proxy_children {
+                        child.shutdown().await;
+                    }
                 });
             }
             Err(error) => log::warn!(
@@ -1363,6 +1464,13 @@ async fn authenticate_handle(
             SSHAuthMethod::KeyboardInteractive { responses } => {
                 authenticate_keyboard_interactive(handle, config, stage, responses).await?
             }
+            // Endpoints whose transport is already authenticated (Coder workspace
+            // agents) advertise only `none` and disconnect clients that send
+            // credentials, so this must be an explicit choice rather than a fallback.
+            SSHAuthMethod::None => handle
+                .authenticate_none(&config.username)
+                .await
+                .map_err(|error| anyhow!("{} none authentication failed: {:?}", stage, error))?,
         })
     };
     let authenticated = tokio::time::timeout(
@@ -2144,6 +2252,7 @@ pub struct SSHConnectionManager {
     reconnect_locks: Arc<tokio::sync::RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     saved_connections: Arc<tokio::sync::RwLock<Vec<SavedConnection>>>,
     config_path: std::path::PathBuf,
+    extended_config_path: std::path::PathBuf,
     /// Known hosts storage
     known_hosts: Arc<tokio::sync::RwLock<HashMap<String, KnownHostEntry>>>,
     known_hosts_path: std::path::PathBuf,
@@ -2153,10 +2262,18 @@ pub struct SSHConnectionManager {
     password_vault: std::sync::Arc<SSHPasswordVault>,
 }
 
+/// Saved profiles that released builds cannot read; see `save_connections`.
+const EXTENDED_SAVED_CONNECTIONS_FILE: &str = "ssh_connections_extended.json";
+
+fn requires_extended_store(auth_type: &crate::remote_ssh::types::SavedAuthType) -> bool {
+    matches!(auth_type, crate::remote_ssh::types::SavedAuthType::None)
+}
+
 impl SSHConnectionManager {
     /// Create a new SSH connection manager
     pub fn new(data_dir: std::path::PathBuf) -> Self {
         let config_path = data_dir.join("ssh_connections.json");
+        let extended_config_path = data_dir.join(EXTENDED_SAVED_CONNECTIONS_FILE);
         let known_hosts_path = data_dir.join("known_hosts");
         let remote_workspace_path = data_dir.join("remote_workspace.json");
         let password_vault = std::sync::Arc::new(SSHPasswordVault::new(data_dir));
@@ -2165,6 +2282,7 @@ impl SSHConnectionManager {
             reconnect_locks: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             saved_connections: Arc::new(tokio::sync::RwLock::new(Vec::new())),
             config_path,
+            extended_config_path,
             known_hosts: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             known_hosts_path,
             remote_workspaces: Arc::new(tokio::sync::RwLock::new(Vec::new())),
@@ -2410,82 +2528,43 @@ impl SSHConnectionManager {
             .map(|p| p.join(".ssh").join("config"))
             .unwrap_or_default();
 
-        if !ssh_config_path.exists() {
+        // Load the user config merged with its `Include` tree; ecosystem
+        // tooling (Coder, AtomGit, devenv) writes Host blocks into included
+        // files, and `ssh_config` 0.1 cannot expand them itself.
+        let Some(config_content) = load_merged_config_async(ssh_config_path.clone()).await else {
             log::debug!("SSH config not found at {:?}", ssh_config_path);
             return SSHConfigLookupResult {
                 found: false,
                 config: None,
             };
-        }
-
-        let config_content = match tokio::fs::read_to_string(&ssh_config_path).await {
-            Ok(c) => strip_utf8_bom(c),
-            Err(e) => {
-                log::warn!("Failed to read SSH config: {:?}", e);
-                return SSHConfigLookupResult {
-                    found: false,
-                    config: None,
-                };
-            }
         };
+        Self::lookup_ssh_config_in(&config_content, host)
+    }
 
-        // Try to parse with the ssh_config crate for pattern-matching query support.
-        // If parsing fails, fall back to manual parsing.
-        let parsed_config = SSHConfig::parse_str(&config_content).ok();
-        if parsed_config.is_none() {
-            log::debug!("SSHConfig::parse_str failed, using manual fallback");
-        }
-
-        // Try pattern-matched query first (handles Host wildcards like `Host *.example.com`)
-        if let Some(ref config) = parsed_config {
-            let host_settings = config.query(host);
-            if !host_settings.is_empty() {
-                log::debug!(
-                    "Found SSH config for host: {} with {} settings",
-                    host,
-                    host_settings.len()
-                );
-
-                let hostname = ssh_cfg_get(&host_settings, "HostName").map(|s| s.to_string());
-                let user = ssh_cfg_get(&host_settings, "User").map(|s| s.to_string());
-                let port = ssh_cfg_get(&host_settings, "Port").and_then(|s| s.parse::<u16>().ok());
-                let identity_file = ssh_cfg_get(&host_settings, "IdentityFile")
-                    .map(|f| shellexpand::tilde(f).to_string());
-                let certificate_file = ssh_cfg_get(&host_settings, "CertificateFile")
-                    .map(|f| shellexpand::tilde(f).to_string());
-                let has_proxy_command = ssh_cfg_has(&host_settings, "ProxyCommand");
-                let proxy_jump = ssh_cfg_get(&host_settings, "ProxyJump").map(ToOwned::to_owned);
-
-                return SSHConfigLookupResult {
-                    found: true,
-                    config: Some(SSHConfigEntry {
-                        host: host.to_string(),
-                        hostname,
-                        port,
-                        user,
-                        identity_file,
-                        agent: if has_proxy_command { None } else { Some(true) },
-                        certificate_file,
-                        proxy_jump,
-                    }),
-                };
-            }
-        }
-
-        // Fallback: manual lookup for exact host name match
-        let hosts = parse_ssh_config_manually(&config_content);
-        if let Some(entry) = hosts.into_iter().find(|e| e.host == host) {
-            log::debug!("Found SSH config for host: {} (manual fallback)", host);
-            return SSHConfigLookupResult {
+    /// Resolve `host` against already-merged config text with OpenSSH
+    /// semantics (pattern matching, first value wins, whole-line values).
+    #[cfg(feature = "ssh_config")]
+    fn lookup_ssh_config_in(config_content: &str, host: &str) -> SSHConfigLookupResult {
+        let settings = resolve_host_settings(config_content, host);
+        let entry = ssh_config_entry_from_settings(host, &settings);
+        // Any matched setting counts, even only `Host *` defaults such as
+        // `AddKeysToAgent`: callers use `found` to pick agent authentication.
+        if !settings.is_empty() {
+            log::debug!(
+                "Found SSH config for host: {} with {} settings",
+                host,
+                settings.len()
+            );
+            SSHConfigLookupResult {
                 found: true,
                 config: Some(entry),
-            };
-        }
-
-        log::debug!("No SSH config found for host: {}", host);
-        SSHConfigLookupResult {
-            found: false,
-            config: None,
+            }
+        } else {
+            log::debug!("No SSH config found for host: {}", host);
+            SSHConfigLookupResult {
+                found: false,
+                config: None,
+            }
         }
     }
 
@@ -2504,63 +2583,43 @@ impl SSHConnectionManager {
             .map(|p| p.join(".ssh").join("config"))
             .unwrap_or_default();
 
-        if !ssh_config_path.exists() {
+        // Merged view including the `Include` tree; see `get_ssh_config`.
+        let Some(config_content) = load_merged_config_async(ssh_config_path.clone()).await else {
             log::debug!("SSH config not found at {:?}", ssh_config_path);
             return Vec::new();
-        }
-
-        let config_content = match tokio::fs::read_to_string(&ssh_config_path).await {
-            Ok(c) => strip_utf8_bom(c),
-            Err(e) => {
-                log::warn!("Failed to read SSH config: {:?}", e);
-                return Vec::new();
-            }
         };
-
-        // Try to parse with the ssh_config crate for pattern-matching query support.
-        // If parsing fails (e.g. `Include`/`Match` directives before the first `Host`
-        // block cause ssh_config 0.1 to return InvalidHostEntry), fall back to manual
-        // line-by-line parsing.
-        let parsed_config = SSHConfig::parse_str(&config_content).ok();
-        if parsed_config.is_none() {
-            log::debug!("SSHConfig::parse_str failed, using manual fallback");
-        }
-
-        // Always do manual parsing to get the host list (SSHConfig doesn't expose all hosts).
-        let mut hosts = parse_ssh_config_manually(&config_content);
-
-        // When the ssh_config crate parsed successfully, override with pattern-matched
-        // details (e.g. settings from `Host *` blocks that apply to all hosts).
-        if let Some(ref config) = parsed_config {
-            for entry in &mut hosts {
-                let settings = config.query(&entry.host);
-                if !settings.is_empty() {
-                    if let Some(h) = ssh_cfg_get(&settings, "HostName") {
-                        entry.hostname = Some(h.to_string());
-                    }
-                    if let Some(p) =
-                        ssh_cfg_get(&settings, "Port").and_then(|s| s.parse::<u16>().ok())
-                    {
-                        entry.port = Some(p);
-                    }
-                    if let Some(u) = ssh_cfg_get(&settings, "User") {
-                        entry.user = Some(u.to_string());
-                    }
-                    if let Some(f) = ssh_cfg_get(&settings, "IdentityFile") {
-                        entry.identity_file = Some(shellexpand::tilde(f).to_string());
-                    }
-                    if let Some(f) = ssh_cfg_get(&settings, "CertificateFile") {
-                        entry.certificate_file = Some(shellexpand::tilde(f).to_string());
-                    }
-                    if let Some(proxy_jump) = ssh_cfg_get(&settings, "ProxyJump") {
-                        entry.proxy_jump = Some(proxy_jump.to_string());
-                    }
-                }
-            }
-        }
-
+        let hosts = Self::list_ssh_config_hosts_in(&config_content);
         log::debug!("Found {} hosts in SSH config", hosts.len());
         hosts
+    }
+
+    /// Enumerate connectable aliases from merged config text, each resolved
+    /// with OpenSSH semantics. Aliases repeated across blocks (or re-emitted
+    /// after an `Include`) are listed once.
+    #[cfg(feature = "ssh_config")]
+    fn list_ssh_config_hosts_in(config_content: &str) -> Vec<SSHConfigEntry> {
+        let mut seen = std::collections::HashSet::new();
+        parse_ssh_config_manually(config_content)
+            .into_iter()
+            .filter(|entry| seen.insert(entry.host.clone()))
+            .map(|entry| {
+                let settings = resolve_host_settings(config_content, &entry.host);
+                let resolved = ssh_config_entry_from_settings(&entry.host, &settings);
+                SSHConfigEntry {
+                    hostname: resolved.hostname.or(entry.hostname),
+                    port: resolved.port.or(entry.port),
+                    user: resolved.user.or(entry.user),
+                    identity_file: resolved.identity_file.or(entry.identity_file),
+                    certificate_file: resolved.certificate_file.or(entry.certificate_file),
+                    proxy_jump: resolved.proxy_jump,
+                    // The resolver is authoritative for ProxyCommand: it honors
+                    // `ProxyCommand none` and first-value-wins across blocks.
+                    agent: resolved.agent,
+                    proxy_command: resolved.proxy_command,
+                    host: entry.host,
+                }
+            })
+            .collect()
     }
 
     #[cfg(not(feature = "ssh_config"))]
@@ -2785,17 +2844,43 @@ impl SSHConnectionManager {
             self.config_path.exists()
         );
 
-        if !self.config_path.exists() {
-            return Ok(());
+        // Read the extended store first: a damaged primary file must not leave
+        // an empty list behind that the next save writes over these profiles.
+        let extended = self.read_extended_saved_connections().await;
+        let saved = match self.read_primary_saved_connections().await {
+            Ok(saved) => saved,
+            Err(error) => {
+                *self.saved_connections.write().await = extended;
+                return Err(error);
+            }
+        };
+
+        // An older build may have recreated an id while it could not see the
+        // extended store; that later explicit save wins.
+        let mut merged = saved;
+        for connection in extended {
+            // Same rule as `save_connection`: an equal id, or a legacy
+            // `:port` alias of the same endpoint.
+            if merged.iter().any(|existing| {
+                existing.id == connection.id
+                    || (existing.host == connection.host
+                        && existing.username == connection.username
+                        && existing.port == connection.port
+                        && existing.container == connection.container
+                        && existing.wsl == connection.wsl
+                        && Self::connection_ids_are_aliases(&existing.id, &connection.id))
+            }) {
+                log::warn!(
+                    "Ignoring extended SSH profile shadowed by the primary store: id={}",
+                    connection.id
+                );
+            } else {
+                merged.push(connection);
+            }
         }
 
-        let content = tokio::fs::read_to_string(&self.config_path).await?;
-        log::info!("load_saved_connections: content={}", content);
-        let saved: Vec<SavedConnection> =
-            serde_json::from_str(&content).context("Failed to parse saved SSH connections")?;
-
         let mut guard = self.saved_connections.write().await;
-        *guard = saved;
+        *guard = merged;
         drop(guard);
 
         let unavailable = self.saved_connections_without_credentials().await;
@@ -2811,11 +2896,57 @@ impl SSHConnectionManager {
         Ok(())
     }
 
+    async fn read_primary_saved_connections(&self) -> anyhow::Result<Vec<SavedConnection>> {
+        if !self.config_path.exists() {
+            return Ok(Vec::new());
+        }
+        let content = tokio::fs::read_to_string(&self.config_path).await?;
+        log::info!("load_saved_connections: content={}", content);
+        serde_json::from_str(&content).context("Failed to parse saved SSH connections")
+    }
+
+    /// Read the extended store, setting an unreadable file aside so it stays
+    /// recoverable and a later save cannot overwrite it.
+    async fn read_extended_saved_connections(&self) -> Vec<SavedConnection> {
+        let path = &self.extended_config_path;
+        if !path.exists() {
+            return Vec::new();
+        }
+        let parsed = tokio::fs::read_to_string(path)
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|content| serde_json::from_str(&content).map_err(anyhow::Error::from));
+        let error = match parsed {
+            Ok(saved) => return saved,
+            Err(error) => error,
+        };
+        let backup = path.with_extension("json.unreadable");
+        log::warn!(
+            "Failed to read extended SSH connections; keeping the file at {:?}: error={}",
+            backup,
+            error
+        );
+        if let Err(error) = tokio::fs::rename(path, &backup).await {
+            log::warn!(
+                "Failed to set aside extended SSH connections: error={}",
+                error
+            );
+        }
+        Vec::new()
+    }
+
     /// Save connections to disk
+    ///
+    /// Released builds parse the primary file as one list and rewrite it from
+    /// memory, so a profile they cannot deserialize would cost them every
+    /// profile. Such profiles go to the extended store, which they never touch.
     async fn save_connections(&self) -> anyhow::Result<()> {
         log::info!("save_connections: saving to {:?}", self.config_path);
         let guard = self.saved_connections.read().await;
-        let content = serde_json::to_string_pretty(&*guard)?;
+        let (extended, primary): (Vec<&SavedConnection>, Vec<&SavedConnection>) = guard
+            .iter()
+            .partition(|connection| requires_extended_store(&connection.auth_type));
+        let content = serde_json::to_string_pretty(&primary)?;
         log::info!("save_connections: content={}", content);
 
         // Ensure parent directory exists
@@ -2823,6 +2954,10 @@ impl SSHConnectionManager {
             tokio::fs::create_dir_all(parent).await?;
         }
 
+        if !extended.is_empty() || self.extended_config_path.exists() {
+            let extended_content = serde_json::to_string_pretty(&extended)?;
+            tokio::fs::write(&self.extended_config_path, extended_content).await?;
+        }
         tokio::fs::write(&self.config_path, content).await?;
         log::info!(
             "save_connections: saved {} connections to {:?}",
@@ -2910,22 +3045,34 @@ impl SSHConnectionManager {
             (SSHAuthMethod::PrivateKey { .. }, false) => {
                 self.password_vault.remove(&config.id).await?;
             }
-            (SSHAuthMethod::Agent { .. } | SSHAuthMethod::KeyboardInteractive { .. }, false) => {
+            (
+                SSHAuthMethod::Agent { .. }
+                | SSHAuthMethod::KeyboardInteractive { .. }
+                | SSHAuthMethod::None,
+                false,
+            ) => {
                 self.password_vault.remove(&config.id).await?;
             }
         }
 
         let mut guard = self.saved_connections.write().await;
 
-        // Remove existing entry with same id OR same host+username (dedup).
-        // Using host+username (without port) so that changing the port replaces
-        // the old entry instead of creating a duplicate.
+        // Remove the existing entry with the same id (an edit keeps its id, so
+        // changing the port of a saved profile still replaces it in place) OR a
+        // legacy alias of it (`ssh-user@host:port`, which workspace records
+        // already treat as the same connection) for the exact same endpoint.
+        // The port is part of the endpoint: servers behind one address that
+        // differ only by port are distinct profiles and never overwrite each
+        // other. A different, non-alias id for the same endpoint is kept, since
+        // workspace and session records may still reference it.
         guard.retain(|c| {
             c.id != config.id
                 && !(c.host == config.host
+                    && c.port == config.port
                     && c.username == config.username
                     && c.container == config.container
-                    && c.wsl == config.wsl)
+                    && c.wsl == config.wsl
+                    && Self::connection_ids_are_aliases(&c.id, &config.id))
         });
 
         // Add new entry
@@ -2955,10 +3102,12 @@ impl SSHConnectionManager {
                 SSHAuthMethod::KeyboardInteractive { .. } => {
                     crate::remote_ssh::types::SavedAuthType::KeyboardInteractive
                 }
+                SSHAuthMethod::None => crate::remote_ssh::types::SavedAuthType::None,
             },
             default_workspace: config.default_workspace.clone(),
             last_connected: Some(chrono::Utc::now().timestamp() as u64),
             proxy_jump: config.proxy_jump.clone(),
+            proxy_command: config.proxy_command.clone(),
             container: config.container.clone(),
             wsl: config.wsl.clone(),
             options: config.options.clone(),
@@ -2967,6 +3116,15 @@ impl SSHConnectionManager {
         drop(guard);
 
         self.save_connections().await
+    }
+
+    /// Whether two saved-profile ids name the same connection through the
+    /// legacy `ssh-user@host:port` spelling.
+    fn connection_ids_are_aliases(left: &str, right: &str) -> bool {
+        use openbitfun_services_core::workspace_identity::canonical_ssh_connection_id;
+        left == right
+            || canonical_ssh_connection_id(left) == right
+            || canonical_ssh_connection_id(right) == left
     }
 
     /// Decrypt stored password for password-based saved connections (auto-reconnect).
@@ -3089,6 +3247,7 @@ impl SSHConnectionManager {
                     sftp_session: Arc::new(SftpCache::new()),
                     bounded_sftp_session: Arc::new(BoundedSftpCache::new()),
                     server_key: None,
+                    proxy_child: established.proxy_child,
                     alive: established.alive,
                 },
             )
@@ -3120,8 +3279,14 @@ impl SSHConnectionManager {
                     .proxy_jump
                     .as_deref()
                     .is_some_and(|jump| !jump.trim().is_empty())
+                || config
+                    .proxy_command
+                    .as_deref()
+                    .is_some_and(|command| !command.trim().is_empty())
             {
-                anyhow::bail!("WSL cannot be combined with Docker or SSH jump hosts");
+                anyhow::bail!(
+                    "WSL cannot be combined with Docker, SSH jump hosts, or ProxyCommand"
+                );
             }
             let server_info = super::wsl::probe(wsl, Duration::from_secs(timeout_secs)).await?;
             return Ok(EstablishedSession {
@@ -3131,6 +3296,7 @@ impl SSHConnectionManager {
                 server_info: Some(server_info),
                 effective_config: config.clone(),
                 unpublished: UnpublishedSshSession::default(),
+                proxy_child: None,
             });
         }
         if config.uses_local_docker() {
@@ -3158,7 +3324,34 @@ impl SSHConnectionManager {
                 server_info: Some(server_info),
                 effective_config: resolved_container_config(config, ContainerAccess::DockerExec),
                 unpublished: UnpublishedSshSession::default(),
+                proxy_child: None,
             });
+        }
+
+        if let Some(proxy_command) = config
+            .proxy_command
+            .as_deref()
+            .map(str::trim)
+            .filter(|command| !command.is_empty())
+        {
+            // Deliberately exclusive combinations for this release: a proxy
+            // command already owns the transport to the target, so layering a
+            // jump chain or a container target on top has no tested semantics.
+            if config
+                .proxy_jump
+                .as_deref()
+                .is_some_and(|jump| !jump.trim().is_empty())
+            {
+                anyhow::bail!(
+                    "ProxyCommand and ProxyJump cannot be combined; remove one of them from the connection"
+                );
+            }
+            if config.container.is_some() {
+                anyhow::bail!("ProxyCommand cannot be combined with a Docker container target");
+            }
+            return self
+                .establish_proxy_command_session(config, proxy_command, timeout_secs)
+                .await;
         }
 
         let mut unpublished = UnpublishedSshSession::default();
@@ -3167,9 +3360,18 @@ impl SSHConnectionManager {
             .await
             .map_err(|error| tag_failed_stage("configuration", error))?;
         if jumps.is_empty() {
+            let ignored_proxy_command = self.ssh_config_proxy_command_ignored(config).await;
             let (handle, alive, mut server_info) = self
                 .establish_direct_session(config, timeout_secs, &mut unpublished)
                 .await
+                .map_err(|error| match &ignored_proxy_command {
+                    Some(alias) => anyhow!(
+                        "{error} (~/.ssh/config defines a ProxyCommand for '{alias}', but this \
+                         connection dials the host directly; this connection profile does not \
+                         carry the ProxyCommand)"
+                    ),
+                    None => error,
+                })
                 .map_err(|error| tag_failed_stage("target", error))?;
             if config
                 .container
@@ -3192,6 +3394,7 @@ impl SSHConnectionManager {
                         server_info: container_info,
                         effective_config,
                         unpublished,
+                        proxy_child: None,
                     });
                 }
             }
@@ -3217,6 +3420,7 @@ impl SSHConnectionManager {
                     config.clone()
                 },
                 unpublished,
+                proxy_child: None,
             });
         }
 
@@ -3323,6 +3527,7 @@ impl SSHConnectionManager {
                     server_info: container_info,
                     effective_config,
                     unpublished,
+                    proxy_child: None,
                 });
             }
         }
@@ -3348,6 +3553,7 @@ impl SSHConnectionManager {
                 config.clone()
             },
             unpublished,
+            proxy_child: None,
         })
     }
 
@@ -3423,6 +3629,7 @@ impl SSHConnectionManager {
                     server_info,
                     effective_config,
                     unpublished,
+                    proxy_child: None,
                 })
             }
             Err(error) => {
@@ -3580,6 +3787,19 @@ impl SSHConnectionManager {
                     fallback_key_path: Some("~/.ssh/id_rsa".to_string()),
                 }
             };
+            if entry
+                .as_ref()
+                .is_some_and(|entry| entry.proxy_command.is_some())
+            {
+                // Dialing the hop directly would silently bypass the transport
+                // the user configured for it; say so instead.
+                anyhow::bail!(
+                    "ProxyJump entry '{}' uses a ProxyCommand in ~/.ssh/config, which is not \
+                     supported for jump hosts yet; connect to that host directly with its \
+                     ProxyCommand or remove it from the jump chain",
+                    value
+                );
+            }
             result.push(SSHConnectionConfig {
                 id: format!("{}-jump-{}", config.id, index + 1),
                 name: value.to_string(),
@@ -3589,6 +3809,7 @@ impl SSHConnectionManager {
                 auth,
                 default_workspace: None,
                 proxy_jump: None,
+                proxy_command: None,
                 container: None,
                 wsl: None,
                 options: config.options.clone(),
@@ -3683,6 +3904,106 @@ impl SSHConnectionManager {
             unpublished,
         )
         .await
+    }
+
+    /// When a connection without `proxy_command` targets a `~/.ssh/config`
+    /// alias that resolves to a ProxyCommand, warn loudly: the profile dials
+    /// directly, which is not what `ssh <alias>` would do. Returns the alias
+    /// so a dial failure can say why. The command text is never logged.
+    async fn ssh_config_proxy_command_ignored(
+        &self,
+        config: &SSHConnectionConfig,
+    ) -> Option<String> {
+        if config
+            .proxy_command
+            .as_deref()
+            .is_some_and(|command| !command.trim().is_empty())
+        {
+            return None;
+        }
+        let lookup = self.get_ssh_config(&config.host).await;
+        lookup.config.as_ref()?.proxy_command.as_ref()?;
+        log::warn!(
+            "SSH connection {} targets host '{}', which has a ProxyCommand in ~/.ssh/config; \
+             the connection profile carries no ProxyCommand, so the host is dialed directly",
+            config.id,
+            config.host
+        );
+        Some(config.host.clone())
+    }
+
+    /// Build a fresh SSH session whose transport is the stdin/stdout of a
+    /// local ProxyCommand process (OpenSSH semantics).
+    ///
+    /// Reusing `establish_stream_session` keeps handshake timeout, known-hosts
+    /// verification, and authentication identical to the direct path. The child
+    /// process is owned by `UnpublishedSshSession` until the session is fully
+    /// established, so every failure path kills it; afterwards the guard moves
+    /// into the returned `EstablishedSession` (and from there into the
+    /// published connection record), so disconnects and app shutdown kill it.
+    async fn establish_proxy_command_session(
+        &self,
+        config: &SSHConnectionConfig,
+        proxy_command: &str,
+        timeout_secs: u64,
+    ) -> anyhow::Result<EstablishedSession> {
+        let stage = format!("proxy command {}", connection_label(config));
+        let mut unpublished = UnpublishedSshSession::default();
+
+        let expanded = expand_tokens(proxy_command, &config.host, config.port, &config.username)
+            .map_err(|error| tag_failed_stage("proxy command", error))?;
+        let mut child = ProxyCommandChild::spawn(&expanded, &stage)
+            .await
+            .map_err(|error| tag_failed_stage("proxy command", error))?;
+        let stream = child
+            .take_stream()
+            .map_err(|error| tag_failed_stage("proxy command", error))?;
+        unpublished.proxy_children.push(child);
+
+        let session = self
+            .establish_stream_session(config, stream, timeout_secs, &stage, &mut unpublished)
+            .await;
+        match session {
+            Ok((handle, alive, server_info)) => {
+                let proxy_child = unpublished
+                    .take_proxy_child()
+                    .expect("proxy child was pushed before the handshake");
+                Ok(EstablishedSession {
+                    handle: Some(handle),
+                    jump_handles: Vec::new(),
+                    alive,
+                    server_info,
+                    effective_config: config.clone(),
+                    unpublished,
+                    proxy_child: Some(proxy_child),
+                })
+            }
+            Err(error) => {
+                let detail = match unpublished.take_proxy_child() {
+                    Some(child) => {
+                        let (exit_code, stderr_tail) = child.finish().await;
+                        let mut parts = Vec::new();
+                        match exit_code {
+                            Some(code) => {
+                                parts.push(format!("proxy command exited with code {code}"))
+                            }
+                            None => parts
+                                .push("proxy command was terminated before completing".to_string()),
+                        }
+                        if !stderr_tail.is_empty() {
+                            parts.push(format!("stderr: {stderr_tail}"));
+                        }
+                        parts.join("; ")
+                    }
+                    None => String::new(),
+                };
+                if detail.is_empty() {
+                    Err(error)
+                } else {
+                    Err(anyhow!("{error} ({detail})"))
+                }
+            }
+        }
     }
 
     async fn probe_remote_container(
@@ -4238,6 +4559,30 @@ impl SSHConnectionManager {
     /// closing hop 1 first would cut the channel the later disconnects still
     /// have to travel over and turn an orderly shutdown back into N abandoned
     /// sessions.
+    /// Keep a displaced ProxyCommand process alive until the old transport it
+    /// carries has no users left (or the proxy exits by itself), then tear the
+    /// process tree down and reap it.
+    fn reap_proxy_after_transport_drains(
+        connection_id: String,
+        transport: std::sync::Weak<Handle<SSHHandler>>,
+        mut child: ProxyCommandChild,
+    ) {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(STALE_PROXY_POLL_INTERVAL);
+            loop {
+                interval.tick().await;
+                if transport.strong_count() == 0 || child.has_exited() {
+                    break;
+                }
+            }
+            child.shutdown().await;
+            log::debug!(
+                "SSH session {} released the previous ProxyCommand process",
+                connection_id
+            );
+        });
+    }
+
     async fn shutdown_handle_chain(handles: Vec<&Handle<SSHHandler>>) {
         for handle in handles {
             Self::shutdown_handle(handle).await;
@@ -4398,6 +4743,7 @@ impl SSHConnectionManager {
                     responses: Vec::new(),
                 }
             }
+            crate::remote_ssh::types::SavedAuthType::None => SSHAuthMethod::None,
         };
 
         Ok(Some(SSHConnectionConfig {
@@ -4409,6 +4755,7 @@ impl SSHConnectionManager {
             auth,
             default_workspace: saved.default_workspace,
             proxy_jump: saved.proxy_jump,
+            proxy_command: saved.proxy_command,
             container: saved.container,
             wsl: saved.wsl,
             options: saved.options,
@@ -4556,23 +4903,25 @@ impl SSHConnectionManager {
         // session is usually dead, but "usually" covers neither config drift
         // (where the old session is perfectly healthy) nor a half-open link the
         // server still counts against its session limit.
-        let (stale_handle, stale_jump_handles) = {
+        let (stale_handle, stale_jump_handles, stale_proxy_child) = {
             let mut guard = self.connections.write().await;
             established.unpublished.disarm();
             if let Some(conn) = guard.get_mut(connection_id) {
                 let stale_handle = conn.handle.take();
                 let stale_jump_handles = std::mem::take(&mut conn.jump_handles);
+                let stale_proxy_child = conn.proxy_child.take();
                 conn.handle = established.handle;
                 conn.jump_handles = established.jump_handles;
                 conn.config = config;
                 conn.effective_config = established.effective_config;
                 conn.alive = established.alive;
+                conn.proxy_child = established.proxy_child;
                 if let Some(si) = server_info.as_ref() {
                     conn.server_info = Some(si.clone());
                 }
                 conn.sftp_session = Arc::new(SftpCache::new());
                 conn.bounded_sftp_session = Arc::new(BoundedSftpCache::new());
-                (stale_handle, stale_jump_handles)
+                (stale_handle, stale_jump_handles, stale_proxy_child)
             } else {
                 let replaced = guard.insert(
                     connection_id.to_string(),
@@ -4585,12 +4934,16 @@ impl SSHConnectionManager {
                         sftp_session: Arc::new(SftpCache::new()),
                         bounded_sftp_session: Arc::new(BoundedSftpCache::new()),
                         server_key: None,
+                        proxy_child: established.proxy_child,
                         alive: established.alive,
                     },
                 );
                 match replaced {
-                    Some(previous) => (previous.handle, previous.jump_handles),
-                    None => (None, Vec::new()),
+                    Some(previous) => {
+                        let replaced_child = previous.proxy_child;
+                        (previous.handle, previous.jump_handles, replaced_child)
+                    }
+                    None => (None, Vec::new(), None),
                 }
             }
         };
@@ -4611,6 +4964,29 @@ impl SSHConnectionManager {
                 .map(Arc::as_ref),
         );
         Self::shutdown_handle_chain(stale_chain).await;
+
+        // The stale ProxyCommand process is the old transport's other half:
+        // close it only once that transport was actually unused, and keep it
+        // alive otherwise — the same lease the skipped goodbye grants the old
+        // handle while in-flight work drains.
+        if let Some(child) = stale_proxy_child {
+            match stale_handle {
+                Some(handle) if Arc::strong_count(&handle) > 1 => {
+                    log::info!(
+                        "SSH session {} reconnect keeps the previous ProxyCommand process alive \
+                         while its old transport still serves in-flight work",
+                        connection_id
+                    );
+                    Self::reap_proxy_after_transport_drains(
+                        connection_id.to_string(),
+                        Arc::downgrade(&handle),
+                        child,
+                    );
+                    drop(handle);
+                }
+                _ => child.shutdown().await,
+            }
+        }
 
         log::info!("SSH session {} reconnected successfully", connection_id);
         Ok(())
@@ -5231,11 +5607,9 @@ impl SSHConnectionManager {
             let transport = self.open_workspace_stdio(connection_id, &command).await?;
             return Ok(Box::new(ContainerFileReader::from_transport(transport)));
         }
-        let sftp = self.get_sftp(connection_id).await?;
-        let file = sftp
-            .open(&path)
+        let file = self
+            .sftp_open_with_recovery(connection_id, &path)
             .await
-            .map_err(anyhow::Error::new)
             .with_context(|| format!("Failed to open remote file '{path}'"))?;
         if !file.metadata().await?.file_type().is_file() {
             anyhow::bail!("Workspace path is not a regular file: {path}");
@@ -5742,6 +6116,42 @@ impl SSHConnectionManager {
         .await
     }
 
+    /// Recursive deletion is a single operation on the effective SSH, Docker,
+    /// or WSL target. Never enumerate children across the transport boundary.
+    pub async fn remove_workspace_directory_all(
+        &self,
+        connection_id: &str,
+        path: &str,
+    ) -> anyhow::Result<()> {
+        // Expand only the home prefix. The general SFTP path resolver trims
+        // whitespace, which could select a different directory for deletion.
+        let path = if path == "~" || path.starts_with("~/") {
+            let home = self.resolve_sftp_path(connection_id, "~").await?;
+            format!("{}{}", home.trim_end_matches('/'), &path[1..])
+        } else {
+            path.to_owned()
+        };
+        let command = super::shell::remove_directory_command(&path)?;
+        let (_, stderr, status) = self
+            .execute_workspace_bytes(connection_id, &command)
+            .await
+            .map_err(|error| anyhow!("Failed to execute remote directory deletion: {error}"))?;
+        if status == -1 {
+            anyhow::bail!(
+                "Remote directory deletion returned no exit status; the host may have rejected command execution or disconnected"
+            );
+        }
+        if status != 0 {
+            anyhow::bail!(
+                "Failed to remove remote directory '{}': exit_status={} {}",
+                path,
+                status,
+                container_stderr_detail(&stderr)
+            );
+        }
+        Ok(())
+    }
+
     pub async fn container_remove(
         &self,
         connection_id: &str,
@@ -6022,6 +6432,58 @@ impl SSHConnectionManager {
         Ok(sftp)
     }
 
+    /// Replay one read-only request on a fresh subsystem channel.
+    ///
+    /// russh-sftp rejects every request on a closed subsystem channel with
+    /// `UnexpectedBehavior("session closed")` and never reopens it, while
+    /// `get_sftp` keeps handing out that same cached session. Returning that
+    /// error left the file browser stuck on `Failed to stat` until the app was
+    /// restarted. [`ManagedSftpSession`] now retires a session whose channel is
+    /// gone, so replaying the request once opens a new channel instead of
+    /// failing forever. Only idempotent queries may use this helper.
+    async fn sftp_query_with_recovery<T, F>(
+        &self,
+        connection_id: &str,
+        path: &str,
+        query: F,
+    ) -> anyhow::Result<T>
+    where
+        F: Fn(Arc<ManagedSftpSession>, String) -> SftpRequest<T>,
+    {
+        let mut replay = true;
+        loop {
+            let session = self.get_sftp(connection_id).await?;
+            match query(session, path.to_owned()).await {
+                Ok(value) => return Ok(value),
+                Err(error) if replay && sftp_error_may_be_stale_transport(&error) => {
+                    replay = false;
+                    log::warn!(
+                        "Cached SFTP subsystem for {} failed on '{}' (will retry once on a new channel): {}",
+                        connection_id,
+                        path,
+                        error
+                    );
+                }
+                Err(error) => return Err(anyhow::Error::new(error)),
+            }
+        }
+    }
+
+    /// Open a file read-only, replaying the OPEN once on a fresh subsystem.
+    ///
+    /// A read-only OPEN changes nothing on the server and no data has reached
+    /// the caller yet, so it is as safe to replay as a metadata query.
+    async fn sftp_open_with_recovery(
+        &self,
+        connection_id: &str,
+        path: &str,
+    ) -> anyhow::Result<ManagedSftpFile> {
+        self.sftp_query_with_recovery(connection_id, path, |sftp, open_path| {
+            Box::pin(async move { sftp.open(&open_path).await })
+        })
+        .await
+    }
+
     /// Reuse a dedicated SFTP channel for serialized directory enumeration.
     /// The high-level API leaks directory handles on errors/cancellation. The
     /// raw path closes on all exits and can also stop at an entry budget.
@@ -6105,9 +6567,8 @@ impl SSHConnectionManager {
     /// Read a file via SFTP
     pub async fn sftp_read(&self, connection_id: &str, path: &str) -> anyhow::Result<Vec<u8>> {
         let path = self.resolve_sftp_path(connection_id, path).await?;
-        let sftp = self.get_sftp(connection_id).await?;
-        let mut file = sftp
-            .open(&path)
+        let mut file = self
+            .sftp_open_with_recovery(connection_id, &path)
             .await
             .map_err(|e| anyhow!("Failed to open remote file '{}': {}", path, e))?;
 
@@ -6136,18 +6597,18 @@ impl SSHConnectionManager {
         on_progress: &mut impl FnMut(u64, u64) -> bool,
     ) -> anyhow::Result<Vec<u8>> {
         let resolved = self.resolve_sftp_path(connection_id, path).await?;
-        let sftp = self.get_sftp(connection_id).await?;
 
         // Determine file size from metadata for progress calculation.
-        let metadata = sftp
-            .as_ref()
-            .metadata(&resolved)
+        let metadata = self
+            .sftp_query_with_recovery(connection_id, &resolved, |sftp, query_path| {
+                Box::pin(async move { sftp.as_ref().metadata(&query_path).await })
+            })
             .await
             .map_err(|e| anyhow!("Failed to stat '{}': {}", resolved, e))?;
         let total = metadata.size.unwrap_or(0);
 
-        let mut file = sftp
-            .open(&resolved)
+        let mut file = self
+            .sftp_open_with_recovery(connection_id, &resolved)
             .await
             .map_err(|e| anyhow!("Failed to open remote file '{}': {}", resolved, e))?;
 
@@ -6533,16 +6994,37 @@ impl SSHConnectionManager {
     /// Create directory and all parents via SFTP
     pub async fn sftp_mkdir_all(&self, connection_id: &str, path: &str) -> anyhow::Result<()> {
         let path = self.resolve_sftp_path(connection_id, path).await?;
+        // Every step accepts directories that already exist, so a whole attempt
+        // can be replayed once after a dead cached subsystem was retired.
+        match self.sftp_mkdir_all_once(connection_id, &path).await {
+            Err(error)
+                if error
+                    .downcast_ref::<SftpError>()
+                    .is_some_and(sftp_error_may_be_stale_transport) =>
+            {
+                log::warn!(
+                    "Cached SFTP subsystem for {} failed creating '{}' (will retry once on a new channel): {:#}",
+                    connection_id,
+                    path,
+                    error
+                );
+                self.sftp_mkdir_all_once(connection_id, &path).await
+            }
+            result => result,
+        }
+    }
+
+    async fn sftp_mkdir_all_once(&self, connection_id: &str, path: &str) -> anyhow::Result<()> {
         let sftp = self.get_sftp(connection_id).await?;
 
         // Check if path exists
-        match sftp.as_ref().try_exists(&path).await {
+        match sftp.as_ref().try_exists(path).await {
             Ok(true) => return Ok(()), // Already exists
             Ok(false) => {}
             Err(_) => {}
         }
 
-        for dir in sftp_mkdir_all_prefixes(&path) {
+        for dir in sftp_mkdir_all_prefixes(path) {
             if let Ok(true) = sftp.as_ref().try_exists(&dir).await {
                 continue;
             }
@@ -6551,7 +7033,8 @@ impl SSHConnectionManager {
                 match sftp.as_ref().try_exists(&dir).await {
                     Ok(true) => continue,
                     Ok(false) | Err(_) => {
-                        return Err(anyhow!("Failed to create directory '{}': {}", dir, error));
+                        let message = format!("Failed to create directory '{}': {}", dir, error);
+                        return Err(anyhow::Error::new(error).context(message));
                     }
                 }
             }
@@ -6599,11 +7082,11 @@ impl SSHConnectionManager {
     /// Check if path exists via SFTP
     pub async fn sftp_exists(&self, connection_id: &str, path: &str) -> anyhow::Result<bool> {
         let path = self.resolve_sftp_path(connection_id, path).await?;
-        let sftp = self.get_sftp(connection_id).await?;
-        sftp.as_ref()
-            .try_exists(&path)
-            .await
-            .map_err(|e| anyhow!("Failed to check if '{}' exists: {}", path, e))
+        self.sftp_query_with_recovery(connection_id, &path, |sftp, query_path| {
+            Box::pin(async move { sftp.as_ref().try_exists(&query_path).await })
+        })
+        .await
+        .map_err(|e| anyhow!("Failed to check if '{}' exists: {}", path, e))
     }
 
     /// Get file metadata via SFTP
@@ -6613,10 +7096,13 @@ impl SSHConnectionManager {
         path: &str,
     ) -> anyhow::Result<russh_sftp::client::fs::Metadata> {
         let path = self.resolve_sftp_path(connection_id, path).await?;
-        let sftp = self.get_sftp(connection_id).await?;
-        sftp.as_ref().metadata(&path).await.map_err(|error| {
+        self.sftp_query_with_recovery(connection_id, &path, |sftp, query_path| {
+            Box::pin(async move { sftp.as_ref().metadata(&query_path).await })
+        })
+        .await
+        .map_err(|error| {
             let message = format!("Failed to stat '{}': {}", path, error);
-            anyhow::Error::new(error).context(message)
+            error.context(message)
         })
     }
 
@@ -6627,12 +7113,11 @@ impl SSHConnectionManager {
         path: &str,
     ) -> anyhow::Result<russh_sftp::client::fs::Metadata> {
         let path = self.resolve_sftp_path(connection_id, path).await?;
-        let sftp = self.get_sftp(connection_id).await?;
-        sftp.as_ref()
-            .symlink_metadata(&path)
-            .await
-            .map_err(anyhow::Error::new)
-            .with_context(|| format!("Failed to inspect '{}'", path))
+        self.sftp_query_with_recovery(connection_id, &path, |sftp, query_path| {
+            Box::pin(async move { sftp.as_ref().symlink_metadata(&query_path).await })
+        })
+        .await
+        .with_context(|| format!("Failed to inspect '{}'", path))
     }
 
     // ============================================================================
@@ -7003,6 +7488,7 @@ mod tests {
                 },
                 default_workspace: None,
                 proxy_jump: None,
+                proxy_command: None,
                 container: None,
                 wsl: None,
                 options: Default::default(),
@@ -7503,6 +7989,7 @@ mod tests {
                 },
                 default_workspace: None,
                 proxy_jump: None,
+                proxy_command: None,
                 container: Some(ContainerWorkspaceConfig {
                     name: "fixture".into(),
                     access: ContainerAccess::DockerExec,
@@ -7526,6 +8013,7 @@ mod tests {
                     sftp_session: Arc::new(SftpCache::new()),
                     bounded_sftp_session: Arc::new(BoundedSftpCache::new()),
                     server_key: None,
+                    proxy_child: None,
                     alive: Arc::new(AtomicBool::new(true)),
                 },
             );
@@ -7751,6 +8239,7 @@ mod tests {
             },
             default_workspace: None,
             proxy_jump: None,
+            proxy_command: None,
             container: Some(ContainerWorkspaceConfig {
                 name: "fixture".into(),
                 access: ContainerAccess::DockerExec,
@@ -7775,6 +8264,7 @@ mod tests {
                 sftp_session: Arc::new(SftpCache::new()),
                 bounded_sftp_session: Arc::new(BoundedSftpCache::new()),
                 server_key: None,
+                proxy_child: None,
                 alive: Arc::new(AtomicBool::new(true)),
             },
         );
@@ -7786,6 +8276,40 @@ mod tests {
             file_service,
         );
         (manager, provider)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn workspace_recursive_directory_delete_shell() {
+        use openbitfun_runtime_ports::WorkspaceFileSystem;
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let (_manager, provider) = shell_workspace_provider_fixture(temp.path()).await;
+        let target = temp.path().join("delete 'quoted' $(printf injected) ");
+        let keep = temp.path().join("keep");
+        std::fs::write(&keep, b"keep").unwrap();
+        std::fs::create_dir_all(target.join("nested")).unwrap();
+        for file in 0..100 {
+            std::fs::write(target.join("nested").join(file.to_string()), b"delete").unwrap();
+        }
+        symlink(&keep, target.join("outside-link")).unwrap();
+        assert!(provider
+            .remove_dir(target.to_str().unwrap(), false)
+            .await
+            .is_err());
+        assert!(target.join("nested/0").exists());
+        provider
+            .remove_dir(&format!("{}/", target.display()), true)
+            .await
+            .unwrap();
+        assert!(!target.exists());
+        assert_eq!(std::fs::read(&keep).unwrap(), b"keep");
+        let error = provider
+            .remove_dir(keep.to_str().unwrap(), true)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("not a directory"));
+        assert_eq!(std::fs::read(&keep).unwrap(), b"keep");
     }
 
     #[cfg(unix)]
@@ -8231,7 +8755,7 @@ mod tests {
     #[test]
     #[cfg(feature = "ssh_config")]
     fn ssh_config_fallback_accepts_utf8_bom_and_defaults_to_agent() {
-        let content = strip_utf8_bom(
+        let content = crate::remote_ssh::ssh_config_loader::strip_utf8_bom(
             "\u{feff}Host 跳板\n  HostName jump.example.com\n  User 构建\n".to_string(),
         );
         let entries = parse_ssh_config_manually(&content);
@@ -8271,6 +8795,7 @@ mod tests {
             },
             default_workspace: Some("/srv/project".to_string()),
             proxy_jump: None,
+            proxy_command: None,
             container: None,
             wsl: None,
             options: Default::default(),
@@ -8292,6 +8817,7 @@ mod tests {
                 sftp_session: Arc::new(SftpCache::new()),
                 bounded_sftp_session: Arc::new(BoundedSftpCache::new()),
                 server_key: None,
+                proxy_child: None,
                 alive: alive.clone(),
             },
         );
@@ -8336,6 +8862,277 @@ mod tests {
                 "2001:db8::10".to_string(),
                 Some(2200)
             )
+        );
+    }
+
+    /// Coder's `config-ssh` output: a multi-word ProxyCommand followed by
+    /// more keys in the same block, plus a catch-all block below it. This
+    /// config has a Host before every directive, which is exactly the shape
+    /// the old `ssh_config` 0.1 path parsed "successfully" while pairing
+    /// `ProxyCommand` with `/path/coder` and shifting every later key.
+    #[cfg(feature = "ssh_config")]
+    const CODER_STYLE_CONFIG: &str = "\
+Host coder.*
+  ConnectTimeout 0
+  ProxyCommand /usr/local/bin/coder --global-config \"/Users/me/Library/Application Support/coderv2\" ssh --stdio --ssh-host-prefix coder. %h
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  User coder
+  LogLevel ERROR
+
+Host coder.dev
+  HostName ignored-because-proxy-resolves.example
+
+Host plain
+  HostName plain.example
+  Port 2222
+  ProxyCommand none
+
+Host *
+  User fallback
+  ProxyCommand /usr/bin/nc %h %p
+";
+
+    #[test]
+    #[cfg(feature = "ssh_config")]
+    fn get_ssh_config_resolves_multi_word_proxy_command_without_shifting_keys() {
+        let result = SSHConnectionManager::lookup_ssh_config_in(CODER_STYLE_CONFIG, "coder.dev");
+        assert!(result.found);
+        let entry = result.config.unwrap();
+        assert_eq!(
+            entry.proxy_command.as_deref(),
+            Some(
+                "/usr/local/bin/coder --global-config \"/Users/me/Library/Application Support/coderv2\" ssh --stdio --ssh-host-prefix coder. %h"
+            )
+        );
+        // Keys after ProxyCommand keep their own values, and the first
+        // obtained value wins over `Host *`.
+        assert_eq!(entry.user.as_deref(), Some("coder"));
+        assert_eq!(
+            entry.hostname.as_deref(),
+            Some("ignored-because-proxy-resolves.example")
+        );
+        assert_eq!(entry.port, None);
+        assert_eq!(entry.agent, None);
+
+        // `ProxyCommand none` in a specific block disables the catch-all.
+        let plain = SSHConnectionManager::lookup_ssh_config_in(CODER_STYLE_CONFIG, "plain")
+            .config
+            .unwrap();
+        assert_eq!(plain.proxy_command, None);
+        assert_eq!(plain.port, Some(2222));
+        assert_eq!(plain.user.as_deref(), Some("fallback"));
+
+        // Wildcard matching applies to aliases not listed anywhere.
+        let other = SSHConnectionManager::lookup_ssh_config_in(CODER_STYLE_CONFIG, "elsewhere")
+            .config
+            .unwrap();
+        assert_eq!(other.proxy_command.as_deref(), Some("/usr/bin/nc %h %p"));
+    }
+
+    #[test]
+    #[cfg(feature = "ssh_config")]
+    fn list_ssh_config_hosts_resolves_each_alias_with_openssh_semantics() {
+        let hosts = SSHConnectionManager::list_ssh_config_hosts_in(CODER_STYLE_CONFIG);
+        let names: Vec<_> = hosts.iter().map(|entry| entry.host.as_str()).collect();
+        // Pure pattern blocks name no connectable host.
+        assert_eq!(names, vec!["coder.dev", "plain"]);
+        let coder = &hosts[0];
+        assert!(coder
+            .proxy_command
+            .as_deref()
+            .is_some_and(|command| command.ends_with("--ssh-host-prefix coder. %h")));
+        assert_eq!(coder.user.as_deref(), Some("coder"));
+        assert_eq!(hosts[1].proxy_command, None);
+        assert_eq!(hosts[1].port, Some(2222));
+    }
+
+    #[test]
+    #[cfg(feature = "ssh_config")]
+    fn identity_file_prefers_the_block_naming_the_host() {
+        let content = "Host *\n  IdentityFile ~/.ssh/default\nHost foo # work box\n  IdentityFile /keys/foo-1\n  IdentityFile /keys/foo-2\n  CertificateFile /keys/foo-cert.pub\n";
+        let entry = SSHConnectionManager::lookup_ssh_config_in(content, "foo")
+            .config
+            .unwrap();
+        assert_eq!(entry.identity_file.as_deref(), Some("/keys/foo-1"));
+        assert_eq!(
+            entry.certificate_file.as_deref(),
+            Some("/keys/foo-cert.pub")
+        );
+        let settings = resolve_host_settings(content, "foo");
+        let files: Vec<_> = settings
+            .all("identityfile")
+            .iter()
+            .map(|value| value.value.as_str())
+            .collect();
+        assert_eq!(files, vec!["~/.ssh/default", "/keys/foo-1", "/keys/foo-2"]);
+        // Hosts without a specific block still get the default.
+        let other = SSHConnectionManager::lookup_ssh_config_in(content, "bar")
+            .config
+            .unwrap();
+        assert!(other
+            .identity_file
+            .as_deref()
+            .is_some_and(|file| file.ends_with(".ssh/default")));
+        // The trailing comment on the Host line is not a pattern.
+        let hosts = SSHConnectionManager::list_ssh_config_hosts_in(content);
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].host, "foo");
+    }
+
+    #[test]
+    #[cfg(feature = "ssh_config")]
+    fn proxy_jump_and_proxy_command_first_obtained_wins() {
+        let content = "Host target\n  ProxyJump bastion\nHost *\n  ProxyCommand nc %h %p\n";
+        let entry = SSHConnectionManager::lookup_ssh_config_in(content, "target")
+            .config
+            .unwrap();
+        assert_eq!(entry.proxy_jump.as_deref(), Some("bastion"));
+        assert_eq!(entry.proxy_command, None);
+
+        let content = "Host target\n  ProxyCommand nc %h %p\nHost *\n  ProxyJump bastion\n";
+        let entry = SSHConnectionManager::lookup_ssh_config_in(content, "target")
+            .config
+            .unwrap();
+        assert_eq!(entry.proxy_jump, None);
+        assert_eq!(entry.proxy_command.as_deref(), Some("nc %h %p"));
+
+        // `ProxyCommand none` first still suppresses a later ProxyJump.
+        let content = "Host target\n  ProxyCommand none\nHost *\n  ProxyJump bastion\n";
+        let entry = SSHConnectionManager::lookup_ssh_config_in(content, "target")
+            .config
+            .unwrap();
+        assert_eq!(entry.proxy_jump, None);
+        assert_eq!(entry.proxy_command, None);
+    }
+
+    #[test]
+    #[cfg(feature = "ssh_config")]
+    fn wildcard_only_settings_still_count_as_found() {
+        let result = SSHConnectionManager::lookup_ssh_config_in(
+            "Host *\n  AddKeysToAgent yes\n",
+            "anything",
+        );
+        assert!(result.found);
+        assert_eq!(result.config.unwrap().agent, Some(true));
+        assert!(
+            !SSHConnectionManager::lookup_ssh_config_in("Host other\n  User x\n", "anything").found
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "ssh_config")]
+    fn list_ssh_config_hosts_deduplicates_repeated_aliases() {
+        let hosts = SSHConnectionManager::list_ssh_config_hosts_in(
+            "Host a\n  User first\nHost a\n  User second\nMatch host a\n  Port 1\n",
+        );
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].user.as_deref(), Some("first"));
+        assert_eq!(hosts[0].port, None);
+    }
+
+    #[test]
+    fn parses_proxy_command_as_a_whole_line_value() {
+        let hosts = parse_ssh_config_manually(
+            "Host coder-x\n  ProxyCommand \"C:\\tools\\coder.exe\" ssh --stdio %h\n  IdentityFile ~/.ssh/id_ed25519\n",
+        );
+        assert_eq!(hosts.len(), 1);
+        // The full remainder of the line survives, inner quotes included.
+        assert_eq!(
+            hosts[0].proxy_command.as_deref(),
+            Some("\"C:\\tools\\coder.exe\" ssh --stdio %h")
+        );
+
+        // Kept verbatim like OpenSSH: stripping the outer quotes of
+        // `"a b" ssh "%h"` would corrupt it.
+        let hosts = parse_ssh_config_manually("Host quoted\n  ProxyCommand \"a b\" ssh \"%h\"\n");
+        assert_eq!(
+            hosts[0].proxy_command.as_deref(),
+            Some("\"a b\" ssh \"%h\"")
+        );
+
+        let hosts = parse_ssh_config_manually("Host plain\n  HostName plain.example\n");
+        assert_eq!(hosts[0].proxy_command, None);
+    }
+
+    fn proxy_command_fixture_config(command: &str) -> SSHConnectionConfig {
+        SSHConnectionConfig {
+            id: "proxy-fixture".to_string(),
+            name: "proxy fixture".to_string(),
+            host: "coder-vscode.coder.sage.org.ai--abc".to_string(),
+            port: 22,
+            username: "coder".to_string(),
+            auth: SSHAuthMethod::PrivateKey {
+                key_path: "/nonexistent/key".to_string(),
+                passphrase: None,
+                certificate_path: None,
+            },
+            default_workspace: None,
+            proxy_jump: None,
+            proxy_command: Some(command.to_string()),
+            container: None,
+            wsl: None,
+            options: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn proxy_command_transport_reports_proxy_exit_code() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = SSHConnectionManager::new(temp.path().into());
+        let config = proxy_command_fixture_config(if cfg!(windows) {
+            "exit 7"
+        } else {
+            "sh -c 'exit 7'"
+        });
+
+        let error = manager
+            .establish_session(&config, 10)
+            .await
+            .err()
+            .expect("a proxy that exits immediately cannot complete a handshake");
+        let message = error.to_string();
+        assert!(
+            message.contains("proxy command exited with code 7"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn proxy_command_rejects_jump_and_container_combinations() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = SSHConnectionManager::new(temp.path().into());
+
+        let mut config = proxy_command_fixture_config("exit 0");
+        config.proxy_jump = Some("jump.example".to_string());
+        let error = manager
+            .establish_session(&config, 10)
+            .await
+            .err()
+            .expect("ProxyCommand plus ProxyJump is rejected in this release");
+        assert!(
+            error.to_string().contains("ProxyCommand and ProxyJump"),
+            "unexpected error: {error}"
+        );
+
+        let mut config = proxy_command_fixture_config("exit 0");
+        config.container = Some(ContainerWorkspaceConfig {
+            name: "dev".to_string(),
+            access: ContainerAccess::DockerExec,
+            local: false,
+            docker_path: "docker".to_string(),
+            shell: "/bin/sh".to_string(),
+            user: None,
+            interactive: false,
+        });
+        let error = manager
+            .establish_session(&config, 10)
+            .await
+            .err()
+            .expect("ProxyCommand plus a container target is rejected in this release");
+        assert!(
+            error.to_string().contains("Docker container"),
+            "unexpected error: {error}"
         );
     }
 
@@ -8829,6 +9626,7 @@ mod tests {
                 },
                 default_workspace: Some("/tmp/openbitfun-remote-workspace".to_string()),
                 proxy_jump: None,
+                proxy_command: None,
                 container: Some(ContainerWorkspaceConfig {
                     name: container_name,
                     access: ContainerAccess::DockerExec,
@@ -9086,6 +9884,7 @@ mod tests {
                 },
                 default_workspace: None,
                 proxy_jump: None,
+                proxy_command: None,
                 container: None,
                 wsl: None,
                 options: Default::default(),
@@ -9115,6 +9914,7 @@ mod tests {
                 },
                 default_workspace: Some("/root/project".to_string()),
                 proxy_jump: Some("jump-a,jump-b".to_string()),
+                proxy_command: None,
                 container: None,
                 wsl: None,
                 options: Default::default(),
@@ -9205,6 +10005,7 @@ mod tests {
                 },
                 default_workspace: Some("/workspace".to_string()),
                 proxy_jump: Some("jump.example.com".to_string()),
+                proxy_command: None,
                 container: None,
                 wsl: None,
                 options: Default::default(),
@@ -9250,6 +10051,7 @@ mod tests {
                 },
                 default_workspace: None,
                 proxy_jump: None,
+                proxy_command: None,
                 container: None,
                 wsl: None,
                 options: Default::default(),
@@ -9270,6 +10072,682 @@ mod tests {
             } if key_fingerprint.as_deref() == Some("SHA256:test-fingerprint")
                 && fallback_key_path.as_deref() == Some("~/.ssh/custom-fallback")
         ));
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    fn key_profile(id: &str, host: &str, port: u16, username: &str) -> SSHConnectionConfig {
+        SSHConnectionConfig {
+            id: id.to_string(),
+            name: format!("{username}@{host}:{port}"),
+            host: host.to_string(),
+            port,
+            username: username.to_string(),
+            auth: SSHAuthMethod::PrivateKey {
+                key_path: "~/.ssh/id_ed25519".to_string(),
+                passphrase: None,
+                certificate_path: None,
+            },
+            default_workspace: None,
+            proxy_jump: None,
+            proxy_command: None,
+            container: None,
+            wsl: None,
+            options: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn saving_a_second_port_on_the_same_host_keeps_both_profiles() {
+        let dir = test_data_dir("port-scoped-profiles");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let manager = SSHConnectionManager::new(dir.clone());
+
+        manager
+            .save_connection(&key_profile("ssh-root@cluster", "cluster", 22, "root"))
+            .await
+            .unwrap();
+        manager
+            .save_connection(&key_profile(
+                "ssh-root@cluster#2201",
+                "cluster",
+                2201,
+                "root",
+            ))
+            .await
+            .unwrap();
+        manager
+            .save_connection(&key_profile(
+                "ssh-root@cluster#2202",
+                "cluster",
+                2202,
+                "root",
+            ))
+            .await
+            .unwrap();
+
+        let mut saved: Vec<(String, u16)> = manager
+            .get_saved_connections()
+            .await
+            .into_iter()
+            .map(|c| (c.id, c.port))
+            .collect();
+        saved.sort();
+        assert_eq!(
+            saved,
+            vec![
+                ("ssh-root@cluster".to_string(), 22),
+                ("ssh-root@cluster#2201".to_string(), 2201),
+                ("ssh-root@cluster#2202".to_string(), 2202),
+            ]
+        );
+
+        // A legacy `:port` alias of the same endpoint is replaced; a distinct
+        // id for the same endpoint is kept because records may reference it.
+        manager
+            .save_connection(&key_profile("ssh-root@cluster:22", "cluster", 22, "root"))
+            .await
+            .unwrap();
+        manager
+            .save_connection(&key_profile("ssh-root@cluster", "cluster", 22, "root"))
+            .await
+            .unwrap();
+        manager
+            .save_connection(&key_profile(
+                "ssh-root@cluster#2202~2",
+                "cluster",
+                2202,
+                "root",
+            ))
+            .await
+            .unwrap();
+        let mut ids: Vec<String> = manager
+            .get_saved_connections()
+            .await
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            vec![
+                "ssh-root@cluster".to_string(),
+                "ssh-root@cluster#2201".to_string(),
+                "ssh-root@cluster#2202".to_string(),
+                "ssh-root@cluster#2202~2".to_string(),
+            ]
+        );
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn editing_the_port_of_a_saved_profile_keeps_its_id() {
+        let dir = test_data_dir("port-edit-keeps-id");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let manager = SSHConnectionManager::new(dir.clone());
+
+        manager
+            .save_connection(&key_profile(
+                "ssh-root@cluster#2201",
+                "cluster",
+                2201,
+                "root",
+            ))
+            .await
+            .unwrap();
+        manager
+            .save_connection(&key_profile(
+                "ssh-root@cluster#2201",
+                "cluster",
+                2299,
+                "root",
+            ))
+            .await
+            .unwrap();
+
+        let saved = manager.get_saved_connections().await;
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].id, "ssh-root@cluster#2201");
+        assert_eq!(saved[0].port, 2299);
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn legacy_port_profiles_round_trip_unchanged_next_to_port_scoped_ones() {
+        let dir = test_data_dir("legacy-port-profiles");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        // Shapes written by released builds: a post-#710 port-less id that
+        // points at a non-default port, and a pre-#710 `:port` id.
+        tokio::fs::write(
+            dir.join("ssh_connections.json"),
+            serde_json::to_string_pretty(&serde_json::json!([
+                {
+                    "id": "ssh-root@cluster",
+                    "name": "cluster node",
+                    "host": "cluster",
+                    "port": 2201,
+                    "username": "root",
+                    "authType": { "type": "PrivateKey", "keyPath": "~/.ssh/id_ed25519" },
+                    "lastConnected": 1
+                },
+                {
+                    "id": "ssh-alice@legacy.example:2222",
+                    "name": "legacy",
+                    "host": "legacy.example",
+                    "port": 2222,
+                    "username": "alice",
+                    "authType": { "type": "PrivateKey", "keyPath": "~/.ssh/id_ed25519" },
+                    "lastConnected": 1
+                }
+            ]))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let manager = SSHConnectionManager::new(dir.clone());
+        manager.load_saved_connections().await.unwrap();
+        // A new default-port profile on the same host must not overwrite the
+        // legacy profile; the dialog gives it a port-scoped id because the
+        // port-less id is already taken by another port.
+        manager
+            .save_connection(&key_profile("ssh-root@cluster#22", "cluster", 22, "root"))
+            .await
+            .unwrap();
+
+        let reloaded = SSHConnectionManager::new(dir.clone());
+        reloaded.load_saved_connections().await.unwrap();
+        let mut saved: Vec<(String, u16)> = reloaded
+            .get_saved_connections()
+            .await
+            .into_iter()
+            .map(|c| (c.id, c.port))
+            .collect();
+        saved.sort();
+        assert_eq!(
+            saved,
+            vec![
+                ("ssh-alice@legacy.example:2222".to_string(), 2222),
+                ("ssh-root@cluster".to_string(), 2201),
+                ("ssh-root@cluster#22".to_string(), 22),
+            ]
+        );
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn saved_none_auth_profile_round_trips_without_credentials() {
+        let dir = test_data_dir("none-auth-profile");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let manager = SSHConnectionManager::new(dir.clone());
+
+        manager
+            .save_connection(&SSHConnectionConfig {
+                id: "ssh-coder@127.0.0.1".to_string(),
+                name: "coder agent".to_string(),
+                host: "127.0.0.1".to_string(),
+                port: 2222,
+                username: "coder".to_string(),
+                auth: SSHAuthMethod::None,
+                default_workspace: Some("/root".to_string()),
+                proxy_jump: None,
+                proxy_command: None,
+                container: None,
+                wsl: None,
+                options: Default::default(),
+            })
+            .await
+            .unwrap();
+
+        let persisted = tokio::fs::read_to_string(dir.join(EXTENDED_SAVED_CONNECTIONS_FILE))
+            .await
+            .unwrap();
+        assert!(
+            persisted.contains("\"None\""),
+            "saved profile must record the none method: {persisted}"
+        );
+        assert!(
+            !manager.has_stored_password("ssh-coder@127.0.0.1").await,
+            "none authentication must not create a password vault entry"
+        );
+
+        let restored = manager
+            .load_connection_config_from_saved("ssh-coder@127.0.0.1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(restored.auth, SSHAuthMethod::None));
+
+        // Empty bodies are the shape the web UI sends for a new profile.
+        let from_wire: SSHConnectionConfig = serde_json::from_value(serde_json::json!({
+            "id": "ssh-coder@127.0.0.1",
+            "name": "coder agent",
+            "host": "127.0.0.1",
+            "port": 2222,
+            "username": "coder",
+            "auth": { "type": "None" },
+            "defaultWorkspace": null,
+        }))
+        .unwrap();
+        assert!(matches!(from_wire.auth, SSHAuthMethod::None));
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    struct NoneOnlyTestServer {
+        none_attempts: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl russh::server::Handler for NoneOnlyTestServer {
+        type Error = russh::Error;
+
+        async fn auth_none(&mut self, _user: &str) -> Result<russh::server::Auth, Self::Error> {
+            self.none_attempts.fetch_add(1, Ordering::SeqCst);
+            Ok(russh::server::Auth::Accept)
+        }
+    }
+
+    fn nc_on_path() -> bool {
+        std::env::var_os("PATH").is_some_and(|paths| {
+            std::env::split_paths(&paths).any(|path| path.join("nc").is_file())
+        })
+    }
+
+    /// The Coder shape: the transport is a local process and the endpoint
+    /// advertises only `none`, so any other method would fail the connection.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn none_auth_over_proxy_command_connects_after_restoring_the_saved_profile() {
+        if !nc_on_path() {
+            return;
+        }
+        let dir = test_data_dir("none-auth-proxy-command");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let none_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_attempts = none_attempts.clone();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let config = Arc::new(russh::server::Config {
+                keys: vec![KeyPair::generate_ed25519().unwrap()],
+                methods: russh::MethodSet::NONE,
+                ..Default::default()
+            });
+            let handler = NoneOnlyTestServer {
+                none_attempts: server_attempts,
+            };
+            let session = russh::server::run_stream(config, socket, handler)
+                .await
+                .unwrap();
+            let _ = session.await;
+        });
+
+        // The alias does not resolve, so only the proxy can reach the server.
+        let proxy_command = format!("nc 127.0.0.1 {port}");
+        let mut profile = none_auth_config("coder", "coder-workspace.invalid");
+        profile.proxy_command = Some(proxy_command.clone());
+        let manager = SSHConnectionManager::new(dir.clone());
+        manager.save_connection(&profile).await.unwrap();
+
+        let reloaded = SSHConnectionManager::new(dir.clone());
+        reloaded.load_saved_connections().await.unwrap();
+        let restored = reloaded
+            .load_connection_config_from_saved("coder")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(restored.auth, SSHAuthMethod::None));
+        assert_eq!(restored.proxy_command, Some(proxy_command));
+
+        let result = reloaded.connect(restored).await.unwrap();
+        assert!(result.success, "unexpected result: {:?}", result.error);
+        assert!(none_attempts.load(Ordering::SeqCst) >= 1);
+
+        let _ = reloaded.disconnect("coder").await;
+        server.abort();
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    /// `authType` exactly as released builds parse it: no `None` variant.
+    #[derive(Debug, serde::Deserialize, serde::Serialize)]
+    #[serde(tag = "type")]
+    enum ReleasedSavedAuthType {
+        Password,
+        PrivateKey {
+            #[serde(rename = "keyPath")]
+            key_path: String,
+        },
+        Agent,
+        KeyboardInteractive,
+    }
+
+    #[derive(Debug, serde::Deserialize, serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ReleasedSavedConnection {
+        id: String,
+        name: String,
+        host: String,
+        port: u16,
+        username: String,
+        auth_type: ReleasedSavedAuthType,
+    }
+
+    fn released_profile(id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "name": id,
+            "host": format!("{id}.test"),
+            "port": 22,
+            "username": "dev",
+            "authType": { "type": "PrivateKey", "keyPath": "~/.ssh/id_rsa" },
+        })
+    }
+
+    fn none_auth_config(id: &str, host: &str) -> SSHConnectionConfig {
+        SSHConnectionConfig {
+            id: id.to_string(),
+            name: "coder agent".to_string(),
+            host: host.to_string(),
+            port: 2222,
+            username: "coder".to_string(),
+            auth: SSHAuthMethod::None,
+            default_workspace: Some("/root".to_string()),
+            proxy_jump: None,
+            proxy_command: None,
+            container: None,
+            wsl: None,
+            options: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn none_auth_profile_survives_a_released_reader_save_and_upgrade() {
+        let dir = test_data_dir("none-auth-downgrade");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let primary_path = dir.join("ssh_connections.json");
+        tokio::fs::write(
+            &primary_path,
+            serde_json::to_vec(&vec![released_profile("old-a")]).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let upgraded = SSHConnectionManager::new(dir.clone());
+        upgraded.load_saved_connections().await.unwrap();
+        upgraded
+            .save_connection(&none_auth_config("coder", "coder.test"))
+            .await
+            .unwrap();
+
+        // Downgrade: a released build parses the whole list, then rewrites it
+        // from memory after the user adds a profile.
+        let content = tokio::fs::read_to_string(&primary_path).await.unwrap();
+        let mut released: Vec<ReleasedSavedConnection> = serde_json::from_str(&content)
+            .expect("released builds must keep parsing the primary file");
+        assert_eq!(released.len(), 1);
+        released.push(serde_json::from_value(released_profile("old-b")).unwrap());
+        tokio::fs::write(&primary_path, serde_json::to_vec(&released).unwrap())
+            .await
+            .unwrap();
+
+        // Upgrade again: nothing either side wrote is lost.
+        let reupgraded = SSHConnectionManager::new(dir.clone());
+        reupgraded.load_saved_connections().await.unwrap();
+        let mut ids: Vec<String> = reupgraded
+            .get_saved_connections()
+            .await
+            .into_iter()
+            .map(|connection| connection.id)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, ["coder", "old-a", "old-b"]);
+        let restored = reupgraded
+            .load_connection_config_from_saved("coder")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(restored.auth, SSHAuthMethod::None));
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn none_profiles_keep_port_scoped_ids_and_legacy_alias_dedup_across_stores() {
+        let dir = test_data_dir("none-auth-port-ids");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let manager = SSHConnectionManager::new(dir.clone());
+        let mut key_profile = none_auth_config("ssh-coder@ws", "ws");
+        key_profile.port = 22;
+        key_profile.auth = SSHAuthMethod::Agent {
+            key_fingerprint: None,
+            fallback_key_path: None,
+        };
+        manager.save_connection(&key_profile).await.unwrap();
+        let mut scoped = none_auth_config("ssh-coder@ws#2222", "ws");
+        scoped.port = 2222;
+        manager.save_connection(&scoped).await.unwrap();
+
+        // Two ports on one host stay distinct even though they live in
+        // different stores.
+        let reloaded = SSHConnectionManager::new(dir.clone());
+        reloaded.load_saved_connections().await.unwrap();
+        let mut saved: Vec<(String, u16)> = reloaded
+            .get_saved_connections()
+            .await
+            .into_iter()
+            .map(|c| (c.id, c.port))
+            .collect();
+        saved.sort();
+        assert_eq!(
+            saved,
+            vec![
+                ("ssh-coder@ws".to_string(), 22),
+                ("ssh-coder@ws#2222".to_string(), 2222),
+            ]
+        );
+        let restored = reloaded
+            .load_connection_config_from_saved("ssh-coder@ws#2222")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(restored.auth, SSHAuthMethod::None));
+
+        // A legacy `:port` alias of the key profile switched to `None`
+        // replaces it and moves it to the extended store.
+        let mut alias = none_auth_config("ssh-coder@ws:22", "ws");
+        alias.port = 22;
+        reloaded.save_connection(&alias).await.unwrap();
+        let primary = tokio::fs::read_to_string(dir.join("ssh_connections.json"))
+            .await
+            .unwrap();
+        assert!(
+            serde_json::from_str::<Vec<ReleasedSavedConnection>>(&primary)
+                .unwrap()
+                .is_empty()
+        );
+        let reloaded = SSHConnectionManager::new(dir.clone());
+        reloaded.load_saved_connections().await.unwrap();
+        let mut ids: Vec<String> = reloaded
+            .get_saved_connections()
+            .await
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, ["ssh-coder@ws#2222", "ssh-coder@ws:22"]);
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn primary_alias_from_an_older_build_shadows_the_same_extended_endpoint() {
+        let dir = test_data_dir("none-auth-alias-shadow");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let manager = SSHConnectionManager::new(dir.clone());
+        let mut none_profile = none_auth_config("ssh-coder@ws", "ws");
+        none_profile.port = 22;
+        manager.save_connection(&none_profile).await.unwrap();
+        let mut alias = released_profile("ssh-coder@ws:22");
+        alias["host"] = serde_json::json!("ws");
+        alias["username"] = serde_json::json!("coder");
+        let mut other_port = released_profile("ssh-coder@ws:2201");
+        other_port["host"] = serde_json::json!("ws");
+        other_port["username"] = serde_json::json!("coder");
+        other_port["port"] = serde_json::json!(2201);
+        tokio::fs::write(
+            dir.join("ssh_connections.json"),
+            serde_json::to_vec(&vec![alias, other_port]).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let reloaded = SSHConnectionManager::new(dir.clone());
+        reloaded.load_saved_connections().await.unwrap();
+        let mut ids: Vec<String> = reloaded
+            .get_saved_connections()
+            .await
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, ["ssh-coder@ws:22", "ssh-coder@ws:2201"]);
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn none_profile_in_the_primary_file_moves_to_the_extended_store() {
+        let dir = test_data_dir("none-auth-relocate");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let primary_path = dir.join("ssh_connections.json");
+        let mut none_profile = released_profile("coder");
+        none_profile["authType"] = serde_json::json!({ "type": "None" });
+        tokio::fs::write(
+            &primary_path,
+            serde_json::to_vec(&vec![released_profile("old-a"), none_profile]).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let manager = SSHConnectionManager::new(dir.clone());
+        manager.load_saved_connections().await.unwrap();
+        assert_eq!(manager.get_saved_connections().await.len(), 2);
+        manager.delete_saved_connection("old-a").await.unwrap();
+
+        let content = tokio::fs::read_to_string(&primary_path).await.unwrap();
+        serde_json::from_str::<Vec<ReleasedSavedConnection>>(&content)
+            .expect("a saved primary file must stay readable by released builds");
+        let extended = tokio::fs::read_to_string(dir.join(EXTENDED_SAVED_CONNECTIONS_FILE))
+            .await
+            .unwrap();
+        assert!(extended.contains("\"coder\""));
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn changing_auth_moves_a_profile_between_stores_and_delete_clears_it() {
+        let dir = test_data_dir("none-auth-switch");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let manager = SSHConnectionManager::new(dir.clone());
+        manager
+            .save_connection(&none_auth_config("coder", "coder.test"))
+            .await
+            .unwrap();
+        let mut with_key = none_auth_config("coder", "coder.test");
+        with_key.auth = SSHAuthMethod::Agent {
+            key_fingerprint: None,
+            fallback_key_path: None,
+        };
+        manager.save_connection(&with_key).await.unwrap();
+
+        let reloaded = SSHConnectionManager::new(dir.clone());
+        reloaded.load_saved_connections().await.unwrap();
+        let saved = reloaded.get_saved_connections().await;
+        assert_eq!(saved.len(), 1);
+        assert!(!matches!(
+            saved[0].auth_type,
+            crate::remote_ssh::types::SavedAuthType::None
+        ));
+
+        reloaded
+            .save_connection(&none_auth_config("coder", "coder.test"))
+            .await
+            .unwrap();
+        reloaded.delete_saved_connection("coder").await.unwrap();
+        let reloaded = SSHConnectionManager::new(dir.clone());
+        reloaded.load_saved_connections().await.unwrap();
+        assert!(reloaded.get_saved_connections().await.is_empty());
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn primary_profile_recreated_by_an_older_build_shadows_the_extended_one() {
+        let dir = test_data_dir("none-auth-shadow");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let manager = SSHConnectionManager::new(dir.clone());
+        manager
+            .save_connection(&none_auth_config("coder", "coder.test"))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            dir.join("ssh_connections.json"),
+            serde_json::to_vec(&vec![released_profile("coder")]).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let reloaded = SSHConnectionManager::new(dir.clone());
+        reloaded.load_saved_connections().await.unwrap();
+        let saved = reloaded.get_saved_connections().await;
+        assert_eq!(saved.len(), 1);
+        assert!(matches!(
+            saved[0].auth_type,
+            crate::remote_ssh::types::SavedAuthType::PrivateKey { .. }
+        ));
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn unreadable_extended_store_is_kept_aside_and_never_blocks_primary_profiles() {
+        let dir = test_data_dir("none-auth-unreadable");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        tokio::fs::write(
+            dir.join("ssh_connections.json"),
+            serde_json::to_vec(&vec![released_profile("old-a")]).unwrap(),
+        )
+        .await
+        .unwrap();
+        let extended_path = dir.join(EXTENDED_SAVED_CONNECTIONS_FILE);
+        tokio::fs::write(&extended_path, "not json").await.unwrap();
+
+        let manager = SSHConnectionManager::new(dir.clone());
+        manager.load_saved_connections().await.unwrap();
+        assert_eq!(manager.get_saved_connections().await.len(), 1);
+        manager
+            .save_connection(&none_auth_config("coder", "coder.test"))
+            .await
+            .unwrap();
+
+        let backup = tokio::fs::read_to_string(extended_path.with_extension("json.unreadable"))
+            .await
+            .unwrap();
+        assert_eq!(backup, "not json");
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn unreadable_primary_file_keeps_extended_profiles_for_the_next_save() {
+        let dir = test_data_dir("none-auth-primary-corrupt");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let manager = SSHConnectionManager::new(dir.clone());
+        manager
+            .save_connection(&none_auth_config("coder", "coder.test"))
+            .await
+            .unwrap();
+        tokio::fs::write(dir.join("ssh_connections.json"), "not json")
+            .await
+            .unwrap();
+
+        let reloaded = SSHConnectionManager::new(dir.clone());
+        assert!(reloaded.load_saved_connections().await.is_err());
+        assert_eq!(reloaded.get_saved_connections().await.len(), 1);
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 

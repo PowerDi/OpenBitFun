@@ -171,8 +171,14 @@ cargo test --locked -p openbitfun-agent-runtime --no-default-features --features
 
 These in-memory fixtures do not establish live Peer, SSH, relay or dispatch behavior.
 
-For next-input suggestion eligibility, plain-text output without text
-post-processing, and cancellation:
+For evidence summary bounds and compression contract projection:
+
+```bash
+cargo test --locked -p openbitfun-agent-runtime --no-default-features --features agent-runtime --lib evidence_ledger
+```
+
+For next-input suggestion eligibility, surrounding whitespace trimming with
+message content preservation, and cancellation:
 
 ```bash
 cargo test --locked -p openbitfun-agent-runtime --no-default-features --features agent-runtime --lib prompt_suggestion::tests

@@ -219,10 +219,19 @@ export const PANEL_CONTENT_CONFIGS: Record<PanelContentType, PanelContentConfig>
     supportsDownload: false,
     showHeader: false
   },
+  'session-trajectory': { type: 'session-trajectory', displayName: 'Session Trajectory', icon: { glyph: Activity }, supportsCopy: false, supportsDownload: false, showHeader: false },
   'session-usage': {
     type: 'session-usage',
-    displayName: 'Session Usage',
+    displayName: 'Context Usage Report',
     icon: { glyph: Activity },
+    supportsCopy: false,
+    supportsDownload: false,
+    showHeader: false
+  },
+  'tool-definitions': {
+    type: 'tool-definitions',
+    displayName: 'Tool Definitions',
+    icon: { glyph: Code },
     supportsCopy: false,
     supportsDownload: false,
     showHeader: false
@@ -262,14 +271,6 @@ export const PANEL_CONTENT_CONFIGS: Record<PanelContentType, PanelContentConfig>
   'generative-widget': {
     type: 'generative-widget',
     displayName: 'Widget Preview',
-    icon: { glyph: Network },
-    supportsCopy: false,
-    supportsDownload: false,
-    showHeader: false
-  },
-  'openbitfun-canvas': {
-    type: 'openbitfun-canvas',
-    displayName: 'OpenBitFun Canvas',
     icon: { glyph: Network },
     supportsCopy: false,
     supportsDownload: false,

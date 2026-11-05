@@ -92,6 +92,7 @@
             "close-switch-reorder": "關閉、切換並重新排序多個已打開工作區",
             "recent-workspaces": "查看、清理和重新打開最近使用的項目",
             "workspace-metadata": "掃描並維護工作區名稱、資訊、關聯目錄和 Persona 檔案",
+            "workspace-icon": "選擇項目圖案和顏色，或使用自訂圖片",
             "file-watch": "監聽項目檔案變化、檢查監聽狀態並在失敗後恢復",
             "workspace-search": "按檔案名、路徑或檔案內容搜索本地工作區",
             "remote-open": "從項目流程打開 SSH 或其他遠程工作區",
@@ -316,13 +317,14 @@
           "title": "Detached Dispatch 遠程派發",
           "summary": "把可持續運行的任務派發到另一台 OpenBitFun 主機；控制端可以斷開，目標主機繼續執行並保留記錄。",
           "items": {
-            "targets": "列出可派發目標並探測版本、連接和運行能力",
+            "targets": "列出同帳戶設備與已保存的 SSH 目標",
             "provision": "為目標主機配置運行環境並安裝或更新 OpenBitFun CLI",
             "model-sync": "在提交任務前同步目標所需的模型配置",
-            "submit": "把包含工作區、工作階段、模型和權限策略的持久任務提交到目標",
+            "submit": "從當前 Git 工作區把持久任務提交到同帳戶設備或 SSH 目標",
             "status-list": "列出派發任務並查詢運行狀態、結果和錯誤",
             "transcript": "保存、追加和重新加載可斷線恢復的執行記錄",
-            "permission-continuation": "遠程回答權限請求，並繼續或取消目標端任務",
+            "permission-continuation": "遠程回答權限請求並繼續目標端任務",
+            "cancel": "取消本機派發的任務",
             "result-sync": "將目標端結果同步回控制端，而不把控制端當作遠程檔案系統代理"
           }
         },
@@ -372,7 +374,15 @@
             "agent-cards": "按需求或在任務過程中創建倒計時、清單、便簽、進度、指標、圖表、定時任務和自定義卡片，可定時從 HTTP 接口或本機命令重新整理數據",
             "home-management": "在首頁“小卡片”區查看全部卡片，並顯示、隱藏或刪除單張卡片",
             "card-actions": "在卡片上重新整理數據、勾選清單項、切換置頂、打開鏈接或回到來源工作階段",
-            "drag-restore": "拖動卡片到桌面任意位置，拖動卡片邊緣或四角調整大小；關閉 OpenBitFun 時卡片消失，重新打開後按原位置和大小恢復"
+            "drag-restore": "拖動卡片到桌面任意位置，拖動卡片邊緣或四角調整大小；關閉 OpenBitFun 時卡片消失，重新打開後按原位置和大小恢復",
+            "desktop-pinning": "在卡片選單、首頁卡片列表或設定裡把卡片釘選到 Windows 桌面，隱藏的卡片同樣可以切換釘選狀態"
+          }
+        },
+        "generative-ui": {
+          "title": "生成式介面",
+          "summary": "在工作階段中使用所選元件庫生成可互動介面。",
+          "items": {
+            "app-generation": "生成可互動的 GenUI 應用並由宿主渲染"
           }
         }
       },
@@ -537,7 +547,8 @@
               "computer-use-permissions": "查看並請求輔助功能與屏幕錄制權限",
               "browser-auto-connect": "控制 OpenBitFun 啓動時是否自動連接瀏覽器",
               "browser-setup": "發現並選擇瀏覽器、配置預設 CDP 或按需重啓",
-              "json-repair": "控制是否在安全邊界內修復模型生成的非法工具參數 JSON"
+              "json-repair": "控制是否在安全邊界內修復模型生成的非法工具參數 JSON",
+              "genui-library": "選擇生成式 UI 元件庫並操作預覽"
             }
           },
           "desktop-control": {

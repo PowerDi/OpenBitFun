@@ -18,6 +18,53 @@ export function Example() {
 
 The package owns component anatomy, behavior, accessibility, and stable variants. It does not own theme selection persistence, product state, routes, locale resources, or platform APIs.
 
+## Loading indicators
+
+Use `Spinner` for the shared loading indicator. Its default `logo` presentation
+uses the double-hexagon silhouette with a continuous 1.8-second cycle coupling
+rotation, whole-mark defocus, opacity and a subtle scale pulse. Both contours
+move together. Color follows `currentColor`; `xs`, `sm`, `md` and `lg` retain
+the existing 11, 14, 22 and 28 px allocation. Existing `Spinner` consumers use
+this presentation automatically. FlowChat's runtime status selects `md` so the
+visible mark is approximately 16–18 px beside its text, allowing for the logo's
+internal padding. Its leading slot follows the indicator's intrinsic width.
+
+```tsx
+import { Spinner } from "@openbitfun/ui";
+
+<Spinner size="sm" aria-label="Loading" />
+```
+
+The host supplies localized accessible text. Omit `aria-label` when adjacent
+copy already describes the activity. `active={false}` shows a still mark.
+Playback pauses offscreen or when the document is hidden and respects reduced
+motion. `LoadingState` composes the same indicator with optional support copy.
+The legacy `variant="matrix"` value resolves to `logo` for existing callers;
+`variant="bars"` selects the bar presentation. The legacy matrix layout tokens
+continue to define the established size allocations.
+
+## Color selection
+
+`ColorPicker` combines a round swatch, an editable HEX pill, an expandable flower
+palette and a curved lightness slider. Use `value` / `onValueChange` for a controlled
+draft, or `defaultValue` for an independent control. Opening the palette and
+focusing unchanged text do not emit a value change. `onValueChange` includes
+incomplete text; owners must require a six-digit HEX value before persistence.
+Enter, blur or the apply action expands three-digit shorthand. Invalid text keeps
+the last valid preview. `open` / `onOpenChange` can connect an external custom-color
+entry point; `defaultOpen` is available for inline authoring.
+
+The palette stays in normal document flow. Its petals are keyboard buttons; the
+lightness slider supports pointer capture, touch, arrow keys, Page Up/Down and
+Home/End. Escape first leaves text editing, then collapses the palette. Pass
+localized `labels` from the owning surface. Bloom motion respects reduced motion.
+
+`components/ColorPicker/color.ts` owns sRGB/HSL conversion and the sampled flower
+gamut. Palette colors, the current-color ring and the lightness ramp represent
+editable color content; they deliberately do not follow theme or status colors.
+Chrome, borders, focus and shadows use existing semantic/system tokens. No theme
+color literal or new token is needed. The component has no storage or host API.
+
 ## Pane layouts
 
 `SplitView` retains its primary and secondary content hosts across placement,
@@ -467,6 +514,9 @@ except for error tone. Use `showIcon={false}` for text-only notices.
 uncontrolled open state, trigger/region accessibility wiring, focus exclusion
 while collapsed, reduced-motion behavior, and independent header actions.
 Product copy and the revealed content remain consumer-owned.
+Use `headerClassName` to style the default header surface while retaining its
+trigger, actions, and focus behavior. `triggerClassName` and `contentInnerClassName`
+allow consumers to align the indicator and revealed content without replacing the trigger.
 
 Use `Disclosure presentation="native"` when the browser must own the existing
 `details`/`summary` behavior. This mode renders a real details element, a direct
@@ -604,9 +654,28 @@ matches the trigger. `variant="pill"` uses badge typography, spacing and rounded
 ends while retaining the selected control size. An option's `selectedLabel`
 shortens only the closed trigger; the expanded header, listbox and native form
 option retain its full `label`. Combine these with content widths for compact
-inline platform or scope selectors. `Combobox` adds searchable single
+inline platform or scope selectors. Set `showGroupLabels={false}` to hide group
+headings while retaining the standard section spacing, and `showGroupDividers`
+to separate option groups with a themed border. `Combobox` adds searchable single
 selection, grouped options, explicit custom-value creation and async loading
-states. `MultiSelect` owns multiple selection, removable tags and select-all.
+states. Both `Select` and `Combobox` support `variant="pill"` for a filled capsule
+trigger and `bordered={false}` to omit its border while retaining keyboard focus
+feedback. `bordered="hover"` reveals the border only while hovering, without
+changing layout or removing keyboard focus feedback. Pill hover states retain
+the neutral surface. Expanded menus keep
+their standard surface. `MultiSelect` owns multiple
+selection, removable tags and select-all.
+`valuePrefix` places a caller-localized field name inside the closed trigger,
+so the label and selected value share one hit target. It does not alter option
+labels. Expanded surfaces match the complete trigger width by default.
+`hitArea="expanded"` extends the closed trigger's pointer target beyond its
+visual bounds using system spacing, without changing layout or popup geometry.
+`showIndicator={false}` removes the closed arrow and its reserved space. Pill
+controls then keep symmetric system padding around their visible content.
+Combobox `popupWidth="content"` fits the list to its options, using the trigger
+width as a minimum and the viewport as a maximum. Plain descriptions stay on
+one line so narrow viewports do not make rows grow. Filtering retains the
+measured width until the list closes.
 Controlled values are authoritative; option discovery remains host-owned.
 Wrap the product once in `DesignSystemProvider` to supply translated messages,
 the portal host, theme facts and the shared overlay layer stack.
@@ -674,6 +743,10 @@ the SearchField over that anchor.
 `FieldGroup fieldSurface="ambient"` keeps text and picker field borders while
 letting their shells reuse the grouped surface. The default field surface stays
 theme-owned, and portalled menus remain on the opaque panel surface.
+
+`FieldGroup fieldSurface="filled"` uses the theme's grouped field background with
+the standard resting, hover, focus, invalid, and forced-color borders. It applies to Input, Select, Combobox, Textarea, and NumberInput; nested
+groups can explicitly restore the default surface.
 
 `Menu` remains composable inline anatomy. `MenuPopover` composes it into a
 controlled anchored or coordinate popup. Pass `items`, `open`, `onClose` and

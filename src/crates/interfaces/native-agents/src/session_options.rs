@@ -91,6 +91,9 @@ impl From<agent_client_protocol::schema::PlanEntry> for AcpPlanEntry {
 pub struct AcpSessionOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<crate::NativeAgentCapabilities>,
+    /// Present on combined metadata reads; absence preserves the legacy commands endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_commands: Option<Vec<AcpAvailableCommand>>,
     #[serde(default)]
     pub current_model_id: Option<String>,
     #[serde(default)]
@@ -376,6 +379,27 @@ fn select_model_values(
 mod tests {
     use super::*;
     use agent_client_protocol::schema::{ModelInfo, SessionConfigOption};
+
+    #[test]
+    fn legacy_session_options_round_trip_without_advertising_combined_metadata() {
+        let legacy = serde_json::json!({
+            "currentModelId": null, "availableModels": [], "modelConfigId": null,
+            "configOptions": [], "contextUsage": null
+        });
+        let options: AcpSessionOptions = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(options.available_commands.is_none());
+        assert_eq!(serde_json::to_value(options).unwrap(), legacy);
+    }
+
+    #[test]
+    fn combined_metadata_distinguishes_empty_commands_from_legacy_absence() {
+        let mut options = AcpSessionOptions::default();
+        options.available_commands = Some(Vec::new());
+        let payload = serde_json::to_value(&options).unwrap();
+        assert_eq!(payload["availableCommands"], serde_json::json!([]));
+        let restored: AcpSessionOptions = serde_json::from_value(payload).unwrap();
+        assert_eq!(restored.available_commands, Some(Vec::new()));
+    }
 
     #[test]
     fn converts_native_model_state() {

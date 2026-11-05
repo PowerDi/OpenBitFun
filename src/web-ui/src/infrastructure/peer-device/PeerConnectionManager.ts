@@ -39,12 +39,15 @@ export type PeerConnectionHealth = 'connecting' | 'ready' | 'degraded';
 export type PeerHostKind = 'desktop' | 'cli';
 
 export interface PeerHostCapabilities {
+  readonly genUiLibrariesV1?: boolean;
   readonly backgroundResultDeliveryV1?: boolean;
   readonly idempotentDialogSubmit: boolean;
   /** Only true after explicit negotiation; older hosts need the upload API. */
   readonly inlineImageAttachmentsV1?: boolean;
   readonly btwInitialModelSelectionV1?: boolean;
   readonly btwModelPoolSelectionV1?: boolean;
+  /** Terminal output arrives as replay pages announced on the host stream. */
+  readonly terminalCursorReplayV1?: boolean;
   readonly controlConversationV1?: boolean;
   readonly controlConversationResetV1?: boolean;
   readonly targetedSessionRollback: boolean;
@@ -53,6 +56,9 @@ export interface PeerHostCapabilities {
   readonly miniAppAgentContextFilesV1: boolean;
   readonly miniAppAgentImagesV1: boolean;
   readonly wslWorkspacesV1?: boolean;
+  readonly sshNoneAuthV1?: boolean;
+  /** Host keeps `ssh-user@host#port` profiles distinct; older hosts get legacy ids only. */
+  readonly sshPortScopedIdentityV1?: boolean;
   /** Host stores ordered subscription account pools on model configs. */
   readonly subscriptionAccountPoolsV1?: boolean;
   /** Host-owned read-only subscription allowance query. */
@@ -62,11 +68,13 @@ export interface PeerHostCapabilities {
   /** Host routes a model to its configured backup channels. */
   readonly modelChannelRoutingV1?: boolean;
   readonly wholeSessionCopyV1?: boolean;
+  readonly sessionTrajectoryV1?: boolean;
   readonly modelRoutingV1?: boolean;
   readonly modelPoolSelectionV1?: boolean;
   readonly computerUseSharingV1?: boolean;
   /** Typed ProductControl HostInvoke, including shared config read-back. */
   readonly productControlV1?: boolean;
+  readonly remoteConnectControlV1?: boolean;
   /**
    * ProductControl definitions that need a host-native provider or a live
    * presentation surface. The controller does not pre-check these: the peer
@@ -96,6 +104,8 @@ export interface PeerHostCapabilities {
   readonly reviewPlatformV1?: boolean | null;
   /** Scoped MCP choices must be explicitly advertised by the host. */
   readonly chatMcpCatalogV1?: boolean;
+  readonly sessionReferenceBrowseV1?: boolean;
+  readonly workspaceIconV1?: boolean;
   readonly workspaceIdReferencesV1?: boolean;
   /**
    * Host implements `submit_user_answers` for Runtime-owned
@@ -187,6 +197,7 @@ const NO_CAPABILITIES: PeerHostCapabilities = {
   inlineImageAttachmentsV1: false,
   btwInitialModelSelectionV1: false,
   btwModelPoolSelectionV1: false,
+  terminalCursorReplayV1: false,
   controlConversationV1: false,
   controlConversationResetV1: false,
   targetedSessionRollback: false,
@@ -194,16 +205,20 @@ const NO_CAPABILITIES: PeerHostCapabilities = {
   miniAppAgentContextFilesV1: false,
   miniAppAgentImagesV1: false,
   wslWorkspacesV1: false,
+  sshNoneAuthV1: false,
+  sshPortScopedIdentityV1: false,
   subscriptionAccountPoolsV1: false,
   subscriptionQuotaV1: false,
   grokQuotaV1: false,
   subscriptionModelQuotaV1: false,
   modelChannelRoutingV1: false,
   wholeSessionCopyV1: false,
+  sessionTrajectoryV1: false,
   modelRoutingV1: false,
   modelPoolSelectionV1: false,
   computerUseSharingV1: false,
   productControlV1: false,
+  remoteConnectControlV1: false,
   productControlNativeV1: false,
   productControlPresentationV1: false,
   // Unknown (not yet probed) — not the same as `false` (probed, unsupported).
@@ -212,6 +227,8 @@ const NO_CAPABILITIES: PeerHostCapabilities = {
   toolCatalog: null,
   reviewPlatformV1: null,
   chatMcpCatalogV1: false,
+  sessionReferenceBrowseV1: false,
+  workspaceIconV1: false,
   workspaceIdReferencesV1: false,
   userQuestionResponse: null,
   // Host kind is unknown until the first `peer_mode_ping` resolves. Consumers
@@ -458,12 +475,16 @@ export class PeerConnectionManager {
       supportsMiniAppAgentContextFilesV1: entry.capabilities.miniAppAgentContextFilesV1,
       supportsMiniAppAgentImagesV1: entry.capabilities.miniAppAgentImagesV1,
       supportsWslWorkspacesV1: entry.capabilities.wslWorkspacesV1,
+      supportsSshNoneAuthV1: entry.capabilities.sshNoneAuthV1,
+      supportsSshPortScopedIdentityV1: entry.capabilities.sshPortScopedIdentityV1,
       supportsWholeSessionCopyV1: entry.capabilities.wholeSessionCopyV1,
+      supportsGenUiLibrariesV1: entry.capabilities.genUiLibrariesV1,
       supportsModelRoutingV1: entry.capabilities.modelRoutingV1,
       supportsModelPoolSelectionV1: entry.capabilities.modelPoolSelectionV1,
       supportsBtwModelPoolSelectionV1: entry.capabilities.btwModelPoolSelectionV1,
       supportsComputerUseSharingV1: entry.capabilities.computerUseSharingV1,
       supportsProductControlV1: entry.capabilities.productControlV1,
+      supportsRemoteConnectControlV1: entry.capabilities.remoteConnectControlV1,
     });
     entry.health = 'ready';
     this.scheduleKeepalive(entry);
@@ -544,6 +565,7 @@ export class PeerConnectionManager {
       inlineImageAttachmentsV1: caps?.inline_image_attachments_v1 === true,
       btwInitialModelSelectionV1: caps?.btw_initial_model_selection_v1 === true,
       btwModelPoolSelectionV1: caps?.btw_model_pool_selection_v1 === true,
+      terminalCursorReplayV1: caps?.terminal_cursor_replay_v1 === true,
       controlConversationV1: caps?.control_conversation_v1 === true,
       controlConversationResetV1: caps?.control_conversation_reset_v1 === true,
       targetedSessionRollback: caps?.targeted_session_rollback === true,
@@ -551,16 +573,21 @@ export class PeerConnectionManager {
       miniAppAgentContextFilesV1: caps?.miniapp_agent_context_files_v1 === true,
       miniAppAgentImagesV1: caps?.miniapp_agent_images_v1 === true,
       wslWorkspacesV1: caps?.wsl_workspaces_v1 === true,
+      sshNoneAuthV1: caps?.ssh_none_auth_v1 === true,
+      sshPortScopedIdentityV1: caps?.ssh_port_scoped_identity_v1 === true,
       subscriptionAccountPoolsV1: caps?.subscription_account_pools_v1 === true,
       subscriptionQuotaV1: caps?.subscription_quota_v1 === true,
       grokQuotaV1: caps?.grok_quota_v1 === true,
       subscriptionModelQuotaV1: caps?.subscription_model_quota_v1 === true,
       modelChannelRoutingV1: caps?.model_channel_routing_v1 === true,
       wholeSessionCopyV1: caps?.whole_session_copy_v1 === true,
+      sessionTrajectoryV1: caps?.session_trajectory_v1 === true,
+      genUiLibrariesV1: caps?.gen_ui_libraries_v1 === true,
       modelRoutingV1: caps?.model_routing_v1 === true,
       modelPoolSelectionV1: caps?.model_pool_selection_v1 === true,
       computerUseSharingV1: caps?.computer_use_sharing_v1 === true,
       productControlV1: caps?.product_control_v1 === true,
+      remoteConnectControlV1: caps?.remote_connect_control_v1 === true,
       productControlNativeV1: caps?.product_control_native_v1 === true,
       productControlPresentationV1:
         caps?.product_control_presentation_v1 === true,
@@ -568,6 +595,8 @@ export class PeerConnectionManager {
       toolCatalog,
       reviewPlatformV1: caps?.review_platform_v1 === undefined ? null : caps.review_platform_v1 === true,
       chatMcpCatalogV1: caps?.chat_mcp_catalog_v1 === true,
+      sessionReferenceBrowseV1: caps?.session_reference_browse_v1 === true,
+      workspaceIconV1: caps?.workspace_icon_v1 === true,
       workspaceIdReferencesV1: caps?.workspace_id_references_v1 === true,
       userQuestionResponse,
       userQuestionInteraction: caps?.user_question_interaction_v1 === true,
@@ -657,12 +686,16 @@ export class PeerConnectionManager {
         supportsMiniAppAgentContextFilesV1: capabilities.miniAppAgentContextFilesV1,
         supportsMiniAppAgentImagesV1: capabilities.miniAppAgentImagesV1,
         supportsWslWorkspacesV1: capabilities.wslWorkspacesV1,
+        supportsSshNoneAuthV1: capabilities.sshNoneAuthV1,
+        supportsSshPortScopedIdentityV1: capabilities.sshPortScopedIdentityV1,
         supportsWholeSessionCopyV1: capabilities.wholeSessionCopyV1,
+        supportsGenUiLibrariesV1: capabilities.genUiLibrariesV1,
         supportsModelRoutingV1: capabilities.modelRoutingV1,
         supportsModelPoolSelectionV1: capabilities.modelPoolSelectionV1,
         supportsBtwModelPoolSelectionV1: capabilities.btwModelPoolSelectionV1,
         supportsComputerUseSharingV1: capabilities.computerUseSharingV1,
         supportsProductControlV1: capabilities.productControlV1,
+        supportsRemoteConnectControlV1: capabilities.remoteConnectControlV1,
       });
       entry.consecutiveFailures = 0;
       const recovered = entry.health !== 'ready';
@@ -808,12 +841,16 @@ function capabilitiesEqual(
     a.miniAppAgentContextFilesV1 === b.miniAppAgentContextFilesV1 &&
     a.miniAppAgentImagesV1 === b.miniAppAgentImagesV1 &&
     a.wslWorkspacesV1 === b.wslWorkspacesV1 &&
+    a.sshNoneAuthV1 === b.sshNoneAuthV1 &&
+    a.sshPortScopedIdentityV1 === b.sshPortScopedIdentityV1 &&
     a.subscriptionAccountPoolsV1 === b.subscriptionAccountPoolsV1 &&
     a.subscriptionQuotaV1 === b.subscriptionQuotaV1 &&
     a.grokQuotaV1 === b.grokQuotaV1 &&
     a.subscriptionModelQuotaV1 === b.subscriptionModelQuotaV1 &&
     a.modelChannelRoutingV1 === b.modelChannelRoutingV1 &&
     a.wholeSessionCopyV1 === b.wholeSessionCopyV1 &&
+    a.sessionTrajectoryV1 === b.sessionTrajectoryV1 &&
+    a.genUiLibrariesV1 === b.genUiLibrariesV1 &&
     a.modelRoutingV1 === b.modelRoutingV1 &&
     a.modelPoolSelectionV1 === b.modelPoolSelectionV1 &&
     a.computerUseSharingV1 === b.computerUseSharingV1 &&
@@ -821,6 +858,8 @@ function capabilitiesEqual(
     a.toolCatalog === b.toolCatalog &&
     a.reviewPlatformV1 === b.reviewPlatformV1 &&
     a.chatMcpCatalogV1 === b.chatMcpCatalogV1 &&
+    a.sessionReferenceBrowseV1 === b.sessionReferenceBrowseV1 &&
+    a.workspaceIconV1 === b.workspaceIconV1 &&
     a.workspaceIdReferencesV1 === b.workspaceIdReferencesV1 &&
     a.userQuestionResponse === b.userQuestionResponse &&
     a.userQuestionInteraction === b.userQuestionInteraction &&
