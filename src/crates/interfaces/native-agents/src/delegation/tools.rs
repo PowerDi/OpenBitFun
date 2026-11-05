@@ -388,6 +388,7 @@ async fn run(
             Ok(DelegationToolOutput::ok(json!({
                 "sessionId": started.session_id,
                 "agent": started.client_id,
+                "title": started.title,
                 "model": model,
                 "status": if started.reused { "existing" } else if started.queued { "queued" } else { "running" },
                 "watching": watching,
@@ -436,12 +437,14 @@ async fn run(
         }
         "session_send" => {
             let input: SendInput = parse(input)?;
-            let (turn_id, queued) =
+            let (child, turn_id, queued) =
                 service::send(caller, &input.session_id, &input.message, input.watch)
                     .await
                     .map_err(failure)?;
             Ok(DelegationToolOutput::ok(json!({
                 "sessionId": input.session_id,
+                "agent": child.agent,
+                "title": child.title,
                 "turnId": turn_id,
                 "status": if queued { "queued" } else { "running" },
                 "watching": input.watch,
@@ -449,19 +452,20 @@ async fn run(
         }
         "session_cancel" => {
             let input: SessionInput = parse(input)?;
-            let turn_id = service::cancel(caller, &input.session_id)
+            let (child, turn_id) = service::cancel(caller, &input.session_id)
                 .await
                 .map_err(failure)?;
             Ok(DelegationToolOutput::ok(json!({
                 "sessionId": input.session_id,
+                "agent": child.agent,
+                "title": child.title,
                 "turnId": turn_id,
                 "cancelled": turn_id.is_some(),
             })))
         }
         "session_watch" => {
             let input: SessionInput = parse(input)?;
-            caller
-                .child_metadata(&input.session_id)
+            let child = service::identity(caller, &input.session_id)
                 .await
                 .map_err(failure)?;
             if !service::is_running(&input.session_id) {
@@ -470,6 +474,9 @@ async fn run(
                     .await
                     .map_err(failure)?;
                 return Ok(DelegationToolOutput::ok(json!({
+                    "sessionId": input.session_id,
+                    "agent": child.agent,
+                    "title": child.title,
                     "state": "alreadyTerminal",
                     "status": snapshot.status,
                 })));
@@ -479,7 +486,12 @@ async fn run(
                 .map(Duration::from_millis)
                 .unwrap_or(service::DEFAULT_WATCH_TIMEOUT);
             service::watch(caller, &input.session_id, timeout);
-            Ok(DelegationToolOutput::ok(json!({"state": "watching"})))
+            Ok(DelegationToolOutput::ok(json!({
+                "sessionId": input.session_id,
+                "agent": child.agent,
+                "title": child.title,
+                "state": "watching",
+            })))
         }
         "session_list" => {
             let input: ListInput = parse(input)?;

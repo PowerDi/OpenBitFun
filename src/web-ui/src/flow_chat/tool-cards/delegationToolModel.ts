@@ -4,7 +4,7 @@ import { readInteractionInput, readToolRecord, toolString } from './toolInteract
 
 /**
  * Native agent delegation tools (`native-agents::delegation`). Every driver
- * reports them as `mcp__openbitfun__<tool>`; the result is the tool's JSON text.
+ * reports them as `mcp__openbitfun__<tool>` with the result `{ result: <JSON text> }`.
  */
 export const DELEGATION_TOOL_SERVER = 'openbitfun';
 
@@ -36,21 +36,41 @@ export function delegationAgentName(clientId: string): string {
   return AGENT_NAMES[clientId] ?? clientId;
 }
 
-/** Native child session ids are `acp_<client>_<uuid>`. */
-export function delegationAgentFromSessionId(sessionId: string): string {
-  return Object.keys(AGENT_NAMES).find(clientId => sessionId.startsWith(`acp_${clientId}_`)) ?? '';
-}
+/**
+ * Child status words of the delegation tools and notices
+ * (`delegation/snapshot.rs`), as session lineage lifecycles.
+ */
+export const DELEGATION_STATUS_LIFECYCLES = {
+  running: 'running',
+  completed: 'completed',
+  failed: 'error',
+  cancelled: 'cancelled',
+  idle: 'idle',
+} as const;
 
-/** Drivers wrap the JSON text as `{ result: text }`; accept the bare record too. */
-export function delegationResult(item: FlowToolItem): Record<string, unknown> {
-  const record = readToolRecord(item.toolResult?.result);
-  if (toolString(record.sessionId) || toolString(record.state) || record.timedOut !== undefined) return record;
-  return readToolRecord(record.result);
+export type DelegationLifecycle =
+  (typeof DELEGATION_STATUS_LIFECYCLES)[keyof typeof DELEGATION_STATUS_LIFECYCLES] | 'finishing' | 'waiting';
+
+export const DELEGATION_LIFECYCLE_LABEL_KEYS: Record<DelegationLifecycle, string> = {
+  running: 'flowChatHeader.agentTreeStatus.running',
+  finishing: 'flowChatHeader.agentTreeStatus.running',
+  waiting: 'flowChatHeader.agentTreeStatus.waiting',
+  completed: 'flowChatHeader.agentTreeStatus.completed',
+  cancelled: 'flowChatHeader.agentTreeStatus.cancelled',
+  error: 'flowChatHeader.agentTreeStatus.error',
+  idle: 'flowChatHeader.agentTreeStatus.idle',
+};
+
+/** i18n key (flow-chat) of a child status word, when it is one. */
+export function delegationStatusLabelKey(status: unknown): string | undefined {
+  const lifecycle = DELEGATION_STATUS_LIFECYCLES[toolString(status) as keyof typeof DELEGATION_STATUS_LIFECYCLES];
+  return lifecycle ? DELEGATION_LIFECYCLE_LABEL_KEYS[lifecycle] : undefined;
 }
 
 export interface DelegationCall {
   kind: DelegationToolKind;
   input: Record<string, unknown>;
+  /** The tool's JSON answer; empty until the call completes. */
   result: Record<string, unknown>;
   sessionId: string;
   agent: string;
@@ -58,16 +78,13 @@ export interface DelegationCall {
 
 export function readDelegationCall(item: FlowToolItem, kind: DelegationToolKind): DelegationCall {
   const input = readInteractionInput(item);
-  const result = delegationResult(item);
-  const sessionId = toolString(result.sessionId) || toolString(input.session_id);
-  const agent = toolString(result.agent) || toolString(input.agent) || delegationAgentFromSessionId(sessionId);
-  return { kind, input, result, sessionId, agent };
-}
-
-/** Session title the child got: the explicit name, else the task's first line. */
-export function delegationTaskTitle(input: Record<string, unknown>): string {
-  const name = toolString(input.task_name);
-  if (name) return name;
-  const line = toolString(input.task).split('\n').find(value => value.trim()) ?? '';
-  return [...line.trim()].slice(0, 40).join('');
+  const result = readToolRecord(readToolRecord(item.toolResult?.result).result);
+  return {
+    kind,
+    input,
+    result,
+    // Every answer names the child; follow-ups know it from their input already.
+    sessionId: toolString(result.sessionId) || toolString(input.session_id),
+    agent: toolString(result.agent) || toolString(input.agent),
+  };
 }

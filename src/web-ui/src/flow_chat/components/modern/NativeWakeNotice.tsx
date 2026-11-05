@@ -1,5 +1,6 @@
 import { BellRing } from 'lucide-react';
 import { useI18n } from '@/infrastructure/i18n';
+import { delegationStatusLabelKey } from '../../tool-cards/delegationToolModel';
 import './NativeWakeNotice.scss';
 
 interface NativeWakeTask {
@@ -13,15 +14,6 @@ interface NativeWakeMetadata extends NativeWakeTask {
   subagentType?: string | null;
   threads?: NativeWakeTask[];
 }
-
-/** Child status words of a delegation notice (`delegation/snapshot.rs`). */
-const DELEGATION_STATUS_KEYS: Record<string, string> = {
-  completed: 'flowChatHeader.agentTreeStatus.completed',
-  failed: 'flowChatHeader.agentTreeStatus.error',
-  cancelled: 'flowChatHeader.agentTreeStatus.cancelled',
-  idle: 'flowChatHeader.agentTreeStatus.idle',
-  running: 'flowChatHeader.agentTreeStatus.running',
-};
 
 /**
  * A native CLI (Claude Code, Codex) resumed the agent on its own after
@@ -51,7 +43,7 @@ export function NativeWakeNotice({ wake, fallback }: { wake: NativeWakeMetadata;
   } else if (wake.source === 'delegation') {
     // A delegated session this one watches stopped (`native-agents::delegation`).
     title = t(wake.status === 'timedOut' ? 'nativeWake.delegationTimedOut' : 'nativeWake.delegationStopped');
-    const status = wake.status ? DELEGATION_STATUS_KEYS[wake.status] : undefined;
+    const status = delegationStatusLabelKey(wake.status);
     detail = [wake.description?.trim(), status ? t(status) : undefined].filter(Boolean).join(' · ');
   } else {
     title = fallback;
