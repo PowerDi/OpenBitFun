@@ -102,7 +102,7 @@ async fn old_app_server_is_refused_at_initialize() {
 async fn projects_thread_notifications_and_ignores_other_threads() {
     let (session, process, _lines) = fixture(Some("th1"));
     session
-        .begin_turn("t1".into(), "list files".into(), None)
+        .begin_turn("t1".into(), "list files".into(), None, None)
         .await
         .unwrap();
     session.state.lock().await.process_id = Some(process.id.clone());
@@ -149,7 +149,7 @@ async fn projects_thread_notifications_and_ignores_other_threads() {
 async fn resume_usage_replay_of_previous_turn_does_not_capture_the_new_turn() {
     let (session, process, mut lines) = fixture(Some("th1"));
     session
-        .begin_turn("t2".into(), "again".into(), None)
+        .begin_turn("t2".into(), "again".into(), None, None)
         .await
         .unwrap();
     session.state.lock().await.process_id = Some(process.id.clone());
@@ -477,7 +477,7 @@ async fn parent_turn_spawning(
     *session.process.lock().await = Some(process.clone());
     *lock(&session.thread_process) = Some(process.id.clone());
     session
-        .begin_turn("t1".into(), "fan out".into(), None)
+        .begin_turn("t1".into(), "fan out".into(), None, None)
         .await
         .unwrap();
     session.state.lock().await.process_id = Some(process.id.clone());
@@ -659,7 +659,7 @@ async fn cancel_suppresses_wake_until_the_user_starts_a_turn() {
 async fn request_user_input_is_answered_from_the_question_card() {
     let (session, process, mut lines) = fixture(Some("th1"));
     session
-        .begin_turn("t1".into(), "hi".into(), None)
+        .begin_turn("t1".into(), "hi".into(), None, None)
         .await
         .unwrap();
     let params = json!({"threadId":"th1","turnId":"ct1","itemId":"q1","isBlocking":true,
@@ -748,7 +748,7 @@ async fn request_user_input_is_answered_from_the_question_card() {
 async fn mcp_elicitations_route_forms_and_decline_url_mode() {
     let (session, process, mut lines) = fixture(Some("th1"));
     session
-        .begin_turn("t1".into(), "hi".into(), None)
+        .begin_turn("t1".into(), "hi".into(), None, None)
         .await
         .unwrap();
     session

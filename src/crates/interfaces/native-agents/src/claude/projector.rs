@@ -125,7 +125,7 @@ impl ClaudeTurnProjector {
         Self {
             session_id: session_id.to_string(),
             turn_id: turn_id.to_string(),
-            model_name: model_name.unwrap_or("claude").to_string(),
+            model_name: model_name.unwrap_or_default().to_string(),
             round_index: 0,
             open_round: None,
             messages: HashMap::new(),

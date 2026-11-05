@@ -996,7 +996,7 @@ impl CodexNativeSession {
         let title_message = (self.state.lock().await.index == 0)
             .then(|| title::title_source(&input.text, original.as_deref()))
             .flatten();
-        self.begin_turn_with(
+        self.begin_turn(
             turn_id.clone(),
             input.text.clone(),
             original,
@@ -1078,17 +1078,8 @@ impl CodexNativeSession {
         params
     }
 
-    #[cfg(test)]
+    /// Open a turn; `metadata` marks system notices (wake, delegation).
     async fn begin_turn(
-        &self,
-        turn_id: String,
-        input: String,
-        original: Option<String>,
-    ) -> OpenBitFunResult<()> {
-        self.begin_turn_with(turn_id, input, original, None).await
-    }
-
-    async fn begin_turn_with(
         &self,
         turn_id: String,
         input: String,
@@ -1112,8 +1103,10 @@ impl CodexNativeSession {
             turn_index: state.index - 1,
             codex_turn_id: None,
         });
-        let mut projector =
-            CodexTurnProjector::new(&self.session_id, &turn_id, state.model.as_deref());
+        // The model Codex resolves for this turn (selection, the thread's
+        // reported model, config default, catalog default): the selector's value.
+        let model = self.effective_model(&self.model_rows());
+        let mut projector = CodexTurnProjector::new(&self.session_id, &turn_id, model.as_deref());
         if manual_compaction {
             projector.mark_manual_compaction();
         }

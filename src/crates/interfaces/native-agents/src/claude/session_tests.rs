@@ -375,6 +375,7 @@ async fn result_keeps_process_alive_and_background_turn_settles() {
             "hello".into(),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -432,6 +433,7 @@ async fn cancellation_routes_interrupt_then_closes_turn_without_kill() {
             "hello".into(),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -504,6 +506,7 @@ async fn cancellation_timeout_signals_only_owned_supervisor() {
             "hello".into(),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -540,6 +543,7 @@ async fn read_loop_drains_frames_and_reports_stderr_on_eof() {
             "hello".into(),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -587,6 +591,7 @@ async fn stale_process_frames_do_not_mutate_new_turn_or_permissions() {
             "hello".into(),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -626,6 +631,7 @@ async fn permission_before_tool_use_is_projected_once_and_routed() {
             "hello".into(),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -687,6 +693,7 @@ async fn subagent_streams_into_linked_read_only_child_session() {
             "go".into(),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -769,6 +776,7 @@ async fn resumed_subagent_appends_to_its_original_child_session() {
             "go".into(),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -830,6 +838,7 @@ async fn subagent_resumed_between_parent_turns_reopens_under_its_last_card() {
             "go".into(),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -885,6 +894,7 @@ async fn trailing_autonomous_result_cannot_settle_next_user_turn() {
             "hello".into(),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -958,7 +968,7 @@ async fn supervisor_exit_settles_turn_even_when_stdout_is_still_open() {
     {
         let mut state = session.state.lock().await;
         session
-            .begin_turn(&mut state, "t1".into(), "hello".into(), None, false)
+            .begin_turn(&mut state, "t1".into(), "hello".into(), None, false, None)
             .await
             .unwrap();
         state.process_id = Some(process.id.clone());
@@ -998,6 +1008,7 @@ async fn retired_reader_eof_cannot_fail_unbound_startup_error_turn() {
             "hello".into(),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -1138,6 +1149,7 @@ async fn compaction_frames_emit_one_lifecycle_and_local_command_text() {
                 .into(),
                 None,
                 false,
+                None,
             )
             .await
             .unwrap();
@@ -1200,6 +1212,7 @@ async fn boundary_without_status_and_failed_compaction_are_projected() {
             "hello".into(),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -1247,6 +1260,7 @@ async fn todo_write_publishes_session_plan_without_consuming_tool_cards() {
             "plan".into(),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -1301,6 +1315,7 @@ async fn todo_write_publishes_session_plan_without_consuming_tool_cards() {
             "continue".into(),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -1864,6 +1879,7 @@ async fn background_agent_completion_labels_the_cli_wake_turn() {
             "go".into(),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -1907,6 +1923,7 @@ async fn notification_taken_into_running_turn_does_not_label_a_later_turn() {
             "go".into(),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -2012,6 +2029,7 @@ async fn mcp_elicitation_form_round_trips_through_the_question_card() {
             "hi".into(),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -2100,6 +2118,7 @@ async fn unanswered_elicitation_is_cancelled_when_the_turn_ends() {
             "hi".into(),
             None,
             false,
+            None,
         )
         .await
         .unwrap();

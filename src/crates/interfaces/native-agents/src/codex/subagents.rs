@@ -373,7 +373,7 @@ impl CodexNativeSession {
         let (input, metadata) = wake_input(&reasons);
         let turn_id = uuid::Uuid::new_v4().to_string();
         if let Err(error) = self
-            .begin_turn_with(turn_id.clone(), input, None, Some(metadata))
+            .begin_turn(turn_id.clone(), input, None, Some(metadata))
             .await
         {
             log::warn!("Codex wake turn could not start: {error}");
