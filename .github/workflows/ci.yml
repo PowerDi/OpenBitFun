@@ -100,6 +100,9 @@ jobs:
       - name: Validate Relay deployment and packaging contracts
         run: node --test scripts/relay/*.test.mjs
 
+      - name: Validate market image build contexts
+        run: node --test scripts/market/*.test.mjs
+
       - name: Verify minisign download fallback
         run: |
           set -euo pipefail
@@ -329,6 +332,9 @@ jobs:
       - name: Run core library tests
         if: runner.os != 'Linux'
         run: cargo test --locked -p openbitfun-core --lib
+
+      - name: Run portable Office document engine tests
+        run: cargo test --locked -p openbitfun-office-documents
 
       - name: Run full core library tests on Linux
         if: runner.os == 'Linux'

@@ -1,5 +1,6 @@
 import { requireSessionOwningWorkspaceId } from '../../utils/sessionOrdering';
 import { isSessionEmptyForCopy } from '../../utils/sessionCopy';
+import { shouldIncludeInternalSession } from '../../utils/internalSession';
 /**
  * Session management module
  * Handles session creation, switching, deletion, and other operations
@@ -297,7 +298,7 @@ async function hydrateHistoricalSession(
         ? i18nService.t('flow-chat:externalHistory.unsupported')
         : sourceHistory?.sourceStatus === 'unavailable' && !sourceHistory.contentVersion
           ? i18nService.t('flow-chat:externalHistory.unavailableWithoutCache')
-          : 'Failed to load session history, showing empty session';
+          : i18nService.t('flow-chat:historyState.failedTitle');
       notificationService.warning(message, {
         duration: 3000
       });
@@ -325,7 +326,7 @@ export async function hydrateSessionHistoryForDetail(
   const session = context.flowChatStore.getState().sessions.get(sessionId);
   await hydrateHistoricalSession(context, sessionId, false, {
     allowNonHistorical: true,
-    includeInternal: session?.sessionKind === 'subagent',
+    includeInternal: shouldIncludeInternalSession(session),
     deferFullHistoryUntilActive: false,
   });
 }
@@ -1173,7 +1174,7 @@ export async function ensureBackendSession(
     await agentAPI.ensureCoordinatorSession({
       sessionId,
       workspaceId,
-      includeInternal: latestSession.sessionKind === 'subagent',
+      includeInternal: shouldIncludeInternalSession(latestSession),
     });
     surfaceScope.assertCurrent('ensure coordinator session');
     markBackendContextReady();

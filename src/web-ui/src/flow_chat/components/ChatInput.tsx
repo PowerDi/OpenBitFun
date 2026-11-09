@@ -1,5 +1,6 @@
 import { useDeviceDirectory, resolveDeviceNameFrom } from '@/infrastructure/account/deviceDirectory';
 import { ChatInputAttachments } from './ChatInputAttachments';
+import { readCompactComposerInputWidth } from './compactComposerInputWidth';
 import { useExcerptComposerActions } from '../selection/useExcerptComposerActions';
 import { isConversationExcerpt, formatConversationExcerpt } from '@/shared/utils/conversationExcerpt';
 import { withConversationExcerpts } from '../utils/composerPresentation';
@@ -89,7 +90,7 @@ import {
   sessionComposerStore,
   type PendingLargePasteMap,
 } from '../store/sessionComposerStore';
-import { getActiveSurfaceScope } from '@/infrastructure/peer-device/deviceSurface';
+import { getActiveSurfaceScope, isSurfaceChangedError } from '@/infrastructure/peer-device/deviceSurface';
 import { useAssistantBootstrap } from '@/app/hooks/useAssistantBootstrap';
 import {
   clearComposerForSubmission,
@@ -118,6 +119,11 @@ import { ThreadGoalDialogs } from './thread-goal/ThreadGoalDialogs';
 import { getAppearanceOverlayHost } from '@/infrastructure/appearance/runtime/AppearanceOverlayHost';
 import { useAnchoredPopoverPosition } from '@/shared/utils/useAnchoredPopoverPosition';
 import { FlowChatManager } from '@/flow_chat/services/FlowChatManager';
+import {
+  isManualCompactionPending,
+  markManualCompactionPending,
+  settleManualCompaction,
+} from '../services/manualCompactionState';
 import { interruptedTurnRecoveryGate } from '@/flow_chat/services/interruptedTurnRecoveryGate';
 import {
   getDeepReviewLaunchErrorMessage,
@@ -243,11 +249,21 @@ import {
 } from '../utils/tokenUsageDisplay';
 import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
 import type { SessionPermissionMode } from '@/infrastructure/api/service-api/AgentAPI';
-import { isSessionInUseError } from '@/infrastructure/api/errors/TauriCommandError';
+import {
+  isOutcomeUnknownError,
+  isSessionInUseError,
+  isTauriCommandError,
+} from '@/infrastructure/api/errors/TauriCommandError';
 import { isPeerDeviceModeActive } from '@/infrastructure/peer-device/peerModeFlag';
 import { usePeerDeviceModeOptional } from '@/infrastructure/peer-device/peerDeviceContextState';
-import { isBtwSessionDraft } from '../utils/modelSelectionTarget';
+import { isBtwParentBackedSession, isBtwSessionDraft } from '../utils/modelSelectionTarget';
+import { shouldIncludeInternalSession } from '../utils/internalSession';
 import { hasSessionStarted, isSessionBindingLocked } from '../utils/sessionLifecycle';
+import {
+  canTreatMissingPermissionModeAsDefault,
+  isSessionNotFoundError,
+  sessionPermissionModeScope,
+} from '../utils/sessionPermissionMode';
 import { prepareSessionDraftForCommand } from '../services/sessionDraftService';
 import { useSessionWorkspaceSelection } from '../hooks/useSessionWorkspaceSelection';
 import { SubagentAvatar, resolveSubagentNameKey } from '../subagent-identity';
@@ -258,12 +274,23 @@ import { useWindowsFileDropPreview } from '@/infrastructure/files/useWindowsFile
 import type { FileDropPreview, FileDropPosition } from '@/shared/types/fileDropPreview';
 import { resolveBrowserDroppedFilePaths } from '@/infrastructure/files/resolveBrowserDroppedFilePaths';
 import {
+  buildControllerFileContexts,
   buildExternalFileContexts,
   partitionExternalDropFiles,
   resolveExternalFileIntakeAvailability,
   shouldAttemptNativeClipboardImageRead,
+  type ExternalFileIntakeFailure,
   type ExternalFileSource,
 } from '../utils/externalFileIntake';
+import {
+  MAX_CONTROLLER_ATTACHMENT_BYTES,
+  canUploadControllerFiles,
+  getControllerClipboardFiles,
+  getControllerClipboardImage,
+  getControllerFileMetadata,
+  readControllerImageContext,
+  uploadControllerFileToRuntime,
+} from '../utils/controllerFileTransfer';
 import { selectInterruptedTurnRecovery } from '../utils/interruptedTurnRecovery';
 import {
   chatInputPermissionMode,
@@ -309,6 +336,18 @@ import {
 } from '@openbitfun/ui/flow-chat';
 
 const log = createLogger('ChatInput');
+
+function manualCompactionTurnId(): string {
+  return globalThis.crypto?.randomUUID?.()
+    ?? `manual-compact-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function isUncertainCompactionOutcome(error: unknown): boolean {
+  if (isSurfaceChangedError(error) || isOutcomeUnknownError(error)) return true;
+  if (isTauriCommandError(error) && error.isNetworkError()) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /timeout|network|connection|fetch|transport|aborted|surface changed/i.test(message);
+}
 
 export interface ChatInputProps {
   /** Conversation hosts use an in-flow composer without the workbench context bar. */
@@ -524,6 +563,8 @@ interface ExternalFileIntakeRequest {
   sessionId: string | null;
   surfaceEpoch: number;
   targetKey: string;
+  /** Workspace record the session executes in; scopes staged controller files. */
+  executionWorkspaceId: string;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
@@ -720,8 +761,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const effectiveTargetSession = effectiveTargetSessionId
     ? flowChatState.sessions.get(effectiveTargetSessionId)
     : undefined;
+  const hasEffectiveTargetSession = effectiveTargetSession !== undefined;
   const peer = usePeerDeviceModeOptional();
   const isBtwDraftTarget = isBtwSessionDraft(effectiveTargetSession);
+  const isBtwParentBackedTarget = isBtwParentBackedSession(effectiveTargetSession);
   const btwDraftSettingsInherited = isBtwDraftTarget && Boolean(peer?.peerMode.active)
     && (effectiveTargetSession?.config.modelPoolId
       ? peer?.currentPeerCapabilities?.btwModelPoolSelectionV1 !== true
@@ -903,6 +946,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     if (!containerEl || !boxEl) {
       return null;
     }
+
+    // A compact composer already has the track we want. Cloning it here adds
+    // DOM/style invalidation and a second layout on every session attachment.
+    const compactWidth = readCompactComposerInputWidth(containerEl);
+    if (compactWidth !== null) return compactWidth;
 
     const clone = containerEl.cloneNode(true) as HTMLElement;
     clone.style.position = 'fixed';
@@ -1112,8 +1160,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
 
     let rafId: number | null = null;
-    // Only width feeds the capsule measurement, and re-measuring clones the whole
-    // composer into the document (two forced layouts). The box height animates on
+    // Only width feeds the capsule measurement. Expanded composers still need
+    // a compact clone (two forced layouts). The box height animates on
     // every capsule ↔ multi-line flip, so reacting to height would run that clone
     // once per frame of the transition — exactly while the user is typing at the
     // wrap boundary. Ignore entries whose width is unchanged.
@@ -1215,9 +1263,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   // while the owning project resolves to the identical session directory.
   const sessionOwningId = effectiveTargetSession
     ? sessionOwningWorkspaceId(effectiveTargetSession)
-    : undefined;
-  const sessionOwningPath = effectiveTargetSession
-    ? sessionProjectWorkspacePath(effectiveTargetSession)
     : undefined;
   // Workspace record the input addresses, or the context workspace while no
   // session exists yet. An empty string means the targeted session has no
@@ -2609,6 +2654,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       setActiveTurnPermissionMode(null);
       return undefined;
     }
+    if (!hasEffectiveTargetSession) {
+      setSessionPermissionMode(null);
+      setSessionPermissionModeUnread(false);
+      return undefined;
+    }
     if (effectiveTargetSession?.draft) {
       setSessionPermissionMode(effectiveTargetSession.draft.permissionMode ?? null);
       setSessionPermissionModeUnread(false);
@@ -2617,6 +2667,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     void (async () => {
       try {
         const permissionSessionId = isBtwDraftTarget
+          || isBtwParentBackedTarget
           ? effectiveTargetSession?.parentSessionId : effectiveTargetSessionId;
         if (!permissionSessionId) return;
         const response = await readComposerPermissionMode({
@@ -2625,10 +2676,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         }, () => agentAPI.getSessionPermissionMode({
           sessionId: permissionSessionId,
           turnId: activePermissionTurnId ?? undefined,
-          workspaceId: sessionOwningId,
-          workspacePath: sessionOwningPath,
-          remoteConnectionId: effectiveTargetSession?.remoteConnectionId,
-          remoteSshHost: effectiveTargetSession?.remoteSshHost,
+          ...sessionPermissionModeScope(effectiveTargetSession),
         }));
         if (permissionModeRequestGenerationRef.current !== generation) return;
         setSessionPermissionMode(response.mode ?? null);
@@ -2639,6 +2687,28 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         }
       } catch (error) {
         log.warn('Failed to read session permission mode', error);
+        if (
+          permissionModeRequestGenerationRef.current === generation
+          && isSessionNotFoundError(error)
+          && canTreatMissingPermissionModeAsDefault(
+            hasEffectiveTargetSession
+              ? {
+                  dialogTurns: effectiveTargetSession?.dialogTurns ?? [],
+                  historyState: effectiveTargetSession?.historyState,
+                  isHistorical: effectiveTargetSession?.isHistorical,
+                  persistedTurnCount: effectiveTargetSession?.persistedTurnCount,
+                }
+              : undefined,
+          )
+        ) {
+          // A newly reserved empty Session is intentionally host-less until
+          // its first message. Keep the default mode without reporting a
+          // failed read; later materialization reruns this effect.
+          setSessionPermissionMode(null);
+          setSessionPermissionModeUnread(false);
+          permissionModeUnreadNotifiedRef.current = null;
+          return;
+        }
         // Falling back to the global default is the safe read: it never shows a
         // wider mode than the session actually runs with. Report the fallback
         // once per Session so it cannot pass for that Session's own selection.
@@ -2660,18 +2730,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   }, [
     activePermissionTurnId,
     effectiveTargetSessionId,
-    sessionOwningId,
-    sessionOwningPath,
-    effectiveTargetSession?.workspacePath,
-    effectiveTargetSession?.remoteConnectionId,
-    effectiveTargetSession?.remoteSshHost,
-    effectiveTargetSession?.parentSessionId,
-    effectiveTargetSession?.draft,
-    effectiveTargetSession?.externalHistory,
-    effectiveTargetSession?.externalContinuationPermissionMode,
+    effectiveTargetSession,
     isBtwDraftTarget,
+    isBtwParentBackedTarget,
     isAcpTargetSession,
     t,
+    hasEffectiveTargetSession,
   ]);
 
   const applySessionPermissionMode = useCallback(async (
@@ -2721,10 +2785,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         sessionId: targetSessionId,
         mode: nextMode,
         turnId: targetTurnId ?? undefined,
-        workspaceId: sessionOwningId,
-        workspacePath: sessionOwningPath,
-        remoteConnectionId: effectiveTargetSession?.remoteConnectionId,
-        remoteSshHost: effectiveTargetSession?.remoteSshHost,
+        ...sessionPermissionModeScope(effectiveTargetSession),
       });
       if (
         permissionModeRequestGenerationRef.current === generation
@@ -2756,10 +2817,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
   }, [
     effectiveTargetSessionId,
-    sessionOwningId,
-    sessionOwningPath,
-    effectiveTargetSession?.remoteConnectionId,
-    effectiveTargetSession?.remoteSshHost,
+    effectiveTargetSession,
     activeTurnPermissionMode,
     sessionPermissionMode,
     t,
@@ -2844,10 +2902,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         sessionId: targetSessionId,
         turnId: targetTurnId,
         mode: nextTemporaryMode,
-        workspaceId: sessionOwningId,
-        workspacePath: sessionOwningPath,
-        remoteConnectionId: effectiveTargetSession?.remoteConnectionId,
-        remoteSshHost: effectiveTargetSession?.remoteSshHost,
+        ...sessionPermissionModeScope(effectiveTargetSession),
       });
       if (
         permissionModeRequestGenerationRef.current === generation
@@ -2880,12 +2935,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     activeTurnPermissionMode,
     armedTurnPermissionMode,
     confirmFullAccessIfNeeded,
-    effectiveTargetSession?.remoteConnectionId,
-    effectiveTargetSession?.remoteSshHost,
+    effectiveTargetSession,
     effectiveTargetSessionId,
     isAcpTargetSession,
-    sessionOwningId,
-    sessionOwningPath,
     permissionModeSaving,
     t,
   ]);
@@ -3811,6 +3863,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       return;
     }
 
+    if (isManualCompactionPending(effectiveTargetSessionId)) {
+      notificationService.info(t('chatInput.compactPending'));
+      return;
+    }
+
     if (derivedState?.isProcessing) {
       notificationService.warning(
         t('chatInput.compactBusy')
@@ -3826,17 +3883,30 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       return;
     }
 
+    const requestedTurnId = manualCompactionTurnId();
+    markManualCompactionPending(effectiveTargetSessionId, requestedTurnId);
     dispatchInput({ type: 'CLEAR_VALUE' });
     setQueuedInput(null);
     setSlashCommandState({ isActive: false, kind: 'all', query: '', selectedIndex: 0 });
 
     try {
-      await FlowChatManager.getInstance().compactSession(effectiveTargetSessionId);
+      const result = await FlowChatManager.getInstance().compactSession(
+        effectiveTargetSessionId,
+        requestedTurnId,
+      );
+      if (!result.accepted) {
+        throw new Error(t('chatInput.compactFailed'));
+      }
     } catch (error) {
       log.error('Failed to trigger /compact', {
         error,
         sessionId: effectiveTargetSessionId,
       });
+      if (isUncertainCompactionOutcome(error)) {
+        notificationService.info(t('chatInput.compactPending'));
+        return;
+      }
+      settleManualCompaction(effectiveTargetSessionId, requestedTurnId);
       dispatchInput({ type: 'SET_VALUE', payload: message });
       notificationService.error(
         error instanceof Error ? error.message : t('error.unknown'),
@@ -4755,7 +4825,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     ? {
         sessionId: effectiveTargetSessionId,
         draft: !!effectiveTargetSession.draft,
+        workspaceId: sessionOwningWorkspaceId(effectiveTargetSession),
         workspacePath: sessionProjectWorkspacePath(effectiveTargetSession),
+        includeInternal: shouldIncludeInternalSession(effectiveTargetSession),
         remoteConnectionId:
           effectiveTargetSession.remoteConnectionId ||
           effectiveTargetSession.config.remoteConnectionId,
@@ -4952,6 +5024,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     externalFileAvailability.supported ? 'supported' : externalFileAvailability.reason,
     effectiveTargetSession?.config.dispatchJobId ?? '',
     effectiveTargetSession?.config.dispatchTarget ?? null,
+    executionWorkspaceId ?? '',
   ]);
   externalFileIntakeTargetKeyRef.current = externalFileIntakeTargetKey;
 
@@ -4960,9 +5033,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     sessionId: effectiveTargetSessionId,
     surfaceEpoch: deviceSurfaceScope.epoch,
     targetKey: externalFileIntakeTargetKey,
+    executionWorkspaceId: executionWorkspaceId ?? '',
   }), [
     deviceSurfaceScope.epoch,
     effectiveTargetSessionId,
+    executionWorkspaceId,
     externalFileAvailability,
     externalFileIntakeTargetKey,
   ]);
@@ -5042,7 +5117,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
    */
   const readPastedClipboardImage = useCallback(async (request: ExternalFileIntakeRequest) => {
     try {
-      const image = await workspaceAPI.getClipboardImage();
+      // The clipboard belongs to this controller even when another device
+      // executes the session.
+      const image = await getControllerClipboardImage();
       if (!image || !isExternalFileIntakeRequestCurrent(request)) return;
       const binary = atob(image.base64);
       const bytes = new Uint8Array(binary.length);
@@ -5054,7 +5131,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       await addClipboardImageFiles(request, [file]);
     } catch (error) {
       log.warn('Native clipboard image read failed', { error });
-      if (String(error).startsWith('clipboard_image_unsupported:')) {
+      if (String(error).includes('clipboard_image_unsupported:')) {
         notificationService.warning(t('input.clipboardImageToolsUnavailable'), {
           duration: 4000,
         });
@@ -5062,12 +5139,122 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
   }, [addClipboardImageFiles, isExternalFileIntakeRequestCurrent, t]);
 
+  const notifyExternalFileFailures = useCallback((
+    failures: ExternalFileIntakeFailure[],
+    addedCount: number,
+    fileUnsupportedMessage?: string,
+  ) => {
+    if (failures.length === 0) return;
+    const only = (reason: ExternalFileIntakeFailure['reason']) =>
+      failures.every(failure => failure.reason === reason);
+    const first = failures[0];
+    const firstName = first.path.split(/[\\/]/).pop() || first.path;
+    let message: string;
+    if (only('image-limit')) {
+      message = t('input.maxImagesWarning', { count: maxImageCount });
+    } else if (only('directory')) {
+      message = t('input.externalFiles.controllerDirectoryUnsupported');
+    } else if (only('file-unsupported') && fileUnsupportedMessage) {
+      message = fileUnsupportedMessage;
+    } else if (failures.length === 1 && first.reason === 'too-large') {
+      message = t('input.externalFiles.controllerFileTooLarge', {
+        name: firstName,
+        limit: Math.round(MAX_CONTROLLER_ATTACHMENT_BYTES / (1024 * 1024)),
+      });
+    } else if (failures.length === 1 && (first.reason === 'upload' || first.reason === 'read')) {
+      message = t('input.externalFiles.controllerUploadFailed', {
+        name: firstName,
+        error: first.detail || t('error.unknown'),
+      });
+    } else {
+      message = t('input.externalFiles.partialFailure', {
+        failed: failures.length,
+        added: addedCount,
+      });
+    }
+    notificationService.warning(message, { duration: 5000 });
+  }, [maxImageCount, t]);
+
+  /**
+   * Attach controller files to a session that executes elsewhere. Images are
+   * sent as pixels; other files are staged on the execution host when it can
+   * receive them. A controller path is never sent as a reference.
+   */
+  const addControllerFiles = useCallback(async (
+    request: ExternalFileIntakeRequest,
+    source: ExternalFileSource,
+    paths: string[],
+  ) => {
+    const scope = getActiveSurfaceScope();
+    if (scope.epoch !== request.surfaceEpoch) return;
+    const reason = request.availability.supported ? undefined : request.availability.reason;
+    const workspaceId = request.executionWorkspaceId;
+    // Why non-image files cannot be staged, checked in the order a user can act on.
+    const fileUnsupportedMessage = reason === 'detached-dispatch'
+      ? t('input.externalFiles.unsupported.detached-dispatch')
+      : !workspaceId
+        ? t('input.externalFiles.controllerFilesNeedWorkspace')
+        : !canUploadControllerFiles(scope)
+          ? t('input.externalFiles.unsupported.peer-device')
+          : undefined;
+    const uploadable = fileUnsupportedMessage === undefined;
+    const isCurrent = () => isExternalFileIntakeRequestCurrent(request);
+    let announcedUpload = false;
+
+    const result = await buildControllerFileContexts({
+      source,
+      paths,
+      existingContexts: contextStore.getState().contexts,
+      maxImageCount,
+      maxFileBytes: MAX_CONTROLLER_ATTACHMENT_BYTES,
+      loadMetadata: getControllerFileMetadata,
+      readImage: (path, name) => readControllerImageContext(path, name),
+      uploadFile: uploadable
+        ? (path, name) => {
+            if (!announcedUpload) {
+              announcedUpload = true;
+              notificationService.info(
+                t('input.externalFiles.controllerUploading', { count: paths.length }),
+                { duration: 2500 },
+              );
+            }
+            return uploadControllerFileToRuntime({
+              path,
+              name,
+              workspaceId,
+              scope,
+              isCurrent,
+            });
+          }
+        : undefined,
+      isCurrent,
+    });
+    if (!isCurrent()) return;
+
+    for (const context of result.contexts) {
+      addContext(context);
+      if (context.type === 'image') {
+        undoImageStackRef.current.push(context.id);
+      } else {
+        richTextInputRef.current?.insertTag?.(context);
+      }
+    }
+    notifyExternalFileFailures(result.failures, result.contexts.length, fileUnsupportedMessage);
+  }, [
+    addContext,
+    contextStore,
+    isExternalFileIntakeRequestCurrent,
+    maxImageCount,
+    notifyExternalFileFailures,
+    t,
+  ]);
+
   const addExternalPaths = useCallback(async (
     request: ExternalFileIntakeRequest,
     source: ExternalFileSource,
     paths: string[],
   ) => {
-    if (!request.availability.supported) {
+    if (!request.availability.supported && request.availability.reason === 'web') {
       notificationService.warning(
         t(`input.externalFiles.unsupported.${request.availability.reason}`),
         { duration: 4000 },
@@ -5081,6 +5268,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           : 'input.externalFiles.dropPathsUnavailable'),
         { duration: 4000 },
       );
+      return;
+    }
+    if (!request.availability.supported) {
+      await addControllerFiles(request, source, paths);
       return;
     }
 
@@ -5101,22 +5292,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       }
     }
 
-    if (result.failures.length > 0) {
-      const imageLimitCount = result.failures.filter(failure => failure.reason === 'image-limit').length;
-      notificationService.warning(
-        imageLimitCount === result.failures.length
-          ? t('input.maxImagesWarning', { count: maxImageCount })
-          : t('input.externalFiles.partialFailure', {
-              failed: result.failures.length,
-              added: result.contexts.length,
-            }),
-        { duration: 4000 },
-      );
-    }
+    notifyExternalFileFailures(result.failures, result.contexts.length);
   }, [
     addContext,
+    addControllerFiles,
     contextStore,
     isExternalFileIntakeRequestCurrent,
+    notifyExternalFileFailures,
     sessionBoundWorkspacePath,
     maxImageCount,
     t,
@@ -5130,7 +5312,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
    */
   const readPastedClipboardFiles = useCallback(async (request: ExternalFileIntakeRequest) => {
     try {
-      const { files } = await workspaceAPI.getClipboardFiles();
+      const { files } = await getControllerClipboardFiles();
       if (!isExternalFileIntakeRequestCurrent(request)) return false;
       if (files.length === 0) return false;
       await addExternalPaths(request, 'clipboard', files);
@@ -5156,6 +5338,19 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     const request = captureExternalFileIntakeRequest();
     return enqueueExternalFileIntake(request, async () => {
       if (!request.availability.supported) {
+        if (request.availability.reason !== 'web') {
+          // The clipboard of this controller, not of the rendered device.
+          try {
+            const { files } = await getControllerClipboardFiles();
+            if (!isExternalFileIntakeRequestCurrent(request)) return;
+            if (files.length > 0) {
+              await addControllerFiles(request, 'clipboard', files);
+              return;
+            }
+          } catch (error) {
+            log.warn('Failed to read controller clipboard file paths', error);
+          }
+        }
         await addClipboardImageFiles(request, paste.fallbackImages);
         if (paste.hasNonImageFiles || paste.fallbackImages.length === 0) {
           notificationService.warning(
@@ -5167,7 +5362,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       }
 
       try {
-        const { files } = await workspaceAPI.getClipboardFiles();
+        const { files } = await getControllerClipboardFiles();
         if (!isExternalFileIntakeRequestCurrent(request)) return;
         if (files.length > 0) {
           await addExternalPaths(request, 'clipboard', files);
@@ -5187,6 +5382,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     });
   }, [
     addClipboardImageFiles,
+    addControllerFiles,
     addExternalPaths,
     captureExternalFileIntakeRequest,
     enqueueExternalFileIntake,
@@ -5197,6 +5393,34 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const handleHtmlExternalFilesDrop = useCallback((files: File[]) => {
     const request = captureExternalFileIntakeRequest();
     return enqueueExternalFileIntake(request, async () => {
+      if (!request.availability.supported && request.availability.reason !== 'web') {
+        // Files with a controller path go through the controller intake, which
+        // de-duplicates against the native drop of the same paths. Pathless
+        // images already carry their pixels.
+        let dropPayload = partitionExternalDropFiles(files, true);
+        if (dropPayload.paths.length !== files.length && files.length > 0) {
+          try {
+            // Controller-local command: resolves paths on this device.
+            const resolvedPaths = await resolveBrowserDroppedFilePaths(files);
+            if (resolvedPaths.length === files.length && resolvedPaths.every(Boolean)) {
+              dropPayload = { paths: resolvedPaths, fallbackImages: [], hasUnavailableFiles: false };
+            }
+          } catch (error) {
+            log.warn('Failed to resolve browser-dropped file paths', error);
+          }
+        }
+        await addClipboardImageFiles(request, dropPayload.fallbackImages);
+        if (dropPayload.paths.length > 0) {
+          await addControllerFiles(request, 'drop', dropPayload.paths);
+        }
+        if (dropPayload.hasUnavailableFiles && isExternalFileIntakeRequestCurrent(request)) {
+          notificationService.warning(
+            t('input.externalFiles.dropPathsUnavailable'),
+            { duration: 4000 },
+          );
+        }
+        return;
+      }
       const dropPayload = partitionExternalDropFiles(
         files,
         request.availability.supported,
@@ -5244,6 +5468,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     });
   }, [
     addClipboardImageFiles,
+    addControllerFiles,
     addExternalPaths,
     captureExternalFileIntakeRequest,
     enqueueExternalFileIntake,
@@ -5272,7 +5497,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       // An engine that delivered real File objects already ran the in-page file
       // branch; reading the host clipboard again would attach twice.
       if (types.includes('Files')) return;
-      if (!externalFileAvailability.supported) return;
+      if (!externalFileAvailability.supported && externalFileAvailability.reason === 'web') return;
       const emptyTyped = shouldAttemptNativeClipboardImageRead(types);
       if (!emptyTyped && !isLinuxDesktopRuntime()) return;
       const request = captureExternalFileIntakeRequest();
@@ -6460,8 +6685,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             onOpen: () => {
               void threadGoalController.openGoalEntry();
             },
-            onAction: action => {
-              void threadGoalController.runUiAction(action);
+            onAction: (action, trigger) => {
+              void threadGoalController.runUiAction(action, trigger);
             },
           }
         : undefined}

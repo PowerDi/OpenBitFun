@@ -1,5 +1,5 @@
 import { isPrimaryAgent, isOrdinaryAgent } from './agentVisibility';
-import {
+import { captureConfirmationAnchor,
   Button, Combobox, Dialog, DialogBody, DialogClose, DialogFooter,
   DialogHeader, DialogHeaderActions, DialogHeading, DialogTitle, Field,
   FormSection, Icon, IconButton, SearchField, Select, StatusPill, Toolbar, Tooltip,
@@ -208,12 +208,17 @@ const AgentsHomeView: React.FC = () => {
   } = useUserSkillGroups();
 
   const {
+    catalogContextKey,
     workspaceId,
     allAgents,
     filteredAgents,
     loading,
+    countsLoading = false, catalogError, countsError,
+    detailsLoading = false, detailsLoaded = true, detailsError, loadAgentDetails,
+    getAgentSkillCount, getAgentSubagentCount,
     availableTools,
     toolCatalogStatus,
+    modelCatalogReady = true,
     configuredModels = [],
     modelPools = [],
     getModeProfile,
@@ -229,6 +234,8 @@ const AgentsHomeView: React.FC = () => {
     handleSetSubagentEnabled,
     handleSetSubagentModel,
   } = useAgentsList({
+    // Start explicit management reads during the retained size transition.
+    selectedAgentId: detailView !== 'preview' ? selectedAgentId : null,
     searchQuery,
     filterLevel: agentFilterLevel,
     filterType: agentFilterType,
@@ -249,9 +256,8 @@ const AgentsHomeView: React.FC = () => {
 
   useGallerySceneAutoRefresh({
     sceneId: 'agents',
-    refetch: () => {
-      void loadAgents();
-      void reloadSkillGroups();
+    refetch: async () => {
+      await Promise.all([loadAgents({ background: true }), reloadSkillGroups()]);
     },
   });
 
@@ -397,21 +403,21 @@ const AgentsHomeView: React.FC = () => {
     }
     return agent.toolCount ?? 0;
   }, [getModeConfig]);
-  const getDisplayedSkillCount = useCallback((agent: AgentWithCapabilities): number => {
+  const getDisplayedSkillCount = useCallback((agent: AgentWithCapabilities): number | null => {
     const configuredTools = isPrimaryAgent(agent)
       ? (getModeConfig(agent.id)?.enabled_tools ?? agent.defaultTools ?? [])
       : (agent.defaultTools ?? []);
     return hasSkillTool(configuredTools)
-      ? getConfiguredEnabledSkillKeys(getAgentSkills(agent.id)).length
+      ? getAgentSkillCount(agent.id)
       : 0;
-  }, [getAgentSkills, getModeConfig]);
-  const getDisplayedSubagentCount = useCallback((agent: AgentWithCapabilities): number => {
+  }, [getAgentSkillCount, getModeConfig]);
+  const getDisplayedSubagentCount = useCallback((agent: AgentWithCapabilities): number | null => {
     if (!isPrimaryAgent(agent)) {
       return 0;
     }
     const configuredTools = getModeConfig(agent.id)?.enabled_tools ?? agent.defaultTools ?? [];
-    return hasAgentCollaborationTool(configuredTools) ? (agent.visibleSubagentCount ?? 0) : 0;
-  }, [getModeConfig]);
+    return hasAgentCollaborationTool(configuredTools) ? getAgentSubagentCount(agent.id) : 0;
+  }, [getAgentSubagentCount, getModeConfig]);
   const selectedAgentSourceLabel = selectedAgent
     ? subagentSourceLabel(selectedAgent.source ?? selectedAgent.subagentSource, t)
     : '';
@@ -597,6 +603,10 @@ const AgentsHomeView: React.FC = () => {
     resetEditState();
   }, [resetEditState]);
 
+  // Detail drafts belong to their device/workspace. Same-owner navigation and
+  // background reads keep them mounted; changing the owner fences old writes.
+  useEffect(() => closeAgentDetails(), [catalogContextKey, closeAgentDetails]);
+
   const openCapabilitySection = (section: CapabilitySection) => {
     captureDetailSize();
     lastCapabilityEntry.current = section;
@@ -623,7 +633,7 @@ const AgentsHomeView: React.FC = () => {
     }
   }, [activeDetailSection, selectedAgentCapabilities]);
 
-  const handleDeleteCustomAgent = useCallback(async () => {
+  const handleDeleteCustomAgent = useCallback(async (trigger?: HTMLElement) => {
     if (!selectedAgent) return;
     if (['builtin', 'external'].includes(
       selectedAgent.source ?? selectedAgent.subagentSource ?? 'builtin',
@@ -635,6 +645,7 @@ const AgentsHomeView: React.FC = () => {
     const ok = await confirmDanger(
       t('agentsOverview.deleteAgent'),
       t('agentsOverview.deleteConfirm', { name }),
+      { anchor: captureConfirmationAnchor(trigger) },
     );
     if (!ok) return;
     setDeletingAgent(true);
@@ -904,6 +915,7 @@ const AgentsHomeView: React.FC = () => {
             </div>
           </div>
 
+          {catalogError || countsError ? <div role="alert">{catalogError ?? countsError}<Button onClick={() => void loadAgents({ background: true, force: true })}>{t('agentsOverview.form.wizard.retry')}</Button></div> : null}
           {loading ? renderSkeletons('agent') : null}
 
           {!loading && catalogAgents.length === 0 ? (
@@ -926,6 +938,7 @@ const AgentsHomeView: React.FC = () => {
                   toolCount: getDisplayedToolCount(agent),
                   skillCount: getDisplayedSkillCount(agent),
                   subagentCount: getDisplayedSubagentCount(agent),
+                  countsLoading,
                   onOpenDetails: openAgentDetails,
                   disabledReason: agent.id === 'ComputerUse' && !computerUseEnabled
                     ? t('coreAgentsZone.computerUseDisabledBadge')
@@ -982,7 +995,7 @@ const AgentsHomeView: React.FC = () => {
                         aria-label={t('agentsOverview.deleteAgent')}
                         size="sm"
                         loading={deletingAgent}
-                        onClick={() => void handleDeleteCustomAgent()}
+                        onClick={event => void handleDeleteCustomAgent(event.currentTarget)}
                         icon={<Icon name="delete" />}
                       />
                     </Tooltip>
@@ -1081,8 +1094,12 @@ const AgentsHomeView: React.FC = () => {
               aria-label={activeDetailSection === 'basic' ? t('agentsOverview.detail.overview') : undefined}
               aria-labelledby={activeDetailSection !== 'basic' ? `${detailId}-section-title` : undefined}
               data-detail-page={activeDetailSection}
+              data-agent-detail-loading={detailsLoading || undefined}
+              aria-busy={detailsLoading || undefined}
             >
-              <div className="agent-detail-dialog__content">
+              {detailsLoading ? <div role="status">{t('agentsOverview.form.loadingDetail')}</div> : null}
+              {detailsError ? <div role="alert">{detailsError}<Button onClick={() => void loadAgentDetails(selectedAgent.id, true)}>{t('agentsOverview.form.wizard.retry')}</Button></div> : null}
+              {detailsLoaded ? <div className="agent-detail-dialog__content">
               {activeDetailSection === 'basic' ? (
                 <div className="agent-detail-dialog__overview" data-testid="agent-detail-basic-section">
                   <div className="agent-detail-dialog__facts" role="group" aria-label={t('agentsOverview.detail.basicInfo')}>
@@ -1135,7 +1152,7 @@ const AgentsHomeView: React.FC = () => {
                     options={visibleSubagentModelOptions}
                     value={selectedSubagentModelValue}
                     onValueChange={(value) => void handleSubagentModelChange(value)}
-                    disabled={savingSubagentModel}
+                    disabled={savingSubagentModel || !modelCatalogReady}
                     data-testid="agent-detail-subagent-model-select"
                   />
                 </Field>
@@ -1288,7 +1305,7 @@ const AgentsHomeView: React.FC = () => {
                   </div>
                 )
               ) : null}
-              </div>
+              </div> : null}
             </DialogBody>
             {currentCapabilityMeta && canManageCurrentCapability && isCurrentSectionEditing ? (
               <DialogFooter appearance="floating">

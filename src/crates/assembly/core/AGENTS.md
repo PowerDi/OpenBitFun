@@ -116,6 +116,9 @@ SessionManager -> Session -> DialogTurn -> ModelRound
   Tool implementation groups use the matching `tools-*` owner feature.
   `tools-image-analysis` owns only image inspection; `tools-image-generation`
   separately selects the generation tool and its AI adapter client.
+  `tools-office-documents` owns `GenOfficeFile` and its portable OOXML engine
+  (`openbitfun-office-documents`); the tool moves bytes only through the
+  session's workspace file system, so remote workspaces need no extra owner.
   Product Assembly supplies the exact `ProductToolPlan`; Core materialization
   validates that requested owners were compiled and must not infer product
   capability from Cargo's feature union. The Agent Runtime baseline plan is
@@ -192,6 +195,26 @@ Narrower local guides already exist for some subtrees:
 
 ## Verification
 
+For desktop card admission, per-turn Peer origin, recovery context and subagent
+propagation:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib -- desktop_card
+```
+
+These tests use a stub card host and simulated remote contexts; they do not
+exercise native card windows or live Peer/mobile/SSH connections. The Desktop
+guide owns the HostInvoke compatibility and native host checks.
+
+For Creative frontend customization origin admission and fresh approval policy:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,tools-creation --lib frontend_workbench
+```
+
+These tests simulate Peer/mobile and remote-workspace origins; they do not
+exercise native recovery controls or live remote connections.
+
 For opt-in category/system-prompt previews and session-storage isolation:
 
 ```bash
@@ -261,6 +284,13 @@ cargo test --locked -p openbitfun-core --no-default-features --features agent-ru
 cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,tools-image-analysis --lib agentic::tools::product_runtime::materialization::tests::image_tools_follow_independent_compiled_owners
 ```
 
+For Office file generation (`GenOfficeFile`); the engine itself is covered by
+`cargo test -p openbitfun-office-documents`:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,tools-office-documents --lib agentic::tools::implementations::gen_office_file_tool::tests
+```
+
 These fixtures do not call a provider or exercise live remote hosts. Image wire
 protocol and opt-in live probes belong to the AI adapters guide.
 
@@ -303,6 +333,17 @@ For durable per-turn token usage, client checkpoint reconciliation, and recovery
 `cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib turn_usage`.
 The fixtures cover host-ledger isolation and client-free completion, not live SSH,
 Relay, Peer Device, or Detached Dispatch connections.
+
+For model-round order when completion fills sparse client checkpoints:
+
+```bash
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib generation_round_order
+```
+
+These fixtures cover suffix/scattered checkpoints, legacy record round trips,
+idempotent merge, prior interrupted generations, additive metadata, and headless
+completion/reload. They do not establish live SSH, Relay, Peer Device, or
+Detached Dispatch behavior.
 
 For cold dialog startup and the production-feature scheduler stack regression:
 
@@ -486,7 +527,7 @@ cargo test --locked -p openbitfun-core --no-default-features --features agent-ru
 Skill discovery, installation provenance, and local/remote registry regressions:
 
 ```bash
-cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib agentic::tools::implementations::skills::
+cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git,file-watch --lib agentic::tools::implementations::skills::
 ```
 
 SessionControl workspace selection, remote routing, and session-targeted actions:

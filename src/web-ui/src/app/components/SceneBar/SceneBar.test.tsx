@@ -396,6 +396,25 @@ describe('SceneBar overflow navigation', () => {
     expect(sceneHarness.activateScene).toHaveBeenCalledWith('settings');
   });
 
+  it('activates a retained background tab from the idle shell state', () => {
+    const previousTabs = sceneHarness.state.openTabs;
+    sceneHarness.state.activeTabId = null;
+    sceneHarness.state.openTabs = [
+      { id: 'settings', lastUsed: 1 },
+      { id: 'terminal', lastUsed: 2 },
+    ];
+    try {
+      renderSceneBar();
+
+      const settings = container.querySelector<HTMLButtonElement>('[role="tab"][data-openbitfun-value="settings"]')!;
+      act(() => settings.click());
+
+      expect(sceneHarness.activateScene).toHaveBeenCalledWith('settings');
+    } finally {
+      sceneHarness.state.openTabs = previousTabs;
+    }
+  });
+
   it('exposes overflow controls and translates a vertical wheel into horizontal movement', () => {
     renderSceneBar();
     const region = container.querySelector<HTMLElement>('[data-openbitfun-component="scene-bar"][data-openbitfun-part="tabs"]')!;
@@ -434,8 +453,11 @@ describe('SceneBar overflow navigation', () => {
     const gitTab = container.querySelector<HTMLElement>('[role="tab"][data-openbitfun-value="git"]')!;
     const gitItem = gitTab.closest<HTMLElement>('[data-openbitfun-part="item"]')!;
     setOverflowMetrics(tabs, region);
-    Object.defineProperty(gitItem, 'offsetLeft', { configurable: true, value: 420 });
-    Object.defineProperty(gitItem, 'offsetWidth', { configurable: true, value: 100 });
+    expect(gitItem.parentElement?.dataset.sceneTabId).toBe('git');
+    // The real positioned wrapper owns offsetLeft; it is zero for the inner item.
+    Object.defineProperty(gitItem, 'offsetLeft', { configurable: true, value: 0 });
+    vi.spyOn(tabs, 'getBoundingClientRect').mockReturnValue({ left: 100, width: 180 } as DOMRect);
+    vi.spyOn(gitItem, 'getBoundingClientRect').mockReturnValue({ left: 520, width: 100 } as DOMRect);
     const scrollTo = vi.fn(({ left }: ScrollToOptions) => {
       tabs.scrollLeft = left ?? tabs.scrollLeft;
     });

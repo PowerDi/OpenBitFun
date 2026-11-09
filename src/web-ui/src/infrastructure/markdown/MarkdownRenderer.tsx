@@ -10,6 +10,7 @@ import React, { useState, useMemo, useCallback, useEffect, useLayoutEffect, useR
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import { Icon, IconButton, Tooltip } from '@openbitfun/ui';
 import remarkGfm from 'remark-gfm';
+import { markdownGfmOptions } from './markdownGfmOptions';
 import { remarkCachedParse } from './markdownParseCache';
 import { remarkAutolinkBoundaries } from './remarkAutolinkBoundaries';
 import { remarkStreamingTableLinks } from './remarkStreamingTableLinks';
@@ -29,6 +30,7 @@ import { contextMenuController } from '@/shared/context-menu-system/core/Context
 import { ContextType, type CustomContext, type MenuItem } from '@/shared/context-menu-system/types';
 import { createTab, openFileInBestTarget } from '@/shared/utils/tabUtils';
 import { isHtmlFilePath, openHtmlFileInExternalBrowser } from '@/shared/utils/htmlFilePreview';
+import { browserLinkPreferenceStore } from '@/infrastructure/config/services/browserLinkPreference';
 import { createLogger } from '@/shared/utils/logger';
 import type { LineRange } from '@/shared/editor/LineRange';
 import {
@@ -1568,7 +1570,11 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
                 return;
               }
               const hasExternalOpenModifier = e.metaKey || e.ctrlKey || e.shiftKey || e.altKey;
-              if (canOpenInBuiltInBrowser(e.currentTarget) && !hasExternalOpenModifier) {
+              if (
+                browserLinkPreferenceStore.getState().target === 'builtin' &&
+                canOpenInBuiltInBrowser(e.currentTarget) &&
+                !hasExternalOpenModifier
+              ) {
                 handleOpenBuiltInBrowserLink(hrefValue);
                 return;
               }
@@ -1757,7 +1763,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
     const fragmentComponents = inline ? { ...components, p: InlineFragment } : components;
     const basicFragment = (
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkAutolinkBoundaries, remarkAutolinkInternalLinks]}
+        remarkPlugins={[[remarkGfm, markdownGfmOptions], remarkAutolinkBoundaries, remarkAutolinkInternalLinks]}
         rehypePlugins={[rehypeRaw, [rehypeWindowsDrivePaths, { markdownSource: fragment }], [rehypeSanitize, sanitizeSchema]]}
         urlTransform={markdownUrlTransform}
         components={fragmentComponents}
@@ -1779,7 +1785,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
   }, [components, isStreaming]);
   const basicMarkdownRenderer = (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm, ...(!isStreaming ? [remarkCachedParse] : []), [remarkStreamingTableLinks, { isStreaming }], remarkAutolinkBoundaries, remarkAutolinkInternalLinks]}
+      remarkPlugins={[[remarkGfm, markdownGfmOptions], ...(!isStreaming ? [remarkCachedParse] : []), [remarkStreamingTableLinks, { isStreaming }], remarkAutolinkBoundaries, remarkAutolinkInternalLinks]}
       rehypePlugins={[rehypeRaw, [rehypeWindowsDrivePaths, { markdownSource: markdownContent }], [rehypeSanitize, sanitizeSchema], [rehypeSourceRange, sourceRange], [rehypeImageThumbnails, { enabled: imageThumbnails }]]}
       urlTransform={markdownUrlTransform}
       components={components}

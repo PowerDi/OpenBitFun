@@ -1,28 +1,33 @@
 @layer openbitfun.components {
   .root {
+    --_queue-action-size: var(--openbitfun-control-chat-composer-control-height);
+    --_queue-primary-action-size: 8em;
     box-sizing: border-box;
     display: flex;
     min-inline-size: 0;
     inline-size: 100%;
     flex-direction: column;
-    gap: var(--openbitfun-space-2);
-    padding-block: var(--openbitfun-space-3);
-    padding-inline: var(--openbitfun-space-4);
-    border-radius: var(--openbitfun-radius-lg);
+    gap: var(--openbitfun-space-1);
+    padding: var(--openbitfun-space-1) var(--openbitfun-space-1) 0;
+    border: 0;
+    border-radius: 0;
+    container: composer-queue / inline-size;
     color: var(--openbitfun-color-content-primary);
-    background: var(--openbitfun-color-surface-subtle);
+    background: transparent;
     font-family:var(--openbitfun-type-body-md-font-family);
   }
 
   .header {
     display: flex;
     min-inline-size: 0;
+    min-block-size: var(--openbitfun-control-chat-composer-control-height);
     align-items: center;
     gap: var(--openbitfun-space-1);
+    padding-inline: var(--openbitfun-space-2);
     color: var(--openbitfun-color-content-secondary);
     font-size: var(--openbitfun-type-body-sm-font-size);
     font-weight: var(--openbitfun-type-body-md-font-weight);
-    line-height: var(--openbitfun-type-body-md-line-height);
+    line-height: var(--openbitfun-type-body-sm-line-height);
   }
 
   .header > :where(svg, img) {
@@ -30,6 +35,12 @@
     block-size: var(--openbitfun-font-size-base);
     flex: 0 0 auto;
     color: var(--openbitfun-color-content-muted);
+  }
+
+  .toggle[data-openbitfun-component="button"][data-size] {
+    min-inline-size: 0;
+    padding-inline: 0;
+    color: inherit;
   }
 
   .title {
@@ -53,18 +64,16 @@
   .list {
     display: flex;
     min-inline-size: 0;
-    /* Four standard message rows plus the three gaps between them. */
+    /* Four comfortable message rows before the tray scrolls. */
     max-block-size: calc(
-      var(--openbitfun-control-chat-composer-control-height) +
-      var(--openbitfun-control-chat-composer-control-height) +
-      var(--openbitfun-control-chat-composer-control-height) +
-      var(--openbitfun-control-chat-composer-control-height) +
-      var(--openbitfun-space-1) +
-      var(--openbitfun-space-1) +
-      var(--openbitfun-space-1)
+      var(--openbitfun-control-height-sm) +
+      var(--openbitfun-control-height-sm) +
+      var(--openbitfun-control-height-sm) +
+      var(--openbitfun-control-height-sm) +
+      var(--openbitfun-space-1) * 8
     );
     flex-direction: column;
-    gap: var(--openbitfun-space-1);
+    gap: 0;
     margin: 0;
     overflow-x: hidden;
     overflow-y: auto;
@@ -73,87 +82,197 @@
     list-style: none;
   }
 
+  .list[hidden] {
+    display: none;
+  }
+
+  /* Recovery descriptions need room below the message baseline. */
+  .list:has(.status) {
+    max-block-size: calc(var(--openbitfun-control-height-sm) * 6);
+  }
+
   .item {
+    position: relative;
     box-sizing: border-box;
-    display: grid;
+    display: flex;
+    flex: 0 0 auto;
     min-inline-size: 0;
-    min-block-size: var(--openbitfun-control-chat-composer-control-height);
-    grid-template-columns: minmax(0, 1fr) auto auto;
-    align-items: center;
+    min-block-size: var(--openbitfun-control-height-sm);
+    align-items: flex-start;
     gap: var(--openbitfun-space-2);
+    /* Own both sides of the divider; document li margins must not leak in. */
+    margin: 0;
+    padding-block: var(--openbitfun-space-1);
+    padding-inline: var(--openbitfun-space-2) var(--openbitfun-space-1);
+    border-radius: var(--openbitfun-radius-md);
     color: var(--openbitfun-color-content-primary);
   }
 
-  .item[data-openbitfun-state="sending"] {
-    opacity: var(--openbitfun-opacity-disabled);
+  .item::before {
+    content: "";
+    position: absolute;
+    inset-inline: var(--openbitfun-space-2);
+    inset-block-start: 0;
+    border-block-start: var(--openbitfun-border-width-default) solid var(--openbitfun-color-border-subtle);
+    pointer-events: none;
+  }
+
+  .item[data-queue-dragging] {
+    z-index: 1;
+    background: var(--openbitfun-color-surface-panel);
+    box-shadow: var(--openbitfun-shadow-sm);
+  }
+  .item[data-queue-drop="before"] { box-shadow: inset 0 2px var(--openbitfun-color-focus-ring); }
+  .item[data-queue-drop="after"] { box-shadow: inset 0 -2px var(--openbitfun-color-focus-ring); }
+  .item [data-queue-handle] {
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+  }
+  .item [data-queue-handle]:active { cursor: grabbing; }
+
+  /* The row, not a floating button cluster, is the unit being acted on. */
+  .item:focus-within {
+    background: var(--openbitfun-color-surface-subtle);
+  }
+
+  .leadingIcon {
+    display: inline-flex;
+    flex: 0 0 var(--openbitfun-space-5);
+    min-block-size: var(--openbitfun-control-height-sm);
+    align-items: center;
+    justify-content: center;
+    color: var(--openbitfun-color-content-muted);
   }
 
   .content {
     display: flex;
+    flex: 1 1 0;
     min-inline-size: 0;
-    flex-direction: column;
-    gap: var(--openbitfun-space-1);
-    color: var(--openbitfun-color-content-secondary);
+    min-block-size: var(--openbitfun-control-height-sm);
+    flex-flow: row wrap;
+    align-items: baseline;
+    gap: 0 var(--openbitfun-space-2);
+    color: var(--openbitfun-color-content-primary);
     font-size: var(--openbitfun-type-body-md-font-size);
     font-weight: var(--openbitfun-type-body-md-font-weight);
     line-height: var(--openbitfun-type-body-md-line-height);
-    transition: color var(--openbitfun-motion-duration-fast) var(--openbitfun-motion-easing-standard);
   }
 
-  .item:hover .content,
-  .item:focus-within .content {
-    color: var(--openbitfun-color-content-primary);
+  .message {
+    display: flex;
+    flex: 1 0 100%;
+    min-inline-size: 0;
+    max-inline-size: 100%;
+    min-block-size: var(--openbitfun-control-height-sm);
+    align-items: center;
+    gap: var(--openbitfun-space-2);
+  }
+
+  /* Shrink long text, but never stretch a short preview away from its badge. */
+  .message > :global([data-overflow-behavior]) {
+    flex: 0 1 auto;
+  }
+
+  /* A truncated preview may be a tab stop so keyboard users can read its
+     full-text tooltip; it stays display-only. */
+  :where(.content, .message) > :focus-visible {
+    border-radius: var(--openbitfun-radius-xs);
+    outline: var(--openbitfun-focus-width) solid var(--openbitfun-color-focus-ring);
+    outline-offset: var(--openbitfun-focus-offset);
+  }
+
+  /* Muted ink instead of row opacity keeps the status text legible. */
+  .item[data-openbitfun-state="sending"] .content {
+    color: var(--openbitfun-color-content-muted);
+  }
+
+  .status {
+    flex: 0 1 auto;
+    min-inline-size: 0;
+    color: var(--openbitfun-color-content-muted);
+    font-size: var(--openbitfun-type-meta-font-size);
+    line-height: var(--openbitfun-type-body-sm-line-height);
+    overflow-wrap: anywhere;
+  }
+
+  .status[data-openbitfun-tone="warning"] {
+    color: var(--openbitfun-color-status-warning-content);
+  }
+
+  .status[data-openbitfun-tone="danger"] {
+    color: var(--openbitfun-color-status-danger-content);
   }
 
   .attachmentBadge {
-    box-sizing: border-box;
     display: inline-flex;
-    min-inline-size: var(--openbitfun-control-chat-composer-control-height);
-    block-size: var(--openbitfun-control-chat-composer-control-height);
+    flex: 0 0 auto;
     align-items: center;
-    justify-content: center;
-    padding-inline: var(--openbitfun-space-2);
-    border-radius: var(--openbitfun-radius-pill);
-    color: var(--openbitfun-color-content-secondary);
-    background: var(--openbitfun-color-surface-raised);
-    font-size: var(--openbitfun-type-body-sm-font-size);
-    font-weight: var(--openbitfun-type-label-lg-font-weight);
+    gap: var(--openbitfun-space-1);
+    color: var(--openbitfun-color-content-muted);
+    font-size: var(--openbitfun-type-meta-font-size);
     font-variant-numeric: tabular-nums;
     line-height: var(--openbitfun-type-modifier-leading-none-line-height);
   }
 
   .actions {
     display: inline-flex;
+    flex: 0 0 auto;
     min-inline-size: 0;
+    inline-size: calc(var(--_queue-primary-action-size) + var(--_queue-action-size) * 2 + var(--openbitfun-space-1) * 2);
+    min-block-size: var(--openbitfun-control-height-sm);
     align-items: center;
+    justify-content: flex-end;
     gap: var(--openbitfun-space-1);
-    transition: opacity var(--openbitfun-motion-duration-fast) var(--openbitfun-motion-easing-standard);
+    font-size: var(--openbitfun-type-body-sm-font-size);
+  }
+
+  .actions [data-openbitfun-component="icon-button"] {
+    flex: 0 0 var(--_queue-action-size);
+    inline-size: var(--_queue-action-size);
+    block-size: var(--_queue-action-size);
+    min-inline-size: var(--_queue-action-size);
+    min-block-size: var(--_queue-action-size);
+  }
+
+  /* The tray stays quiet without making its controls disappear. */
+  .actions [data-openbitfun-component="button"][data-openbitfun-variant="text"] {
+    flex: 1 1 0;
+    min-inline-size: 0;
+    justify-content: flex-start;
+    text-align: start;
+    color: var(--openbitfun-color-content-secondary);
+    padding-inline: var(--openbitfun-space-2);
   }
 
   @media (hover: hover) and (pointer: fine) {
-    .actions {
-      pointer-events: none;
-      opacity: 0;
-    }
-
-    .item:hover .actions,
-    .item:focus-within .actions {
-      pointer-events: auto;
-      opacity: 1;
+    .item:hover {
+      background: var(--openbitfun-color-surface-subtle);
     }
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    .content,
+  @container composer-queue (max-width: 22rem) {
     .actions {
-      transition: none;
+      --_queue-primary-action-size: var(--_queue-action-size);
+    }
+    .actions [data-openbitfun-component="button"][data-openbitfun-variant="text"] {
+      justify-content: center;
+    }
+    .actions [data-openbitfun-component="button"] [data-openbitfun-part="label"] {
+      display: none;
+    }
+  }
+
+  @media (pointer: coarse) {
+    .root {
+      --_queue-action-size: var(--openbitfun-control-height-sm);
+    }
+    .actions [data-openbitfun-component="button"] {
+      min-block-size: var(--openbitfun-control-height-sm);
     }
   }
 
   @media (forced-colors: active) {
-    .root,
-    .attachmentBadge {
-      border: var(--openbitfun-border-width-default) solid CanvasText;
-    }
+    .item::before { border-color: CanvasText; }
   }
 }

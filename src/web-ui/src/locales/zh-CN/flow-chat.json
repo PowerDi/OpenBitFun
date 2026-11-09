@@ -208,6 +208,7 @@
     "rateLimitWarning": "即将达到速率限制"
   },
   "historyState": {
+    "emptyWindow": "这段历史中没有可显示的消息。",
     "loadingTitle": "正在加载历史会话",
     "loadingDescription": "正在准备该会话的历史内容。",
     "failedTitle": "历史会话加载失败",
@@ -791,11 +792,16 @@
       "clipboardPathsUnavailable": "剪贴板中包含文件，但无法读取其本机路径。",
       "dropPathsUnavailable": "此次拖放未提供本机路径，请复制这些文件后粘贴到输入框。",
       "partialFailure": "已添加 {{added}} 项；另有 {{failed}} 项已失效或不受支持。",
+      "controllerDirectoryUnsupported": "在其他主机上运行的会话无法引用此设备上的文件夹，请改为添加其中的文件。",
+      "controllerFilesNeedWorkspace": "请先为此会话打开工作区，才能引用此设备上的文件；图片仍可添加。",
+      "controllerFileTooLarge": "{{name}} 超过 {{limit}} MB，无法发送到执行主机。",
+      "controllerUploading": "正在将 {{count}} 个文件发送到执行主机...",
+      "controllerUploadFailed": "无法将 {{name}} 发送到执行主机：{{error}}",
       "unsupported": {
         "web": "Web 会话无法引用本机文件，请使用 Desktop 本地会话。",
-        "remote-workspace": "远程工作区无法引用此设备上的本机文件。",
-        "peer-device": "Peer Device 会话无法引用控制端设备上的文件。",
-        "detached-dispatch": "Detached 任务不能依赖提交设备上的本机文件。"
+        "remote-workspace": "远程工作区无法引用此设备上的本机文件，图片仍可添加。",
+        "peer-device": "请先更新被控设备，才能引用此设备上的文件；图片仍可添加。",
+        "detached-dispatch": "Detached 任务不能依赖提交设备上的本机文件，图片仍可添加。"
       }
     },
     "removeImage": "移除图片",
@@ -1120,6 +1126,7 @@
     "compactAction": "压缩会话",
     "compactNoSession": "当前没有可用于 /compact 的会话",
     "compactBusy": "请等待当前会话空闲后再使用 /compact。",
+    "compactPending": "会话压缩仍在进行中，请等待完成后再使用 /compact。",
     "compactUsage": "请直接使用 /compact，不要附加额外参数。",
     "compactFailed": "会话压缩失败",
     "goalAction": "会话目标",
@@ -3537,6 +3544,8 @@
   },
   "welcome": {
     "openingWorkspace": "在 <workspace>{{workspace}}</workspace>，开工。",
+    "workspaceChanges_one": "工作区有动静，<number>{{fileCount}}</number> 个文件改了还没提交。",
+    "workspaceChanges_other": "工作区有动静，<number>{{fileCount}}</number> 个文件改了还没提交。",
     "openingMorning": "早安，今天由你开场。",
     "openingAfternoon": "下午好，给今天加点意思。",
     "openingEvening": "晚上好，按你的节奏来。",
@@ -3879,15 +3888,19 @@
     "showAll": "显示全部"
   },
   "pendingQueue": {
-    "title": "等待发送",
-    "label": "等待发送 {{count}}",
+    "title": "待发送",
+    "label": "待发送 {{count}}",
     "attachmentCount": "{{count}} 个图片附件",
     "attachmentCount_one": "{{count}} 个图片附件",
     "attachmentCount_other": "{{count}} 个图片附件",
     "emptyPlaceholder": "（空消息）",
     "statusSending": "正在引导…",
-    "statusFailed": "发送失败 — 请编辑 / 立即发送 / 删除以清除该项",
+    "statusQueuedSending": "发送中…",
+    "statusFailed": "发送失败",
     "actions": {
+      "more": "更多消息操作",
+      "collapse": "收起待发送列表",
+      "sendNowLabel": "立即发送",
       "edit": "编辑",
       "sendNow": "立即发送（引导）",
       "delete": "删除"
@@ -3898,7 +3911,12 @@
     "errors": {
       "composerNotEmpty": "请先发送或清空当前输入和附件，再编辑这条等待发送的消息",
       "sendNowFailed": "立即发送失败，请稍后重试"
-    }
+    },
+    "reorder": "拖动排序",
+    "moveUp": "上移",
+    "moveDown": "下移",
+    "orderChanged": "队列已变化，请刷新后重新调整顺序。",
+    "reorderUnsupported": "升级执行端后可调整排队消息的顺序。"
   },
   "steering": {
     "title": "立即引导",
@@ -3965,6 +3983,7 @@
     "cancel": "移出队列",
     "refresh": "刷新",
     "unknown": "尚未确认是否送达，请先检查再重发。",
+    "retry": "重试",
     "checkRetry": "检查 / 重试",
     "copyDraft": "复制草稿到输入框",
     "dismiss": "关闭本地提醒",

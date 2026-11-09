@@ -208,6 +208,7 @@
     "rateLimitWarning": "即將達到速率限制"
   },
   "historyState": {
+    "emptyWindow": "這段歷史中沒有可顯示的訊息。",
     "loadingTitle": "正在載入歷史會話",
     "loadingDescription": "正在準備該會話的歷史內容。",
     "failedTitle": "歷史會話載入失敗",
@@ -791,11 +792,16 @@
       "clipboardPathsUnavailable": "剪貼簿中包含檔案，但無法讀取其本機路徑。",
       "dropPathsUnavailable": "此次拖放未提供本機路徑，請複製這些檔案後貼到輸入框。",
       "partialFailure": "已新增 {{added}} 項；另有 {{failed}} 項已失效或不受支援。",
+      "controllerDirectoryUnsupported": "在其他主機上執行的工作階段無法引用此裝置上的資料夾，請改為新增其中的檔案。",
+      "controllerFilesNeedWorkspace": "請先為此工作階段開啟工作區，才能引用此裝置上的檔案；圖片仍可新增。",
+      "controllerFileTooLarge": "{{name}} 超過 {{limit}} MB，無法傳送到執行主機。",
+      "controllerUploading": "正在將 {{count}} 個檔案傳送到執行主機...",
+      "controllerUploadFailed": "無法將 {{name}} 傳送到執行主機：{{error}}",
       "unsupported": {
         "web": "Web 工作階段無法引用本機檔案，請使用 Desktop 本機工作階段。",
-        "remote-workspace": "遠端工作區無法引用此裝置上的本機檔案。",
-        "peer-device": "Peer Device 工作階段無法引用控制端裝置上的檔案。",
-        "detached-dispatch": "Detached 任務不能依賴提交裝置上的本機檔案。"
+        "remote-workspace": "遠端工作區無法引用此裝置上的本機檔案，圖片仍可新增。",
+        "peer-device": "請先更新被控裝置，才能引用此裝置上的檔案；圖片仍可新增。",
+        "detached-dispatch": "Detached 任務不能依賴提交裝置上的本機檔案，圖片仍可新增。"
       }
     },
     "removeImage": "移除圖片",
@@ -1120,6 +1126,7 @@
     "compactAction": "壓縮會話",
     "compactNoSession": "目前沒有可用於 /compact 的會話",
     "compactBusy": "請等待目前會話空閒後再使用 /compact。",
+    "compactPending": "會話壓縮仍在進行中，請等待完成後再使用 /compact。",
     "compactUsage": "請直接使用 /compact，不要附加額外參數。",
     "compactFailed": "會話壓縮失敗",
     "goalAction": "會話目標",
@@ -3536,6 +3543,8 @@
     }
   },
   "welcome": {
+    "workspaceChanges_one": "工作區有動靜，<number>{{fileCount}}</number> 個檔案改了還沒提交。",
+    "workspaceChanges_other": "工作區有動靜，<number>{{fileCount}}</number> 個檔案改了還沒提交。",
     "openingWorkspace": "在 <workspace>{{workspace}}</workspace>，開工。",
     "openingMorning": "早安，今天由你開場。",
     "openingAfternoon": "下午好，給今天加點意思。",
@@ -3879,15 +3888,19 @@
     "showAll": "顯示全部"
   },
   "pendingQueue": {
-    "title": "等待發送",
-    "label": "等待發送 {{count}}",
+    "title": "待傳送",
+    "label": "待傳送 {{count}}",
     "attachmentCount": "{{count}} 個圖片附件",
     "attachmentCount_one": "{{count}} 個圖片附件",
     "attachmentCount_other": "{{count}} 個圖片附件",
     "emptyPlaceholder": "（空訊息）",
     "statusSending": "正在引導…",
-    "statusFailed": "發送失敗 — 請編輯 / 立即發送 / 刪除以清除該項",
+    "statusQueuedSending": "傳送中…",
+    "statusFailed": "傳送失敗",
     "actions": {
+      "more": "更多訊息操作",
+      "collapse": "收起待傳送清單",
+      "sendNowLabel": "立即傳送",
       "edit": "編輯",
       "sendNow": "立即發送（引導）",
       "delete": "刪除"
@@ -3898,7 +3911,12 @@
     "errors": {
       "composerNotEmpty": "請先發送或清空目前輸入與附件，再編輯這則等待發送的訊息",
       "sendNowFailed": "立即發送失敗，請稍後重試"
-    }
+    },
+    "reorder": "拖曳排序",
+    "moveUp": "上移",
+    "moveDown": "下移",
+    "orderChanged": "佇列已變更，請重新整理後再調整順序。",
+    "reorderUnsupported": "升級執行端後可調整排隊訊息的順序。"
   },
   "steering": {
     "title": "立即引導",
@@ -3965,6 +3983,7 @@
     "cancel": "移出佇列",
     "refresh": "重新整理",
     "unknown": "尚未確認是否送達，請先檢查再重新傳送。",
+    "retry": "重試",
     "checkRetry": "檢查 / 重試",
     "copyDraft": "複製草稿到輸入框",
     "dismiss": "關閉本機提醒",

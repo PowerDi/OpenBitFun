@@ -16,6 +16,7 @@ impl ClawMode {
     pub fn new() -> Self {
         Self {
             default_tools: vec![
+                "AskUserQuestion".to_string(),
                 "AgentSpawn".to_string(),
                 "AgentSendInput".to_string(),
                 "AgentControl".to_string(),
@@ -29,6 +30,7 @@ impl ClawMode {
                 "Write".to_string(),
                 "Edit".to_string(),
                 "Delete".to_string(),
+                "GenOfficeFile".to_string(),
                 "ExecCommand".to_string(),
                 "WriteStdin".to_string(),
                 "ExecControl".to_string(),
@@ -117,6 +119,7 @@ mod tests {
         assert!(tools.contains(&"ListModels".to_string()));
         assert!(tools.contains(&"ListWorkspaces".to_string()));
         assert!(tools.contains(&"DesktopCard".to_string()));
+        assert!(tools.contains(&"AskUserQuestion".to_string()));
     }
 
     #[test]

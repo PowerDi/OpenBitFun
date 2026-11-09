@@ -114,7 +114,7 @@ function menuAnchorFromEvent(event: React.MouseEvent): MenuAnchor {
   };
 }
 
-/** A bubble states its task with a glyph; the words stay for tooltips and assistive tech. */
+/** A bubble states its task with a glyph; the words stay for assistive tech. */
 const TASK_STATE_GLYPHS: Record<AgentCompanionTaskState, LucideIcon> = {
   running: LucideLoaderCircle,
   waiting: LucideHourglass,
@@ -682,18 +682,22 @@ export const AgentCompanionDesktopPet: React.FC = () => {
       }
     };
 
-    const intervalId = window.setInterval(() => {
-      // Pause the IPC poll while the pet window is not visible.
-      if (document.visibilityState === 'hidden') {
-        return;
-      }
+    let intervalId: number | undefined;
+    const syncPointerPolling = () => {
+      window.clearInterval(intervalId);
+      intervalId = undefined;
+      if (document.visibilityState === 'hidden') return;
+      // Keep the same visible hover latency, and refresh immediately on return.
       void pollPointerHover();
-    }, POINTER_HOVER_POLL_INTERVAL_MS);
-    void pollPointerHover();
+      intervalId = window.setInterval(() => { void pollPointerHover(); }, POINTER_HOVER_POLL_INTERVAL_MS);
+    };
+    document.addEventListener('visibilitychange', syncPointerPolling);
+    syncPointerPolling();
 
     return () => {
       disposed = true;
       window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', syncPointerPolling);
       window.removeEventListener('resize', invalidateRectCache);
       removeWindowMovedListener?.();
       removeScaleChangedListener?.();
@@ -1098,6 +1102,7 @@ export const AgentCompanionDesktopPet: React.FC = () => {
           {visibleTasks.length > 0 && (
             <ScrollArea
               ref={bubblesRef}
+              scrollbarVisibility="hidden"
               className={`openbitfun-agent-companion-window__bubbles${isSingleTask ? ' openbitfun-agent-companion-window__bubbles--single' : ''}`}
               aria-live="polite"
               onDoubleClick={event => event.stopPropagation()}
@@ -1123,7 +1128,7 @@ export const AgentCompanionDesktopPet: React.FC = () => {
                         strokeWidth={2.25}
                         aria-hidden="true"
                       />
-                      {/* The bubble's own tooltip carries title and status together. */}
+                      {/* Bubbles show no tooltip; an overflowing title scrolls on hover instead. */}
                       <OverflowText className="openbitfun-agent-companion-window__bubble-title" title="" data-openbitfun-component="agent-companion-desktop-pet" data-openbitfun-part="bubbleTitle">
                         {task.title}
                       </OverflowText>
@@ -1210,7 +1215,6 @@ export const AgentCompanionDesktopPet: React.FC = () => {
                       <button
                         type="button"
                         className={bubbleClassName}
-                        title={`${task.title} · ${statusLabel}`}
                         onClick={() => void openTaskSession(task)}
                         data-openbitfun-component="agent-companion-desktop-pet"
                         data-openbitfun-part="bubble"

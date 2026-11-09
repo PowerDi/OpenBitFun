@@ -3,6 +3,7 @@ export type SessionModelSelectionTarget = {
   isTransient?: boolean;
   agentBackedTransient?: boolean;
   sessionKind?: string;
+  parentSessionId?: string;
   isHistorical?: boolean;
   lastSubmittedMode?: string;
   dialogTurns?: readonly unknown[];
@@ -14,6 +15,14 @@ export function isBtwSessionDraft(session: SessionModelSelectionTarget | undefin
     && !session.lastSubmittedMode && session.dialogTurns?.length === 0);
 }
 
+/** Temporary BTW children execute through their parent until they are saved as a fork. */
+export function isBtwParentBackedSession(session: SessionModelSelectionTarget | undefined): boolean {
+  return Boolean(session?.sessionKind === 'btw'
+    && session.isTransient === true
+    && !session.isHistorical
+    && session.parentSessionId);
+}
+
 /** Whether the visible selector has a real runtime session to update. */
 export function shouldSyncSessionModelSelection<T extends SessionModelSelectionTarget>(
   session: T | undefined,
@@ -21,9 +30,4 @@ export function shouldSyncSessionModelSelection<T extends SessionModelSelectionT
   return Boolean(session && !session.draft && !isBtwSessionDraft(session) && (!session.isTransient || session.agentBackedTransient));
 }
 
-/** Whether restoring the target requires access to internal runtime sessions. */
-export function shouldIncludeInternalModelSession(
-  session: SessionModelSelectionTarget | undefined,
-): boolean {
-  return Boolean(session?.sessionKind === 'subagent' || session?.agentBackedTransient);
-}
+export { shouldIncludeInternalSession as shouldIncludeInternalModelSession } from './internalSession';

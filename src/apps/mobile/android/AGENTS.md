@@ -52,6 +52,9 @@ JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ./gradle
 # Verify running-input, plan gating, offline tools, and attachment retention.
 ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.openbitfun.mobile.app.MobileParityTest
 
+# Verify unavailable media handlers, photo decoding/sending, and dictation lifecycle.
+JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.openbitfun.mobile.app.ComposerMediaInputTest
+
 # Verify terminal WebView focus and native keyboard routing inside the dialog.
 ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.openbitfun.mobile.app.RuntimeTerminalViewTest
 
@@ -68,3 +71,13 @@ Run instrumented Gradle tests on a dedicated test emulator, not an authenticated
 manual-acceptance device. The test runner can uninstall the target application
 after the suite and remove its local account state. Use `adb install -r` for
 manual acceptance updates to preserve that state.
+
+For queue menus, touch targets, drag completion and cancellation on host revision:
+
+```bash
+./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.openbitfun.mobile.app.MessageQueuePanelTest
+```
+
+The isolated `message-queue` design-preview scenario uses the production panel
+with simulated host replies. Review compact/wide widths and light/dark themes;
+this does not establish live remote dispatch behavior.

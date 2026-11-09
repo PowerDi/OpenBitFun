@@ -19,7 +19,7 @@ import {ChatInputApprovalBand} from '../ChatInputApprovalBand';
 import {ScrollToBottomButton} from '@/flow_chat';
 import {flowChatStore} from '../../store/FlowChatStore';
 import type {DialogTurn, Session} from '../../types/flow-chat';
-import {sessionToVirtualItems} from '../../store/modernFlowChatStore';
+import {createSessionVirtualItemProjector} from '../../store/modernFlowChatStore';
 import {FLOWCHAT_FOCUS_ITEM_EVENT, type FlowChatFocusItemRequest} from '../../events/flowchatNavigation';
 import {fileTabManager} from '@/shared/services/FileTabManager';
 import {createTab} from '@/shared/utils/tabUtils';
@@ -243,9 +243,10 @@ const BtwSessionPanelContent: React.FC<BtwSessionPanelProps & { viewState: BtwPa
   const headerModelName = childKind === 'subagent'
     ? childSession?.config?.modelName?.trim()
     : childSession?.delegatedBy ? delegatedChildModelName(childSession) : undefined;
+  const [projectSession] = useState(createSessionVirtualItemProjector);
   const sessionVirtualItems = useMemo(
-    () => sessionToVirtualItems(childSession ?? null),
-    [childSession],
+    () => projectSession(childSession ?? null),
+    [childSession, projectSession],
   );
   const virtualItems = useMemo(
     () => viewKind === 'review-check'

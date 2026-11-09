@@ -98,7 +98,7 @@ use openbitfun_agent_runtime::prompt_suggestion::{
 };
 use openbitfun_agent_runtime::remote_file_delivery::{
     needs_computer_links_for_source, remote_file_delivery_reminder,
-    TOOL_CONTEXT_REMOTE_FILE_DELIVERY_KEY,
+    TOOL_CONTEXT_PEER_DEVICE_CONTROL_KEY, TOOL_CONTEXT_REMOTE_FILE_DELIVERY_KEY,
 };
 use openbitfun_agent_runtime::sdk::PermissionReply;
 use openbitfun_agent_runtime::user_questions::USER_INPUT_AVAILABLE_CONTEXT_KEY;
@@ -603,6 +603,23 @@ fn metadata_bool(metadata: Option<&serde_json::Value>, key: &str) -> Option<bool
     metadata
         .and_then(|metadata| metadata.get(key))
         .and_then(serde_json::Value::as_bool)
+}
+
+/// Rebuild control facts from this turn's metadata, including on recovery.
+/// Session history and host-wide controller attachments are not its origin.
+fn copy_turn_control_context(
+    context: &mut HashMap<String, String>,
+    metadata: Option<&serde_json::Value>,
+) {
+    for key in [
+        USER_INPUT_AVAILABLE_CONTEXT_KEY,
+        AUTO_APPROVE_ASK_CONTEXT_KEY,
+        TOOL_CONTEXT_PEER_DEVICE_CONTROL_KEY,
+    ] {
+        if let Some(value) = metadata_bool(metadata, key) {
+            context.insert(key.to_string(), value.to_string());
+        }
+    }
 }
 
 fn runtime_tool_restrictions_for_session_lifetime(
@@ -4709,14 +4726,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .await;
 
             let mut child_context = HashMap::new();
-            for key in [
-                USER_INPUT_AVAILABLE_CONTEXT_KEY,
-                AUTO_APPROVE_ASK_CONTEXT_KEY,
-            ] {
-                if let Some(value) = metadata_bool(Some(&user_message_metadata), key) {
-                    child_context.insert(key.to_string(), value.to_string());
-                }
-            }
+            copy_turn_control_context(&mut child_context, Some(&user_message_metadata));
             // The delegated child runs under the same resolved mode as the
             // submission that triggered it, so resolve the same three layers
             // here instead of letting the child fall back to the global
@@ -6058,7 +6068,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .get_thread_goal(session_id, storage_path.as_path())
             .await?;
 
-        let plan = maybe_build_continuation_after_turn(
+        let mut plan = maybe_build_continuation_after_turn(
             &self.thread_goal_store(),
             self.thread_goal_runtime(session_id).as_ref(),
             session_id,
@@ -6068,6 +6078,16 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             turn_completed,
         )
         .await?;
+        // An automatic continuation still belongs to the originating control
+        // surface, even after its controller disconnects.
+        if let Some(plan) = plan.as_mut() {
+            if let Some(peer) =
+                metadata_bool(user_message_metadata, TOOL_CONTEXT_PEER_DEVICE_CONTROL_KEY)
+            {
+                plan.user_message_metadata[TOOL_CONTEXT_PEER_DEVICE_CONTROL_KEY] =
+                    serde_json::json!(peer);
+            }
+        }
 
         let goal_after = self
             .thread_goal_store()
@@ -6505,6 +6525,23 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         self.start_manual_compaction_task(session_id, Some(turn_id))
             .await
             .map(|_task| ())
+    }
+
+    /// Start a manual compaction and return once the maintenance turn has been
+    /// admitted. The compaction model request and context commit continue in
+    /// the detached task; callers observe completion through the normal
+    /// DialogTurn/ContextCompression events.
+    pub async fn start_manual_compaction_detached(
+        &self,
+        session_id: String,
+        requested_turn_id: Option<String>,
+    ) -> OpenBitFunResult<String> {
+        let task = self
+            .start_manual_compaction_task(session_id, requested_turn_id)
+            .await?;
+        let turn_id = task.turn_id.clone();
+        drop(task.completion);
+        Ok(turn_id)
     }
 
     pub(crate) async fn prepare_input_images(
@@ -7587,23 +7624,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 "true".to_string(),
             );
         }
-        if let Some(user_input_available) = metadata_bool(
-            user_message_metadata.as_ref(),
-            USER_INPUT_AVAILABLE_CONTEXT_KEY,
-        ) {
-            context_vars.insert(
-                USER_INPUT_AVAILABLE_CONTEXT_KEY.to_string(),
-                user_input_available.to_string(),
-            );
-        }
-        if let Some(auto_approve_ask) =
-            metadata_bool(user_message_metadata.as_ref(), AUTO_APPROVE_ASK_CONTEXT_KEY)
-        {
-            context_vars.insert(
-                AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
-                auto_approve_ask.to_string(),
-            );
-        }
+        copy_turn_control_context(&mut context_vars, user_message_metadata.as_ref());
         Self::copy_output_schema_context(&mut context_vars, user_message_metadata.as_ref());
         if let Some(delivery) =
             openbitfun_core_types::background_delivery::BackgroundDelivery::from_metadata(
@@ -8164,24 +8185,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     .to_string(),
             );
         }
-        if let Some(user_input_available) = metadata_bool(
-            plan.user_message_metadata.as_ref(),
-            USER_INPUT_AVAILABLE_CONTEXT_KEY,
-        ) {
-            context_vars.insert(
-                USER_INPUT_AVAILABLE_CONTEXT_KEY.to_string(),
-                user_input_available.to_string(),
-            );
-        }
-        if let Some(auto_approve_ask) = metadata_bool(
-            plan.user_message_metadata.as_ref(),
-            AUTO_APPROVE_ASK_CONTEXT_KEY,
-        ) {
-            context_vars.insert(
-                AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
-                auto_approve_ask.to_string(),
-            );
-        }
+        copy_turn_control_context(&mut context_vars, plan.user_message_metadata.as_ref());
         Self::copy_output_schema_context(&mut context_vars, plan.user_message_metadata.as_ref());
 
         let execution_context = ExecutionContext {
@@ -16791,6 +16795,41 @@ pub(crate) mod tests {
     use openbitfun_runtime_services::test_support::FakeRuntimePort;
     use openbitfun_services_core::permission_store::ProjectPermissionSqliteStore;
     use std::path::Path;
+
+    #[test]
+    fn desktop_cards_turn_origin_survives_recovery_without_tainting_local_turns() {
+        use openbitfun_agent_runtime::remote_file_delivery::TOOL_CONTEXT_PEER_DEVICE_CONTROL_KEY;
+        use std::collections::HashMap;
+
+        // A legacy/local payload has no source marker. New host-stamped
+        // metadata round-trips through persisted turns and queue entries.
+        for metadata in [
+            None,
+            Some(serde_json::json!({"surface": "flow_chat"})),
+            Some(serde_json::json!({"peer_device_control": true, "requestId": "peer-turn"})),
+            Some(serde_json::json!({"peer_device_control": false})),
+        ] {
+            let restored: Option<serde_json::Value> =
+                serde_json::from_str(&serde_json::to_string(&metadata).unwrap()).unwrap();
+            let mut original_context = HashMap::new();
+            super::copy_turn_control_context(&mut original_context, metadata.as_ref());
+            let mut recovered_context = HashMap::new();
+            super::copy_turn_control_context(&mut recovered_context, restored.as_ref());
+            assert_eq!(original_context, recovered_context);
+            let expected = metadata
+                .as_ref()
+                .and_then(|value| value.get(TOOL_CONTEXT_PEER_DEVICE_CONTROL_KEY))
+                .and_then(serde_json::Value::as_bool)
+                .map(|value| value.to_string());
+            assert_eq!(
+                recovered_context.get(TOOL_CONTEXT_PEER_DEVICE_CONTROL_KEY),
+                expected.as_ref()
+            );
+        }
+        let mut next_local_turn = HashMap::new();
+        super::copy_turn_control_context(&mut next_local_turn, None);
+        assert!(!next_local_turn.contains_key(TOOL_CONTEXT_PEER_DEVICE_CONTROL_KEY));
+    }
 
     #[test]
     fn input_image_count_admission_ignores_stale_pool_pointers_for_fixed_models() {

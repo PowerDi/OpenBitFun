@@ -20,6 +20,15 @@ and platform adapters. Product logic and stable contracts should remain in the
 platform-agnostic Rust layers and be exposed to these apps through explicit
 interfaces.
 
+## Chat Markdown
+
+Android, iOS and HarmonyOS keep single tildes literal in chat, matching the
+desktop and mobile-web renderers: `24~30°C`, `1~2mm` and `~5 min` remain plain
+text. Use `~~removed~~` for strikethrough. Escaped tildes (`\~`) and inline code
+keep their literal text; unfinished double pairs remain literal while streaming.
+This rendering policy applies to existing transcripts without changing the
+host's saved Markdown or requiring a protocol upgrade.
+
 ## Image messages
 
 All three apps can send images with or without text. Camera photos are decoded
@@ -68,6 +77,7 @@ metadata, execution-mode IDs, speech draft merging, and completion observation i
 |---|---|---|
 | Execution modes | Minimal / Standard / Ultimate, with the HarmonyOS density glyph; workspace menus also retain Cowork | Enabled only by live `get_workspace_info.capabilities` containing `harness_profiles_v1`; older hosts keep Code / Cowork. Capability absence in old payloads is covered by a round-trip test. |
 | Running-turn input | A nonempty remote draft offers Send; an empty composer retains Stop | Hosts advertising `dialog_steer_v1` receive `steer_turn` with the active turn ID. Older hosts retain `send_message` queueing; failed sends retain the draft and attachments. |
+| Pending messages | Android, iOS and HarmonyOS show the execution host’s queue above the composer. Drag the handle, or use Move up/down in the menu; Send now and Remove affect only the selected message. | Requires `dialog_queue_v1`; reordering additionally requires `supportsReorder` in the snapshot. Older hosts retain their working controls and show why sorting is unavailable. Offline or failed replies retain the list, and changing sessions cancels stale gestures and replies. |
 | Next-input suggestions | Android, iOS and HarmonyOS show the host's suggestion above an empty, idle composer; tapping fills and focuses the editor without sending | Uses the existing host session stream. Hints retain their exact text and retire on newer turns, session changes or host restarts. Older hosts simply show no hint; no new Relay API or migration is needed. |
 | Plans | Legacy CreatePlan, structured plans and `.plan.md` writes show a plan card with file preview and Build | Build requires `plan_build_v1`, a completed plan tool and an idle connected session. Paths remain remote; the mobile app never runs the plan locally. |
 | Offline Mini Apps | Gomoku, Regex Playground and Daily Divination open from welcome and sidebar without login | Product-owned sources are bundled by `miniapps/generate.cjs`; native WebView hosts expose only per-app allowlisted storage and clipboard. No network, Node or shell bridge. |

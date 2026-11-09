@@ -208,6 +208,7 @@
     "rateLimitWarning": "Approaching the rate limit"
   },
   "historyState": {
+    "emptyWindow": "No visible messages in this history window.",
     "loadingTitle": "Loading saved session",
     "loadingDescription": "Preparing the conversation history.",
     "failedTitle": "Session history did not load",
@@ -791,11 +792,16 @@
       "clipboardPathsUnavailable": "The clipboard reported files, but their local paths could not be read.",
       "dropPathsUnavailable": "This file drop did not expose local paths. Copy the files and paste them into the composer instead.",
       "partialFailure": "Added {{added}} item(s); {{failed}} item(s) were unavailable or unsupported.",
+      "controllerDirectoryUnsupported": "Folders from this device cannot be attached to a session that runs on another host. Attach the files inside instead.",
+      "controllerFilesNeedWorkspace": "Open a workspace for this session to attach files from this device. Images can still be attached.",
+      "controllerFileTooLarge": "{{name}} is larger than {{limit}} MB and cannot be sent to the executing host.",
+      "controllerUploading": "Sending {{count}} file(s) to the executing host...",
+      "controllerUploadFailed": "Could not send {{name}} to the executing host: {{error}}",
       "unsupported": {
         "web": "This web session cannot reference local files. Use a Desktop local session.",
-        "remote-workspace": "This remote workspace cannot reference files from this device.",
-        "peer-device": "A peer-device session cannot reference files from the controller device.",
-        "detached-dispatch": "A detached task cannot depend on files from the submitting device."
+        "remote-workspace": "This remote workspace cannot reference files from this device. Images can still be attached.",
+        "peer-device": "Update the peer device to attach files from this device. Images can still be attached.",
+        "detached-dispatch": "A detached task cannot depend on files from the submitting device. Images can still be attached."
       }
     },
     "removeImage": "Remove image",
@@ -1120,6 +1126,7 @@
     "compactAction": "Compact session",
     "compactNoSession": "No active session for /compact",
     "compactBusy": "Wait until the session is idle before using /compact.",
+    "compactPending": "Compaction is still running. Wait for it to finish before trying /compact again.",
     "compactUsage": "Use /compact without extra arguments.",
     "compactFailed": "Session compaction failed",
     "usageAction": "Session usage",
@@ -3536,6 +3543,8 @@
     }
   },
   "welcome": {
+    "workspaceChanges_one": "The workspace is stirring. <number>{{fileCount}}</number> changed file hasn’t been committed.",
+    "workspaceChanges_other": "The workspace is stirring. <number>{{fileCount}}</number> changed files haven’t been committed.",
     "openingWorkspace": "Let's get to work in <workspace>{{workspace}}</workspace>.",
     "openingMorning": "Good morning. The day starts with you.",
     "openingAfternoon": "Good afternoon. Let's make today a little more interesting.",
@@ -3879,15 +3888,19 @@
     "showAll": "Show all"
   },
   "pendingQueue": {
-    "title": "Wait for sending",
-    "label": "Wait for sending {{count}}",
+    "title": "Queued messages",
+    "label": "Queued messages {{count}}",
     "attachmentCount": "{{count}} image attachment(s)",
     "attachmentCount_one": "{{count}} image attachment",
     "attachmentCount_other": "{{count}} image attachments",
     "emptyPlaceholder": "(empty message)",
     "statusSending": "Steering…",
-    "statusFailed": "Send failed — edit / send now / delete to clear",
+    "statusQueuedSending": "Sending…",
+    "statusFailed": "Send failed",
     "actions": {
+      "more": "More message actions",
+      "collapse": "Collapse queue",
+      "sendNowLabel": "Send now",
       "edit": "Edit",
       "sendNow": "Send now (steer)",
       "delete": "Delete"
@@ -3898,7 +3911,12 @@
     "errors": {
       "composerNotEmpty": "Send or clear the current input and attachments before editing this queued message",
       "sendNowFailed": "Send now failed; please try again"
-    }
+    },
+    "reorder": "Drag to reorder",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "orderChanged": "The queue changed. Refresh it and try moving the message again.",
+    "reorderUnsupported": "Update the execution host to reorder queued messages."
   },
   "steering": {
     "title": "Steer",
@@ -3965,6 +3983,7 @@
     "cancel": "Remove from queue",
     "refresh": "Refresh",
     "unknown": "Delivery is unconfirmed. Check before sending again.",
+    "retry": "Retry",
     "checkRetry": "Check / retry",
     "copyDraft": "Copy draft to composer",
     "dismiss": "Dismiss local reminder",

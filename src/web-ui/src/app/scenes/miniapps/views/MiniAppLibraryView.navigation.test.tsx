@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   getListing: vi.fn(), installedStatus: vi.fn(), browse: vi.fn(), install: vi.fn(),
   openApp: vi.fn(), deleteMiniApp: vi.fn(), error: vi.fn(), success: vi.fn(),
   systemInstall: vi.fn(), progress: vi.fn(),
+  listMiniApps: vi.fn(), workerListRunning: vi.fn(), installedOrigins: vi.fn(),
+  refetch: undefined as undefined | (() => Promise<void>),
 }));
 vi.mock('@/infrastructure/i18n', () => ({ useI18n: () => ({
   t: (key: string) => key, currentLanguage: 'en-US', formatNumber: String,
@@ -24,7 +26,9 @@ vi.mock('@/shared/notification-system', () => ({ useNotification: () => mocks })
 vi.mock('@/infrastructure/account-identity', () => ({ useAccountIdentity: () => ({ me: null }) }));
 vi.mock('@/features/market-account', () => ({ AccountIdentityControls: () => null }));
 vi.mock('@/app/hooks/useSceneManager', () => ({ useSceneManager: () => ({ openTabs: [], closeScene: vi.fn() }) }));
-vi.mock('@/app/hooks/useGallerySceneAutoRefresh', () => ({ useGallerySceneAutoRefresh: () => undefined }));
+vi.mock('@/app/hooks/useGallerySceneAutoRefresh', () => ({
+  useGallerySceneAutoRefresh: ({ refetch }: { refetch: () => Promise<void> }) => { mocks.refetch = refetch; },
+}));
 vi.mock('../hooks/useMiniAppActivity', () => ({ useMiniAppActivity: () => [] }));
 vi.mock('../hooks/useMiniAppCreation', () => ({ useMiniAppCreation: () => ({ creating: false, createMiniApp: vi.fn() }) }));
 vi.mock('../hooks/useMiniAppLaunch', () => ({ useMiniAppLaunch: () => ({ supported: !mocks.remote, busyAppIds: [], openApp: mocks.openApp }) }));
@@ -76,6 +80,9 @@ beforeEach(() => {
   mocks.installedStatus.mockResolvedValue(null);
   mocks.deleteMiniApp.mockReset().mockResolvedValue(undefined);
   mocks.browse.mockResolvedValue({ items: [listing] });
+  mocks.listMiniApps.mockResolvedValue([app]);
+  mocks.workerListRunning.mockResolvedValue([]);
+  mocks.installedOrigins.mockResolvedValue({});
   mocks.install.mockResolvedValue({ app, origin: { listingId: listing.listingId, releaseId: 'r1', releaseNumber: 1, packageSha256: '' } });
   mocks.systemInstall.mockResolvedValue({ path: '/Applications/Notes.app' });
   mocks.progress.mockReturnValue({ complete: mocks.success, fail: mocks.error, cancel: vi.fn() });
@@ -87,9 +94,85 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  vi.useRealTimers();
 });
 
 describe('MiniApp detail page navigation', () => {
+  it.each([{ apps: [] }, { apps: [app] }])('retains installed content throughout a pending return refresh: $apps.length entries', async ({ apps }) => {
+    vi.useFakeTimers();
+    useMiniAppStore.setState({ apps });
+    await render();
+    const card = container.querySelector('.miniapp-installed-card');
+    let finish!: (apps: MiniAppMeta[]) => void;
+    mocks.listMiniApps.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    let refresh!: Promise<void>;
+    await act(async () => { refresh = mocks.refetch!(); });
+    expect(useMiniAppStore.getState().loading).toBe(false);
+    expect(container.querySelector('.gallery-skeleton')).toBeNull();
+    if (card) expect(container.querySelector('.miniapp-installed-card')).toBe(card);
+    else expect(container.textContent).toContain('market.library.empty');
+    await act(async () => { finish([{ ...app, name: 'Refreshed' }]); await refresh; });
+    expect(container.querySelector('.miniapp-installed-card')?.textContent).toContain('Refreshed');
+  });
+
+  it('does not clear another catalog load while a return refresh finishes', async () => {
+    vi.useFakeTimers();
+    useMiniAppStore.setState({ apps: [], loading: true });
+    await render();
+    await act(async () => { await mocks.refetch!(); });
+    expect(useMiniAppStore.getState().loading).toBe(true);
+  });
+
+  it.each([{ items: [] }, { items: [listing] }])('keeps a cached marketplace snapshot during return refresh: $items.length entries', async ({ items }) => {
+    vi.useFakeTimers();
+    mocks.items = items;
+    await render('market');
+    let finish!: (page: { items: MarketListingDetail[] }) => void;
+    mocks.browse.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    let refresh!: Promise<void>;
+    await act(async () => { refresh = mocks.refetch!(); });
+    expect(container.querySelector('.gallery-skeleton')).toBeNull();
+    expect(container.querySelector('[role="list"][aria-busy="true"]')).toBeNull();
+    if (items.length) expect(container.querySelector('.miniapp-library-row')?.textContent).toContain('Timer');
+    else expect(container.textContent).toContain('market.empty');
+    await act(async () => { finish({ items: [listing] }); await refresh; });
+    expect(container.querySelector('.miniapp-library-row')?.textContent).toContain('Timer');
+  });
+
+  it.each([{ apps: [] }, { apps: [app] }])('finishes the installed refresh before the marketplace responds: $apps.length entries', async ({ apps }) => {
+    vi.useFakeTimers();
+    mocks.listMiniApps.mockResolvedValue(apps);
+    useMiniAppStore.setState({ apps });
+    let finishCatalog!: (page: { items: MarketListingDetail[] }) => void;
+    mocks.browse.mockReturnValue(new Promise(resolve => { finishCatalog = resolve; }));
+    await render();
+    let refresh!: Promise<void>;
+    await act(async () => { refresh = mocks.refetch!(); });
+    expect(mocks.listMiniApps).toHaveBeenCalledOnce();
+    expect(mocks.workerListRunning).toHaveBeenCalledOnce();
+    expect(mocks.installedOrigins).toHaveBeenCalledOnce();
+    expect(mocks.browse).toHaveBeenCalledOnce();
+    expect(useMiniAppStore.getState().apps).toEqual(apps);
+    expect(useMiniAppStore.getState().loading).toBe(false);
+    expect(container.querySelector('.gallery-skeleton')).toBeNull();
+    expect(container.querySelector('[role="list"][aria-busy="true"]')).toBeNull();
+    if (apps.length) expect(container.querySelector('.miniapp-installed-card')?.textContent).toContain('Notes');
+    else expect(container.textContent).toContain('market.library.empty');
+    await act(async () => { finishCatalog({ items: [listing] }); await refresh; });
+    expect(useMiniAppStore.getState().apps).toEqual(apps);
+  });
+
+  it('retains installed data when a refreshed marketplace request fails', async () => {
+    vi.useFakeTimers();
+    mocks.browse.mockRejectedValue(new Error('Marketplace unavailable'));
+    await render();
+    await act(async () => { await mocks.refetch!(); });
+    expect(useMiniAppStore.getState().apps).toEqual([app]);
+    expect(useMiniAppStore.getState().loading).toBe(false);
+    expect(container.querySelector('.miniapp-installed-card')?.textContent).toContain('Notes');
+    expect(mocks.browse).toHaveBeenCalledOnce();
+  });
+
   it('uses notification-center feedback when adding a system app from the card menu', async () => {
     await render();
     const more = container.querySelector<HTMLButtonElement>('[aria-label="presentation.moreActions"]')!;
@@ -148,7 +231,7 @@ describe('MiniApp detail page navigation', () => {
     expect(mocks.openApp).not.toHaveBeenCalled();
     await act(async () => button('detail.back').click());
     await act(async () => launch.click());
-    expect(mocks.openApp).toHaveBeenCalledWith('notes', 'tab', 'box');
+    expect(mocks.openApp).toHaveBeenCalledWith('notes', 'tab', 'box', expect.objectContaining({ element: expect.any(HTMLButtonElement) }));
     expect(page()).toBeNull();
     expect(mocks.getListing).not.toHaveBeenCalled();
 
@@ -194,8 +277,9 @@ describe('MiniApp detail page navigation', () => {
     const menu = document.querySelector<HTMLElement>('[role="menu"][aria-label="detail.start"]')!;
     expect(menu).not.toBeNull();
     await act(async () => button(kind === 'tab' ? 'presentation.openTab' : 'presentation.openWindow', menu).click());
-    expect(mocks.openApp).toHaveBeenCalledExactlyOnceWith('notes', kind, 'box');
-    expect(page()).toBeNull();
+    expect(mocks.openApp).toHaveBeenCalledExactlyOnceWith('notes', kind, 'box', expect.objectContaining({ element: expect.any(HTMLButtonElement) }));
+    // Keep the action's context mounted while the host checks for a transfer.
+    expect(page()?.querySelector('h1')?.textContent).toBe('Notes');
   });
 
   it('disables the independent-window menu choice on remote surfaces and permits in-app launch', async () => {
@@ -208,7 +292,7 @@ describe('MiniApp detail page navigation', () => {
     await act(async () => windowChoice.click());
     expect(mocks.openApp).not.toHaveBeenCalled();
     await act(async () => button('presentation.openTab', menu).click());
-    expect(mocks.openApp).toHaveBeenCalledExactlyOnceWith('notes', 'tab', 'box');
+    expect(mocks.openApp).toHaveBeenCalledExactlyOnceWith('notes', 'tab', 'box', expect.objectContaining({ element: expect.any(HTMLButtonElement) }));
   });
 
   it('requires confirmation before uninstalling from details', async () => {

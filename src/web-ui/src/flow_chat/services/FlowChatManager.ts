@@ -79,7 +79,7 @@ import { installDispatchJobObserver } from '../session-drivers/dispatch/install'
 import { driverForSession } from '../session-drivers/registry';
 import { registerDriverSessionLookup } from '../session-drivers/resolve';
 import { isAcpFlowSession } from '../utils/acpSession';
-import type { SendMessageOptions } from '../session-drivers/types';
+import type { CompactSessionResult, SendMessageOptions } from '../session-drivers/types';
 
 const log = createLogger('FlowChatManager');
 
@@ -874,16 +874,18 @@ export class FlowChatManager {
   }
 
   /** Manually compact a session's context through its driver. */
-  async compactSession(sessionId: string): Promise<void> {
+  async compactSession(sessionId: string, turnId?: string): Promise<CompactSessionResult> {
     const draft = this.context.flowChatStore.getState().sessions.get(sessionId);
     if (draft?.draft) await prepareSessionDraftForCommand(draft);
     const session = this.context.flowChatStore.getState().sessions.get(sessionId);
     // External agents own their context: their native driver runs `/compact`
-    // as a turn. The OpenBitFun runtime cannot compact (or resolve) them.
+    // as a turn. Carry the requested identity so its terminal events settle
+    // the same pending compaction as the runtime admission path.
     if (isAcpFlowSession(session)) {
-      return this.sendMessage('/compact', sessionId, '/compact');
+      await this.sendMessage('/compact', sessionId, '/compact', undefined, undefined, { turnId });
+      return { accepted: true, turnId };
     }
-    return driverForSession(sessionId, session).compactSession(this.context, sessionId);
+    return driverForSession(sessionId, session).compactSession(this.context, sessionId, turnId);
   }
 
   /** Produce the session usage report and show it, through its driver. */

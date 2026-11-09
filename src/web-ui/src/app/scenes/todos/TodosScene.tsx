@@ -11,7 +11,7 @@
  * broadcast on the shared change event so those views stay in step.
  */
 
-import {
+import { captureConfirmationAnchor,
   Button,
   Icon,
   ScrollArea,
@@ -64,19 +64,17 @@ import {
   type TodoOccurrence,
 } from './todoOccurrences';
 import { buildWorkspaceOptions, formatDateTime } from './todoPresentation';
+import { useTodoClock } from './useTodoClock';
 import './TodosScene.scss';
 
 const log = createLogger('TodosScene');
-
-/** Keeps countdowns honest without re-rendering more than once a minute. */
-const CLOCK_TICK_MS = 30_000;
 
 function startOfCurrentMonthMs(nowMs: number): number {
   const now = new Date(nowMs);
   return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
 }
 
-const TodosScene: React.FC = () => {
+const TodosScene: React.FC<{ isActive?: boolean }> = ({ isActive = true }) => {
   const { t, formatDate } = useI18n(['scenes/todos', 'common', 'shared']);
   const instanceIdRef = useRef(`todos-scene-${Math.random().toString(36).slice(2)}`);
 
@@ -84,7 +82,7 @@ const TodosScene: React.FC = () => {
 
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [saving, setSaving] = useState(false);
-  const [nowMs, setNowMs] = useState(() => Date.now());
+  const nowMs = useTodoClock(isActive);
   const [monthAnchorMs, setMonthAnchorMs] = useState(() => startOfCurrentMonthMs(Date.now()));
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
 
@@ -147,11 +145,6 @@ const TodosScene: React.FC = () => {
     }
     return workspaceOptions[0]?.value ?? '';
   }, [currentWorkspace, primaryAssistantWorkspaceId, workspaceOptions]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setNowMs(Date.now()), CLOCK_TICK_MS);
-    return () => window.clearInterval(timer);
-  }, []);
 
   const loadJobs = useCallback(async () => {
     try {
@@ -260,8 +253,8 @@ const TodosScene: React.FC = () => {
     }
   }, [loadJobs, t]);
 
-  const handleDelete = useCallback(async (job: CronJob) => {
-    const confirmed = await confirmDanger(t('deleteDialog.title', { name: job.name }), null);
+  const handleDelete = useCallback(async (job: CronJob, trigger?: HTMLElement) => {
+    const confirmed = await confirmDanger(t('deleteDialog.title', { name: job.name }), null, { anchor: captureConfirmationAnchor(trigger) });
     if (!confirmed) return;
 
     try {
@@ -526,7 +519,7 @@ const TodosScene: React.FC = () => {
                     workspaces={openedWorkspacesList}
                     isSelected={editingJob?.id === occurrence.job.id}
                     onEdit={handleEdit}
-                    onDelete={(job) => { void handleDelete(job); }}
+                    onDelete={(job, trigger) => { void handleDelete(job, trigger); }}
                     onToggleEnabled={(job, enabled) => { void handleToggleEnabled(job, enabled); }}
                   />
                 ))}
@@ -549,7 +542,7 @@ const TodosScene: React.FC = () => {
                       statusLabel={inactiveStatusLabel(entry.reason)}
                       isSelected={editingJob?.id === entry.job.id}
                       onEdit={handleEdit}
-                      onDelete={(job) => { void handleDelete(job); }}
+                      onDelete={(job, trigger) => { void handleDelete(job, trigger); }}
                       onToggleEnabled={(job, enabled) => { void handleToggleEnabled(job, enabled); }}
                     />
                   ))}
@@ -626,7 +619,7 @@ const TodosScene: React.FC = () => {
                           workspaces={openedWorkspacesList}
                           isSelected={editingJob?.id === occurrence.job.id}
                           onEdit={handleEdit}
-                          onDelete={(job) => { void handleDelete(job); }}
+                          onDelete={(job, trigger) => { void handleDelete(job, trigger); }}
                           onToggleEnabled={(job, enabled) => { void handleToggleEnabled(job, enabled); }}
                         />
                       ))}

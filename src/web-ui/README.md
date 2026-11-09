@@ -9,6 +9,43 @@ This directory contains OpenBitFun’s **Web UI** (React + TypeScript). The same
 - **Desktop**: loaded via **Tauri**
 - **Server/Web**: built into static assets and served by the backend
 
+## Markdown in conversations
+
+Use `~~text~~` for strikethrough. Single tildes stay literal, so ranges such as
+`24~30°C` and `1~2mm` can appear in the same paragraph. Escaped tildes (`\~`)
+and tildes inside code stay literal too. This applies to streamed and completed
+replies, including replies containing math; saved message text is unchanged.
+
+## Closing tabs with the keyboard
+
+In Desktop, **Ctrl+W** on Windows/Linux or **Cmd+W** on macOS closes the current
+tab in the region you are using. From the conversation area it closes the
+conversation tab; from the file or terminal area it closes that area's current
+tab. Split views use the focused group. An empty content pane does not close a
+conversation in the other pane.
+
+The shortcut uses the same unsaved-change checks and terminal lifecycle as the
+tab's close button. Existing custom bindings for **Close tab** continue to apply
+to both regions. Dialogs and held-key repeats do not close additional tabs.
+Numbered tab selection, reopening a closed tab and layout shortcuts also stay
+with their owning canvas. Recording a new binding in Settings captures the key
+without executing the existing command.
+
+## Opening web links
+
+In **Settings → Tools → Browser & desktop control → Web links**, choose whether
+conversation links open in the **Built-in browser** or the **System default
+browser**. The choice applies immediately and is saved on this device, including
+while viewing remote workspaces or switching peers. Existing installs keep the
+built-in default until you change it.
+In a Web deployment, the external option opens a new tab in the current browser.
+Changes also synchronize to other open pages sharing this device's local storage.
+
+Right-click a link to choose either browser for that click. Modifier-clicks
+continue to open the external browser; supported PR/MR links keep their review
+panel behavior. This preference does not change the browser used by agent
+browser control, or the separate mobile/IM and headless dispatch surfaces.
+
 ## Creating a project
 
 The sidebar's add button opens two clickable cards without footer actions.
@@ -44,6 +81,34 @@ Folder addition uses the system picker on this computer and an environment-scope
 All folders in one project must belong to the same connection/environment; remove
 the selected folders before changing either source dimension.
 The form does not show recent projects.
+
+## Connecting Magpie
+
+Open **Settings → Models → Model sources → Detect Magpie**. The inline panel
+checks gateway identity and reads its published model catalog without sending
+an inference request. Start Magpie (or run a Magpie server) on the OpenBitFun host;
+the default address is `http://127.0.0.1:3425/v1` with `magpie-openbitfun` as
+the local app identity. Enter a custom address for another port or reverse proxy.
+Remote/Docker gateways require a gateway key created in Magpie.
+Loopback gateways connect directly on that host even when an outbound model proxy
+is enabled; remote gateway addresses keep the configured proxy policy.
+
+Select the desired models or routing groups and choose **Add models**. They appear
+in **All models**, where they can be tested, assigned as defaults, or added to
+OpenBitFun model pools. Magpie manages the members and routing inside its own
+groups. **Manage models** reopens existing gateways; refreshing never deletes
+saved models, defaults or pool references. Missing entries are shown explicitly.
+
+Discovery runs on the selected OpenBitFun inference host, including Desktop and
+CLI peers; an SSH workspace does not move inference onto that SSH machine. Older
+peers show an unsupported state and retain manual gateway configuration. Remote
+control and detached jobs use the host's saved models through their existing
+model-selection paths; they do not need this settings panel attached. Directory
+access does not establish that inference works. Use the model's connection test
+when you want to send an actual inference request.
+
+Chat Completions is the import default. Use the existing model editor for
+Responses, Anthropic Messages, or manual setup when detection is unavailable.
 
 ## MCP configuration
 

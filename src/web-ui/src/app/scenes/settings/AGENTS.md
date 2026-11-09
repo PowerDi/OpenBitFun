@@ -43,6 +43,26 @@ pnpm --dir src/web-ui run test:run src/infrastructure/config/components/common/S
 ```
 
 Follow the parent guide for `check:web`, i18n, and Appearance registration checks.
+
+For the controller-local web link preference, persistence and explicit browser actions:
+
+```bash
+pnpm --dir src/web-ui run test:run src/infrastructure/config/services/browserLinkPreference.test.ts src/infrastructure/markdown/MarkdownRenderer.test.tsx src/infrastructure/api/service-api/SystemAPI.test.ts src/app/scenes/settings/settingsRegistry.test.ts src/app/scenes/settings/pages/shared/RuntimeSettings.test.tsx src/infrastructure/config/components/common/SettingsControlSizing.test.ts
+```
+
+The link preference remains editable independently of host control status. These
+storage/DOM fixtures cover cross-window preference updates, remote workspace metadata and simulated Peer switches;
+they do not establish native browser opening, live remote scenarios, or visual fidelity.
+
+For keyboard shortcut recording, command suppression, IME and capture lifetime:
+
+```bash
+pnpm --dir src/web-ui run test:run src/app/scenes/settings/pages/application/KeyboardShortcutsSection.test.tsx src/app/scenes/settings/pages/application/KeyboardShortcutsSection.presentation.test.ts src/infrastructure/services/ShortcutManager.test.ts
+```
+
+These DOM fixtures simulate Windows/macOS modifiers and retained settings sections;
+they do not establish native keyboard delivery or live remote behavior.
+
 For the independent Appearance conversation-width setting and shared drag preference:
 
 ```bash
@@ -153,3 +173,13 @@ addition to the existing account-quota capability. Keep API-key model setup in
 the ordinary provider/custom model flow; MiniMax, Kimi Code and StepFun have no
 separate subscription importer or allowance UI. The existing OpenCode Go path
 retains its independently advertised capability.
+
+For inline Magpie identity/catalog detection, idempotent imports, retained missing
+models, unsupported peers and surface-switch isolation, run:
+
+```bash
+pnpm --dir src/web-ui run test:run src/app/scenes/settings/pages/ai/ModelSettingsPage.loading.test.tsx src/infrastructure/config/services/magpieModels.test.ts src/infrastructure/api/adapters/peer-device-adapter.test.ts src/infrastructure/peer-device/PeerConnectionManager.test.ts
+```
+
+These fixtures do not establish live Peer, SSH, Remote Control or Detached Dispatch
+behavior. Imported models use the existing host configuration and selector paths.

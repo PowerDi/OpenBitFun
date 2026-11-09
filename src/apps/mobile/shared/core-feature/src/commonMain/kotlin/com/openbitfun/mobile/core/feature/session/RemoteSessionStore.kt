@@ -164,6 +164,10 @@ public class RemoteSessionStore internal constructor(
     private var modelCatalogDirty = false
     private var permissionRefresh: Job? = null
     private val timelineStore = ChatTimelineStore()
+    private val messageQueue = MessageQueueStore(scope, transport) { queue ->
+        val ready = _state.value as? RemoteSessionUiState.Ready
+        if (ready != null && ready.selectedSessionId == queue.sessionId) _state.value = ready.copy(messageQueue = queue)
+    }
     private val permissionMailbox = PermissionMailboxStore(scope, transport) { mailbox ->
         val ready = _state.value as? RemoteSessionUiState.Ready
         if (ready != null) _state.value = ready.copy(permissionMailbox = mailbox)
@@ -216,6 +220,10 @@ public class RemoteSessionStore internal constructor(
     public fun dispatch(intent: RemoteSessionIntent) {
         val current = _state.value as? RemoteSessionUiState.Ready
         when (intent) {
+            RemoteSessionIntent.RefreshMessageQueue -> messageQueue.invalidate()
+            is RemoteSessionIntent.MoveQueuedMessage -> messageQueue.move(intent.id, intent.beforeId)
+            is RemoteSessionIntent.CancelQueuedMessage -> messageQueue.act(intent.id, "cancel")
+            is RemoteSessionIntent.PromoteQueuedMessage -> messageQueue.act(intent.id, "promote")
             is RemoteSessionIntent.StartQuestionInteraction -> permissionMailbox.startQuestion(intent.toolId)
             is RemoteSessionIntent.RespondPermission -> permissionMailbox.respond(intent.requestId, intent.approve, intent.updatedInput)
             RemoteSessionIntent.RefreshPermissionMailbox -> permissionMailbox.invalidate()
@@ -590,24 +598,37 @@ public class RemoteSessionStore internal constructor(
 
     private fun publishCommittedCreate(session: RemoteSession, previous: RemoteSessionUiState.Ready?): Long {
         projectConfirmedCreatedSession(session)
-        if (_state.value !is RemoteSessionUiState.Ready) {
-            publishAuthorityReady(RemoteSessionUiState.Ready(
-                sessions = listOf(session),
-                selectedSessionId = session.id,
-                timeline = null,
-                busy = true,
-                permissionMode = previous?.permissionMode,
-                permissionModeFailure = previous?.permissionModeFailure,
-                query = previous?.query.orEmpty(),
-                agentFilter = previous?.agentFilter ?: SessionAgentFilter.ALL,
-                hasMore = previous?.hasMore ?: false,
-                hasMoreMessages = false,
-                modelCatalog = modelCatalog ?: previous?.modelCatalog,
-                modelCatalogFailure = modelCatalogFailure ?: previous?.modelCatalogFailure,
-                draft = "",
-            ))
-        }
-        return (_state.value as RemoteSessionUiState.Ready).revision
+        val current = _state.value as? RemoteSessionUiState.Ready
+        return publishAuthorityReady(
+            if (current != null) {
+                current.copy(
+                    selectedSessionId = session.id,
+                    timeline = null,
+                    busy = true,
+                    hasMoreMessages = false,
+                    draft = "",
+                    lastSentMessage = null,
+                    historyLoadState = HistoryLoadState.IDLE,
+                    promptSuggestion = null,
+                )
+            } else {
+                RemoteSessionUiState.Ready(
+                    sessions = listOf(session),
+                    selectedSessionId = session.id,
+                    timeline = null,
+                    busy = true,
+                    permissionMode = previous?.permissionMode,
+                    permissionModeFailure = previous?.permissionModeFailure,
+                    query = previous?.query.orEmpty(),
+                    agentFilter = previous?.agentFilter ?: SessionAgentFilter.ALL,
+                    hasMore = previous?.hasMore ?: false,
+                    hasMoreMessages = false,
+                    modelCatalog = modelCatalog ?: previous?.modelCatalog,
+                    modelCatalogFailure = modelCatalogFailure ?: previous?.modelCatalogFailure,
+                    draft = "",
+                )
+            },
+        )
     }
 
     private fun publishAuthorityReady(ready: RemoteSessionUiState.Ready): Long {
@@ -632,6 +653,7 @@ public class RemoteSessionStore internal constructor(
         (_state.value as? RemoteSessionUiState.Ready)?.let { _state.value = it.copy(promptSuggestion = null) }
         catalogSubscription?.cancel(); catalogRefresh?.cancel()
         permissionMailbox.select(null)
+        messageQueue.select(null, false)
         setForeground(false)
         activeCreateGeneration?.let { generation ->
             val requestId = (_createOperation.value as? CreateSessionOperationState.InFlight)?.requestId
@@ -799,6 +821,7 @@ public class RemoteSessionStore internal constructor(
 
     private fun recordHostCapabilities(capabilities: List<String>) {
         hostCapabilities = capabilities
+        messageQueue.select((_state.value as? RemoteSessionUiState.Ready)?.selectedSessionId, "dialog_queue_v1" in capabilities)
         hostCapabilitiesKnown = true
     }
 
@@ -1095,6 +1118,7 @@ public class RemoteSessionStore internal constructor(
     private fun subscribeSessionUpdates(sessionId: String): CompletableDeferred<Unit> {
         val initialHistory = CompletableDeferred<Unit>()
         permissionMailbox.select(sessionId)
+        messageQueue.select(sessionId, "dialog_queue_v1" in hostCapabilities)
         sessionUpdates?.cancel()
         transcriptWrite?.cancel()
         forgetWrittenTranscript()
@@ -1421,13 +1445,36 @@ public class RemoteSessionStore internal constructor(
                 if (!succeedCreate(requestId, generation, confirmedSession, commitRevision)) return@launch
                 activeCreateGeneration = null
 
-                intent.modelId?.trim()?.takeIf(String::isNotEmpty)?.let { modelId ->
-                    transport.send<SetSessionModelResponse>(
-                        RemoteCommand(cmd = "set_session_model", sessionId = sessionId, modelId = modelId),
-                    )
-                    if (!isCurrentWork(operationToken)) return@launch
+                val modelSelection = intent.modelId?.trim()?.takeIf(String::isNotEmpty)?.let { modelId ->
+                    async {
+                        try {
+                            Result.success(
+                                transport.send<SetSessionModelResponse>(
+                                    RemoteCommand(cmd = "set_session_model", sessionId = sessionId, modelId = modelId),
+                                ),
+                            )
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Throwable) {
+                            Result.failure(error)
+                        }
+                    }
                 }
                 val opened = openSession(sessionId, operationToken) ?: return@launch
+                if (!isCurrentWork(operationToken)) return@launch
+                // Hydration may finish before model selection. Publish the transcript
+                // now, retaining typing and mailbox updates received while waiting.
+                val hydrated = _state.value as? RemoteSessionUiState.Ready ?: return@launch
+                publishAuthorityReady(hydrated.copy(
+                    timeline = timelineStore.snapshot(),
+                    permissionMode = opened.permission.mode,
+                    permissionModeFailure = opened.permission.failure,
+                    hasMoreMessages = opened.hasMoreMessages,
+                ))
+                modelSelection?.await()?.getOrThrow()?.let { response ->
+                    if (!isCurrentWork(operationToken)) return@launch
+                    timelineStore.setSelectedModelId(response.modelId ?: intent.modelId.orEmpty())
+                }
                 intent.instruction.trim().takeIf(String::isNotEmpty)?.let { instruction ->
                     val sent = transport.send<SendMessageResponse>(
                         RemoteCommand(
@@ -1444,20 +1491,12 @@ public class RemoteSessionStore internal constructor(
                 val page = listSessions(0, current?.query.orEmpty(), current?.agentFilter ?: SessionAgentFilter.ALL)
                 if (!isCurrentWork(operationToken)) return@launch
                 commitSessionPage(page)
-                publishAuthorityReady(RemoteSessionUiState.Ready(
+                val ready = _state.value as? RemoteSessionUiState.Ready ?: return@launch
+                publishAuthorityReady(ready.copy(
                     sessions = page.sessions,
-                    selectedSessionId = sessionId,
                     timeline = timelineStore.snapshot(),
                     busy = false,
-                    permissionMode = opened.permission.mode,
-                    permissionModeFailure = opened.permission.failure,
-                    query = current?.query.orEmpty(),
-                    agentFilter = current?.agentFilter ?: SessionAgentFilter.ALL,
                     hasMore = page.hasMore,
-                    hasMoreMessages = opened.hasMoreMessages,
-                    modelCatalog = modelCatalog ?: current?.modelCatalog,
-                    modelCatalogFailure = modelCatalogFailure ?: current?.modelCatalogFailure,
-                    draft = "",
                 ))
                 markConnected()
                 refreshModelCatalog()
@@ -2205,6 +2244,7 @@ public class RemoteSessionStore internal constructor(
     /** Relay replay proves log availability, not that the controlled host is online.
      * Keep foreground host probes for idle open conversations as well as lists. */
     private fun setForeground(active: Boolean) {
+        messageQueue.setForeground(active)
         if (active && healthWork?.isActive == true) return
         val generation = ++healthGeneration
         healthWork?.cancel()

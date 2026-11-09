@@ -30,6 +30,7 @@ import type {
   SessionCascadeRemoval,
   SessionCreationSeed,
   SessionDriver,
+  CompactSessionResult,
   StartTurnInput,
   StartTurnResult,
   SubmissionPlan,
@@ -349,18 +350,20 @@ export const localSessionDriver: SessionDriver = {
     return { kind: 'queue' };
   },
 
-  async compactSession(context: FlowChatContext, sessionId: string): Promise<void> {
+  async compactSession(context: FlowChatContext, sessionId: string, turnId?: string): Promise<CompactSessionResult> {
     const session = context.flowChatStore.getState().sessions.get(sessionId);
     if (!session) {
       throw new Error(`Session does not exist: ${sessionId}`);
     }
-    await agentAPI.compactSession({
+    const response = await agentAPI.compactSession({
       sessionId,
+      turnId,
       workspaceId: sessionOwningWorkspaceId(session),
       workspacePath: sessionProjectWorkspacePath(session),
       remoteConnectionId: session.remoteConnectionId,
       remoteSshHost: session.remoteSshHost,
     });
+    return { accepted: response.success, turnId: response.turnId };
   },
 
   async runUsageReport(

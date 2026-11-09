@@ -24,15 +24,25 @@ import { markOptimisticDispatchTurnMetadata } from '@/features/dispatch/optimist
 import { interruptedTurnRecoveryGate } from '../interruptedTurnRecoveryGate';
 import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
 import { localSessionDriver } from '../../session-drivers/local/LocalSessionDriver';
+import * as peerSessionRefresh from './PeerSessionRefreshModule';
 import { chatInputSessionSubscriptionKey } from '../../utils/chatInputSessionSubscription';
 import { selectInterruptedTurnRecovery } from '../../utils/interruptedTurnRecovery';
 import { promptSuggestionKey, usePromptSuggestionStore } from '../../store/promptSuggestionStore';
 import { clearAgentCanvasForPeerSwitch, switchAgentCanvasScope, useAgentCanvasStore } from '@/app/components/panels/content-canvas/stores';
 import { activateSurface } from '@/infrastructure/peer-device/deviceSurface';
+import {
+  isRuntimeSessionProjectionStale,
+  resetRuntimeSessionEventGateForTest,
+} from '@/infrastructure/peer-device/runtimeSessionEventGate';
 import { markCurrentTurnItemsAsCancelled } from '../../utils/turnCancellation';
+import {
+  isManualCompactionPending,
+  resetManualCompactionStateForTest,
+} from '../manualCompactionState';
 
 const {
   buildBuiltInBrowserTabOptions,
+  handleCompressionStarted,
   handleCompressionCompleted,
   handleTokenUsageUpdate,
 } = __test_only__;
@@ -1163,6 +1173,36 @@ describe('shouldProcessEvent', () => {
     ).toBe(false);
   });
 
+  it.each(['local', 'peer-review'])('preserves replay repair for an unmaterialized session on %s', surfaceId => {
+    resetRuntimeSessionEventGateForTest();
+    activateSurface(surfaceId);
+    try {
+      expect(FlowChatStore.getInstance().getState().sessions.has(mockSessionId)).toBe(false);
+      expect(shouldProcessEvent(mockSessionId, mockTurnId, 'data', 'TextChunk')).toBe(false);
+      expect(isRuntimeSessionProjectionStale(surfaceId, mockSessionId)).toBe(true);
+    } finally {
+      activateSurface('local');
+      resetRuntimeSessionEventGateForTest();
+    }
+  });
+
+  it('coalesces an unknown session gap without suppressing repair after registration', () => {
+    resetRuntimeSessionEventGateForTest();
+    const repair = vi.spyOn(peerSessionRefresh, 'requestRuntimeProjectionRepair');
+    try {
+      expect(shouldProcessEvent('session-1', 'turn-1', 'data', 'TextChunk')).toBe(false);
+      expect(shouldProcessEvent('session-1', 'turn-1', 'data', 'TextChunk')).toBe(false);
+      expect(repair).toHaveBeenCalledTimes(1);
+      expect(isRuntimeSessionProjectionStale('local', 'session-1')).toBe(true);
+      createSessionWithTurn(createFinishingTurn());
+      expect(shouldProcessEvent('session-1', 'turn-1', 'data', 'TextChunk')).toBe(false);
+      expect(repair).toHaveBeenCalledTimes(2);
+    } finally {
+      repair.mockRestore();
+      resetRuntimeSessionEventGateForTest();
+    }
+  });
+
   it('returns true for state_sync event even when no state machine exists', () => {
     expect(
       shouldProcessEvent(mockSessionId, mockTurnId, 'state_sync', 'SessionStateChanged'),
@@ -1942,15 +1982,18 @@ describe('handleSessionHistoryChanged', () => {
     expect(context.pendingHistoryFenceSessions.has('session-1')).toBe(false);
   });
 
-  it('reloads an out-of-lifecycle edit even when the obsolete local tail is still finishing', () => {
+  it.each(['normal', 'miniapp', 'subagent'] as const)('reloads an out-of-lifecycle %s edit even when the obsolete local tail is still finishing', sessionKind => {
     createSessionWithTurn(createFinishingTurn());
     const store = FlowChatStore.getInstance();
+    store.setState(prev => ({ sessions: new Map(prev.sessions).set('session-1', {
+      ...prev.sessions.get('session-1')!, sessionKind, agentBackedTransient: sessionKind === 'miniapp',
+    }) }));
     const reload = vi.spyOn(store, 'loadSessionHistory').mockResolvedValue(undefined);
     const context = createFlowChatContext();
 
     handleSessionHistoryChanged(context, { sessionId: 'session-1', settledTurnId: null });
 
-    expect(reload).toHaveBeenCalledExactlyOnceWith('session-1', { includeInternal: false });
+    expect(reload).toHaveBeenCalledExactlyOnceWith('session-1', { includeInternal: sessionKind !== 'normal' });
     expect(context.pendingHistoryFenceSessions.has('session-1')).toBe(false);
   });
 
@@ -2137,6 +2180,7 @@ describe('handleCompressionCompleted', () => {
   afterEach(() => {
     resetFlowChatStore();
     stateMachineManager.clear();
+    resetManualCompactionStateForTest();
   });
 
   it('writes the compacted token count into currentTokenUsage when applied', () => {
@@ -2165,6 +2209,28 @@ describe('handleCompressionCompleted', () => {
       turnId: 'turn-1',
       source: 'context_compression',
     });
+  });
+
+  it('settles a manual compaction whose turn was replayed after the surface switch', () => {
+    const context = createFlowChatContext();
+    handleCompressionStarted(context, {
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      compressionId: 'compression-1',
+      trigger: 'manual',
+    });
+    expect(isManualCompactionPending('session-1')).toBe(true);
+
+    handleCompressionCompleted(context, {
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      compressionId: 'compression-1',
+      applied: true,
+      tokensBefore: 90_000,
+      tokensAfter: 15_000,
+    });
+
+    expect(isManualCompactionPending('session-1')).toBe(false);
   });
 
   it('does not touch currentTokenUsage when the compression was not applied', () => {

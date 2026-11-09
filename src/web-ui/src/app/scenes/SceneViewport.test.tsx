@@ -5,6 +5,8 @@ import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const sceneDataContext = React.createContext('initial');
+
 const sceneHarness = vi.hoisted(() => {
   let resolveAgents: (() => void) | null = null;
   let agentsAreReady = false;
@@ -25,6 +27,8 @@ const sceneHarness = vi.hoisted(() => {
     agentsReady,
     agentsAreReady: () => agentsAreReady,
     resolveAgents: () => resolveAgents?.(),
+    settingsSuspension: null as Promise<void> | null,
+    settingsRender: vi.fn(),
   };
 });
 
@@ -50,16 +54,24 @@ vi.mock('./session/SessionScene', () => ({
 }));
 
 vi.mock('./settings/SettingsScene', () => ({
-  default: ({ isActive }: { isActive?: boolean }) => (
-    <div
+  default: ({ isActive }: { isActive?: boolean }) => {
+    const data = React.useContext(sceneDataContext);
+    sceneHarness.settingsRender(isActive, data);
+    if (sceneHarness.settingsSuspension) throw sceneHarness.settingsSuspension;
+    return <div
       data-testid="settings-scene-content"
       data-scene-prop-active={isActive ? 'true' : 'false'}
-    />
-  ),
+      data-scene-data={data}
+    ><input defaultValue="Settings draft" /></div>;
+  },
 }));
 
 vi.mock('./assistant/AssistantScene', () => ({
   default: () => <div data-testid="assistant-scene-content" />,
+}));
+
+vi.mock('./todos/TodosScene', () => ({
+  default: ({ isActive }: { isActive: boolean }) => <div data-testid="todos-clock-owner" data-active={String(isActive)} />,
 }));
 
 vi.mock('./welcome/WelcomeScene', () => ({
@@ -89,6 +101,8 @@ describe('SceneViewport transitions', () => {
   let root: Root;
 
   beforeEach(() => {
+    sceneHarness.settingsSuspension = null;
+    sceneHarness.settingsRender.mockClear();
     sessionPaneLayoutStore.setState(sessionPaneLayoutStore.getInitialState());
     vi.useFakeTimers();
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => (
@@ -133,6 +147,24 @@ describe('SceneViewport transitions', () => {
     expect(container.querySelector('[role="tab"]')).toBeNull();
   });
 
+  it('renders the welcome surface when only a background scene tab remains', () => {
+    sceneHarness.state = {
+      openTabs: [{ id: 'settings', lastUsed: 1 }],
+      activeTabId: null,
+      navigationMotion: 'instant',
+      navigationSequence: 1,
+    };
+
+    act(() => root.render(<SceneViewport />));
+
+    expect(visibleScenes().map(scene => scene.getAttribute('data-scene-id'))).toEqual(['__empty-scene__']);
+    expect(container.querySelector('[data-testid="welcome-scene"]')).not.toBeNull();
+    expect(container.querySelector('[data-scene-id="settings"]')).not.toBeNull();
+    expect(container.querySelector('[data-scene-id="settings"]')?.classList.contains(
+      'openbitfun-scene-viewport__scene--visible',
+    )).toBe(false);
+  });
+
   it('shares one mounted Session host across workspace tab identities', () => {
     sceneHarness.state.openTabs = [
       { id: 'session:workspace-a', lastUsed: 1 },
@@ -174,6 +206,21 @@ describe('SceneViewport transitions', () => {
     expect(visibleScenes()).toHaveLength(2);
     act(() => sessionPaneLayoutStore.getState().hideContent());
     expect(visibleScenes().map(scene => scene.getAttribute('data-scene-id'))).toEqual(['settings']);
+  });
+
+  it('keeps a visible secondary Todos clock active even while another pane is focused', async () => {
+    sessionPaneLayoutStore.getState().showContent();
+    sceneHarness.state = {
+      openTabs: [{ id: 'session', lastUsed: 1 }, { id: 'todos', lastUsed: 2, pane: 'secondary' }],
+      activeTabId: 'session', navigationMotion: 'instant', navigationSequence: 1,
+      paneSelections: { primary: sceneSelection('session'), secondary: sceneSelection('todos') },
+    };
+    await act(async () => root.render(<SceneViewport paned />));
+    const owner = container.querySelector('[data-testid="todos-clock-owner"]');
+    expect(owner?.getAttribute('data-active')).toBe('true');
+    act(() => sessionPaneLayoutStore.getState().hideContent());
+    expect(container.querySelector('[data-testid="todos-clock-owner"]')).toBe(owner);
+    expect(owner?.getAttribute('data-active')).toBe('false');
   });
 
   it('keeps one scene visible while a lazy pointer target becomes ready', async () => {
@@ -244,6 +291,24 @@ describe('SceneViewport transitions', () => {
     expect(container.querySelector('[data-scene-id="agents"]')?.hasAttribute('hidden')).toBe(false);
   });
 
+  it('waits for a closed scene to become ready again before revealing its new tree', async () => {
+    sceneHarness.state.openTabs.push({ id: 'settings', lastUsed: 1 });
+    act(() => root.render(<SceneViewport />));
+    sceneHarness.state.openTabs = [{ id: 'session', lastUsed: 0 }];
+    act(() => root.render(<SceneViewport />));
+    let resolveSettings!: () => void;
+    sceneHarness.settingsSuspension = new Promise(resolve => { resolveSettings = resolve; });
+    sceneHarness.state = { openTabs: [{ id: 'session', lastUsed: 0 }, { id: 'settings', lastUsed: 1 }],
+      activeTabId: 'settings', navigationMotion: 'pointer', navigationSequence: 1 };
+    await act(async () => { root.render(<SceneViewport />); await Promise.resolve(); });
+    expect(visibleScenes().map(scene => scene.getAttribute('data-scene-id'))).toEqual(['session']);
+    expect(container.querySelector('[data-scene-id="settings"]')?.getAttribute('data-pane-motion-phase')).toBe('holding');
+    await act(async () => {
+      sceneHarness.settingsSuspension = null; resolveSettings(); await Promise.resolve();
+    });
+    expect(visibleScenes().map(scene => scene.getAttribute('data-scene-id')).sort()).toEqual(['session', 'settings']);
+  });
+
   it('keeps an inactive open MiniApp scene mounted and hidden', async () => {
     sceneHarness.state = {
       openTabs: [
@@ -301,4 +366,40 @@ describe('SceneViewport transitions', () => {
     expect(container.querySelector('[data-testid="settings-scene-content"]')).toBe(settingsContent);
     expect(settingsContent?.getAttribute('data-scene-prop-active')).toBe('true');
   });
+
+  it('retains inactive scene state without rendering it for unrelated navigation', async () => {
+    sceneHarness.state.openTabs.push({ id: 'settings', lastUsed: 1 }, { id: 'assistant', lastUsed: 2 });
+    await act(async () => { root.render(<SceneViewport />); await Promise.resolve(); });
+    const content = container.querySelector('[data-testid="settings-scene-content"]');
+    const input = content!.querySelector('input')!;
+    input.value = 'Unsaved settings draft';
+    sceneHarness.settingsRender.mockClear();
+
+    for (const id of ['assistant', 'session', 'assistant']) {
+      sceneHarness.state = { ...sceneHarness.state, activeTabId: id, navigationSequence: sceneHarness.state.navigationSequence + 1 };
+      act(() => root.render(<SceneViewport />));
+    }
+    expect(sceneHarness.settingsRender).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="settings-scene-content"]')).toBe(content);
+    expect(input.value).toBe('Unsaved settings draft');
+
+    sceneHarness.state = { ...sceneHarness.state, activeTabId: 'settings', navigationSequence: 4 };
+    act(() => root.render(<SceneViewport />));
+    expect(sceneHarness.settingsRender).toHaveBeenCalledWith(true, 'initial');
+    expect(container.querySelector('[data-testid="settings-scene-content"]')).toBe(content);
+    expect(input.value).toBe('Unsaved settings draft');
+  });
+
+  it('delivers context updates to an inactive retained scene', () => {
+    sceneHarness.state.openTabs.push({ id: 'settings', lastUsed: 1 });
+    act(() => root.render(<sceneDataContext.Provider value="before"><SceneViewport /></sceneDataContext.Provider>));
+    const content = container.querySelector('[data-testid="settings-scene-content"]');
+    sceneHarness.settingsRender.mockClear();
+
+    act(() => root.render(<sceneDataContext.Provider value="after"><SceneViewport /></sceneDataContext.Provider>));
+    expect(sceneHarness.settingsRender).toHaveBeenCalledWith(false, 'after');
+    expect(container.querySelector('[data-testid="settings-scene-content"]')).toBe(content);
+    expect(content?.getAttribute('data-scene-data')).toBe('after');
+  });
+
 });

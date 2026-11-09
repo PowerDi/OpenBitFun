@@ -130,7 +130,11 @@ notification metadata.
 
 2. **Peer history has one owner.** `loadSessionHistory` uses
    `RelaySessionHistory`; it must not fall back to `restore_session_view`, cloud
-   imports, or a local transcript after a Relay failure.
+   imports, or a local transcript after a Relay failure. A prewarmed stream
+   buffers only its target device and session via the source-aware observer,
+   before active-surface filtering. Keep its native feeds alive until the
+   adopting owner has registered, and await event registration before requesting
+   replay; neither an early host reply nor handover may drop the first page.
 
 3. **Failures stay explicit and recoverable.** Failed reads leave loading state,
    retain previously rendered records, and expose retry. An empty success is not
@@ -332,6 +336,43 @@ notification metadata.
     restored unsupported panel keeps its URL available in the system browser
     without querying the host. Overview requests and panel state belong to
     the surface activation even when two devices share a workspace ID/path.
+
+21. **Appearance belongs to the controller window.** Theme selection reads,
+    saves, rollback and focus/visibility reconciliation use
+    `appearance-selection-adapter`, including while a peer is rendered. Desktop
+    keeps the existing local `appearance.selection` config shape; packages and
+    cross-window appearance events also remain local. The generic ConfigAPI
+    still targets the selected product host. Do not route all config commands
+    locally to implement a presentation preference.
+
+    Sidebar device visibility is also a controller preference. The preview
+    card and account device list share `deviceVisibilityPreferences`; an absent
+    choice means visible. Hiding a device removes its sidebar section without
+    switching, disconnecting, deleting its data or stopping its work. Activating
+    a hidden device does not override that choice.
+
+22. **Composer attachments from the controller never travel as controller
+    paths.** A file dropped or pasted into a peer session is read on the
+    controller through its own Tauri host (`controllerFileTransfer.ts`, local
+    provider marker), never through the rendered transport, and so is the
+    clipboard. Supported images become inline image contexts. Other files are
+    staged with `workspace_file_upload` under
+    `openbitfun://runtime/<workspaceId>/attachments/<id>/`, which the host's
+    agent tools resolve, only when the peer negotiated
+    `runtime_attachment_upload_v1`. Older peers, folders and oversize files get
+    an explicit reply; there is no path-reference fallback. The same intake
+    covers remote workspaces (local build uploads) and detached dispatch
+    (images only).
+
+    The Files panel follows the same rule for drops and OS-clipboard paste:
+    `uploadLocalPathsToWorkspaceDirectory` publishes controller bytes with
+    `workspace_file_upload` into the peer workspace (local-paste `name (1)`
+    naming, never replacing a file) instead of `paste_files` or SSH upload,
+    which would resolve the controller path on the peer. Folders are refused
+    because the controller explorer listing filters entries, and a cut
+    clipboard behaves as a copy. Controller-path imports without a byte
+    transport, such as `.bfminiapp` packages, are refused while a peer is
+    rendered.
 
 ### Workspace HTML resources
 

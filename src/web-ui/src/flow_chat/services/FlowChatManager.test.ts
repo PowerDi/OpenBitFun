@@ -974,7 +974,7 @@ describe('FlowChatManager live subscription self-healing', () => {
 });
 
 describe('FlowChatManager.compactSession', () => {
-  it('sends /compact to a native external agent instead of the OpenBitFun runtime', async () => {
+  it.each([undefined, 'compact-turn'])('sends /compact to a native external agent with turn id %s', async (turnId) => {
     const session = createHistoricalSession({ sessionId: 'acp_pi', mode: 'acp:pi-native', config: { agentType: 'acp:pi-native' } });
     storeMocks.store = {
       registerPersistUnreadCompletionCallback: vi.fn(),
@@ -985,8 +985,10 @@ describe('FlowChatManager.compactSession', () => {
     const manager = FlowChatManager.getInstance();
     const send = vi.spyOn(manager, 'sendMessage').mockResolvedValue(undefined);
     try {
-      await manager.compactSession('acp_pi');
-      expect(send).toHaveBeenCalledExactlyOnceWith('/compact', 'acp_pi', '/compact');
+      await expect(manager.compactSession('acp_pi', turnId)).resolves.toEqual({ accepted: true, turnId });
+      expect(send).toHaveBeenCalledExactlyOnceWith('/compact', 'acp_pi', '/compact', undefined, undefined, { turnId });
+      send.mockRejectedValueOnce(new Error('Native agent unavailable'));
+      await expect(manager.compactSession('acp_pi', turnId)).rejects.toThrow('Native agent unavailable');
     } finally {
       manager.destroy();
     }
