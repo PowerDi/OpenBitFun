@@ -16,22 +16,26 @@ const fixture = vi.hoisted(() => ({
   loadTurnWindow: vi.fn(),
   present: null as ((sessionId: string, presentation: SessionHistoryPresentation) => void) | null,
 }));
-vi.mock('../../store/FlowChatStore', () => ({ flowChatStore: {
-  getState: () => ({ activeSessionId: fixture.session?.sessionId, sessions: new Map(fixture.session ? [[fixture.session.sessionId, fixture.session]] : []) }),
-  retainSessionHistory: () => () => {},
-  subscribeSelector: () => () => {},
-  getSessionHistoryViewState: () => undefined,
-  reactivateSessionHistoryWindow: () => fixture.cached,
-  restoreSessionHistoryWindow: (...args: unknown[]) => fixture.restore(...args),
-  restoreSessionTailPresentation: (...args: unknown[]) => fixture.restoreTail(...args),
-  hasPendingSessionHistoryCompletion: () => false,
-  hasDeferredSessionHistoryProjection: () => false,
-  releaseSessionHistoryCompletionAfterInitialPaint: () => false,
-  extendSessionHistoryWindow: () => null,
-  loadSessionTurnWindow: (...args: unknown[]) => fixture.loadTurnWindow(...args),
-  loadPreviousSessionTurnWindow: (...args: unknown[]) => fixture.loadTurnWindow(...args),
-  activateSessionHistoryWindow: () => fixture.cached,
-} }));
+vi.mock('../../store/FlowChatStore', () => {
+  const flowChatStore = {
+    getState: () => ({ activeSessionId: fixture.session?.sessionId, sessions: new Map(fixture.session ? [[fixture.session.sessionId, fixture.session]] : []) }),
+    subscribe: () => () => {},
+    retainSessionHistory: () => () => {},
+    subscribeSelector: () => () => {},
+    getSessionHistoryViewState: () => undefined,
+    reactivateSessionHistoryWindow: () => fixture.cached,
+    restoreSessionHistoryWindow: (...args: unknown[]) => fixture.restore(...args),
+    restoreSessionTailPresentation: (...args: unknown[]) => fixture.restoreTail(...args),
+    hasPendingSessionHistoryCompletion: () => false,
+    hasDeferredSessionHistoryProjection: () => false,
+    releaseSessionHistoryCompletionAfterInitialPaint: () => false,
+    extendSessionHistoryWindow: () => null,
+    loadSessionTurnWindow: (...args: unknown[]) => fixture.loadTurnWindow(...args),
+    loadPreviousSessionTurnWindow: (...args: unknown[]) => fixture.loadTurnWindow(...args),
+    activateSessionHistoryWindow: () => fixture.cached,
+  };
+  return { flowChatStore, FlowChatStore: { getInstance: () => flowChatStore } };
+});
 vi.mock('../../store/modernFlowChatStore', async importOriginal => {
   const original = await importOriginal<typeof import('../../store/modernFlowChatStore')>();
   const projectSession = original.createSessionVirtualItemProjector();
