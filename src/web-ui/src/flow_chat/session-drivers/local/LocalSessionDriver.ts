@@ -470,8 +470,12 @@ export const localSessionDriver: SessionDriver = {
       const queue = hostDialogQueue(sessionId);
       // Worktree binding above may change the host's session storage scope.
       // Its completion fences both independent preparation reads below.
+      // External agents own their model ids through session options; the
+      // OpenBitFun model catalog cannot resolve them.
       const [, queueSnapshot] = await Promise.all([
-        syncSessionModelSelection(context, sessionId, currentAgentType, surfaceScope),
+        acpClientId
+          ? Promise.resolve()
+          : syncSessionModelSelection(context, sessionId, currentAgentType, surfaceScope),
         queue.refresh(),
       ]);
       surfaceScope.assertCurrent('prepare host message');

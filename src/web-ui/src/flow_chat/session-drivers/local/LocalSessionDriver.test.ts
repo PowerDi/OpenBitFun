@@ -5,6 +5,7 @@ import type { DialogTurn } from '../../types/flow-chat';
 import { getActiveSurfaceScope } from '@/infrastructure/peer-device/deviceSurface';
 import { syncSessionModelSelection } from '../../utils/modelSync';
 import { consumeSubmittedMessageArrival } from '../../services/submittedMessagePresentation';
+import { ACPClientAPI } from '@/infrastructure/api/service-api/ACPClientAPI';
 
 const { mockCreateSession, mockStartAcpDialogTurn, mockStartAgenticDialogTurn, mockEnsureCoordinatorSession, mockTransition, mockUpdateSessionMetadata, mockGetMode, mockUpdateMode } = vi.hoisted(() => ({
   mockCreateSession: vi.fn(),
@@ -400,6 +401,20 @@ describe('host queue submissions', () => {
     finishModel();
     await pending;
     expect(queueMocks.submit).toHaveBeenCalledOnce();
+  });
+
+  it('does not resolve an external agent model through the OpenBitFun model catalog', async () => {
+    const acpApi = ACPClientAPI as unknown as { getCachedCapabilityClients?: () => unknown[] };
+    acpApi.getCachedCapabilityClients = () => [{ id: 'dsh', capabilities: { input: { queue: true } } }];
+    try {
+      const { context, session } = createHarness([]);
+      await localSessionDriver.startTurn(context, { ...startTurnInput(session), isFirstMessage: false },
+        { createdLocalTurnId: null, hostAcceptedTurn: false });
+      expect(queueMocks.submit).toHaveBeenCalledOnce();
+      expect(syncSessionModelSelection).not.toHaveBeenCalled();
+    } finally {
+      delete acpApi.getCachedCapabilityClients;
+    }
   });
 
   it('binds a requested worktree before preparing the host queue and model', async () => {
