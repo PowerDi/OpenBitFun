@@ -1,4 +1,8 @@
+import { isNativeAgentSession } from './acpSession';
+
 export type SessionModelSelectionTarget = {
+  mode?: string;
+  config?: { agentType?: string };
   draft?: import('./sessionDraft').SessionDraft;
   isTransient?: boolean;
   agentBackedTransient?: boolean;
@@ -11,13 +15,13 @@ export type SessionModelSelectionTarget = {
 
 /** A side draft has no Runtime child until its first question forks the parent. */
 export function isBtwSessionDraft(session: SessionModelSelectionTarget | undefined): boolean {
-  return Boolean(session?.sessionKind === 'btw' && !session.isHistorical
+  return Boolean(session?.sessionKind === 'btw' && !isNativeAgentSession(session) && !session.isHistorical
     && !session.lastSubmittedMode && session.dialogTurns?.length === 0);
 }
 
 /** Temporary BTW children execute through their parent until they are saved as a fork. */
 export function isBtwParentBackedSession(session: SessionModelSelectionTarget | undefined): boolean {
-  return Boolean(session?.sessionKind === 'btw'
+  return Boolean(session?.sessionKind === 'btw' && !isNativeAgentSession(session)
     && session.isTransient === true
     && !session.isHistorical
     && session.parentSessionId);

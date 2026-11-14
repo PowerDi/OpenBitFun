@@ -360,6 +360,38 @@ Per-surface result after step 5:
 Not in this plan: remote CLI install/update, keeping a turn
 alive across a controller disconnect, new native agents (D1).
 
+## Native side chat (`/btw` and excerpt Ask)
+
+Native side chats use `fork_acp_session` with an optional `sideChat` request,
+then submit through the normal native host queue. The boundary is the parent's
+last completed turn, even when the parent is still running or the selected
+excerpt comes from an older turn. The host checks the boundary again; missing
+checkpoints, steered boundaries and refused forks surface errors without falling
+back to the OpenBitFun agent loop. Codex also rejects a `thread/fork` response
+that returns the source thread identity before sending any question.
+
+The child keeps the parent's workspace/remote connection, native model,
+thinking and permission preferences. It is writable and runs in its own CLI
+process. Its persisted kind is `EphemeralChild`, with the existing BTW
+relationship. Save as Fork promotes that record to `Standard` and removes the
+BTW relationship; it never forks a second time. Discard cancels and deletes the
+OpenBitFun child record. The provider's transcript may remain on disk.
+
+Native BTW turns carry `nativeSideChat: true` in user-message metadata. The
+shared `NativeTurnInput::prompt_text` prepends the exact `btw_system_reminder()`
+inside a reminder block only when encoding the CLI user input. The stored and
+visible message stays the question; system prompts, model and permission mode
+are not changed. This preserves the fork's provider prompt-cache prefix.
+Codex alone advertises `side_chat`; Claude and Pi keep it disabled, with the
+same fork/submission/reminder path ready behind their capability flags.
+
+The Web UI retains existing desktop/Peer capability gates. Fork and promotion
+resolve workspace identity on the executing host, preserving the existing SSH
+and container routing. CLI peer hosts explicitly reject these commands; mobile,
+IM and Detached Dispatch gain no side-chat creation entry point. Unit fixtures
+cover remote connection propagation and surface-switch fencing, not live remote
+execution or provider cache measurements.
+
 ## Driver contract gaps (follow-up)
 
 Compared with the codex-host `HarnessAdapter` contract, `NativeAgentDriver`

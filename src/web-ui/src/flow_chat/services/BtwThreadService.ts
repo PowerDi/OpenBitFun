@@ -17,6 +17,10 @@ import { requireSessionWorkspaceId, sessionWorkspaceId } from '../utils/sessionW
 import { getActiveSurfaceScope } from '@/infrastructure/peer-device/deviceSurface';
 import { assertSessionConversationCanSubmit } from '../session-drivers/conversationCapability';
 import { trackBtwSessionSubmission } from './btwSessionSubmission';
+import { ACPClientAPI } from '@/infrastructure/api/service-api/ACPClientAPI';
+import { acpSessionRef, isNativeAgentSession } from '../utils/acpSession';
+import { externalAgentSupports, resolveExternalAgentCapabilities } from '../utils/externalAgentCapabilities';
+import { requireSessionOwningWorkspaceId } from '../utils/sessionOrdering';
 
 export function createBtwRequestId(prefix = 'btw'): string {
   try {
@@ -239,6 +243,9 @@ export function createBtwSessionPlaceholder(params: {
   parentDialogTurnId?: string;
 }): { childSessionId: string; parentDialogTurnId?: string; parentTurnIndex?: number } {
   const parentSession = requireSession(params.parentSessionId);
+  if (isNativeAgentSession(parentSession)) {
+    throw new Error('Native side chat must be created through the native fork path');
+  }
   const workspaceId = requireSessionWorkspaceId(parentSession);
   const workspacePath = params.workspacePath || parentSession.workspacePath;
   if (!workspacePath) {
@@ -298,10 +305,54 @@ export function createBtwSessionPlaceholder(params: {
   return { childSessionId, parentDialogTurnId, parentTurnIndex };
 }
 
+/** Native side chats are real forks from creation, including excerpt Ask drafts. */
+export async function createBtwSession(
+  params: Parameters<typeof createBtwSessionPlaceholder>[0],
+): Promise<ReturnType<typeof createBtwSessionPlaceholder>> {
+  const parent = requireSession(params.parentSessionId);
+  if (!isNativeAgentSession(parent)) return createBtwSessionPlaceholder(params);
+  const scope = getActiveSurfaceScope();
+  const capabilities = resolveExternalAgentCapabilities(parent);
+  if (!externalAgentSupports(capabilities, 'sideChat') || !externalAgentSupports(capabilities, 'history.fork')) {
+    throw new Error('This native agent does not support side chat');
+  }
+  // The selected excerpt may come from an older turn. Branch the latest
+  // completed context, never the running turn or the excerpt's old boundary.
+  const boundary = [...parent.dialogTurns].reverse().find(turn => turn.status === 'completed');
+  if (!boundary) throw new Error('Native side chat requires a completed turn in the parent session');
+  if (boundary.modelRounds.some(round => round.items.some(item => item.type === 'user-steering'))) {
+    throw new Error('Cannot fork a native side chat from a turn that took steered input');
+  }
+  const ref = acpSessionRef(parent)!;
+  const workspacePath = params.workspacePath || ref.workspacePath;
+  if (!workspacePath) throw new Error('Workspace path is required for native side chat');
+  const requestId = createBtwRequestId('btw');
+  const fork = await ACPClientAPI.forkSession({
+    sourceSessionId: parent.sessionId, clientId: ref.clientId, turnId: boundary.id,
+    workspaceId: requireSessionOwningWorkspaceId(parent),
+    sideChat: { requestId, sessionName: params.childSessionName },
+  });
+  scope.assertCurrent('create native side chat');
+  if (fork.sessionId === parent.sessionId) throw new Error('Native fork returned the parent session');
+  const parentTurnIndex = absoluteSessionTurnIndexForId(parent, boundary.id);
+  flowChatStore.addExternalSession(fork.sessionId, params.childSessionName, `acp:${ref.clientId}`, workspacePath, {
+    parentSessionId: parent.sessionId, sessionKind: 'btw',
+    btwOrigin: { requestId, parentSessionId: parent.sessionId, parentDialogTurnId: boundary.id, parentTurnIndex },
+    workspaceId: requireSessionOwningWorkspaceId(parent),
+    projectWorkspaceId: parent.projectWorkspaceId || parent.config.projectWorkspaceId,
+    projectWorkspacePath: parent.projectWorkspacePath || parent.config.projectWorkspacePath || workspacePath,
+    executionTarget: parent.config.executionTarget,
+    isTransient: true, agentBackedTransient: true,
+  }, ref.remoteConnectionId, ref.remoteSshHost);
+  if (parent.config.modelName) flowChatStore.updateSessionModelName(fork.sessionId, parent.config.modelName);
+  return { childSessionId: fork.sessionId, parentDialogTurnId: boundary.id, parentTurnIndex };
+}
+
 export async function sendMessageToBtwSession(params: {
   parentSessionId: string;
   childSessionId: string;
   question: string;
+  displayMessage?: string;
   childSessionName?: string;
   modelId?: string;
   imagePayload?: ImagePayload;
@@ -319,6 +370,10 @@ export async function sendMessageToBtwSession(params: {
   }
 
   const childSession = requireSession(params.childSessionId);
+  if (isNativeAgentSession(flowChatStore.getState().sessions.get(params.parentSessionId))
+    && !isNativeAgentSession(childSession)) {
+    throw new Error('Native side chat requires a native fork child');
+  }
   if (childSession.sessionKind !== 'btw') {
     throw new Error(`Session is not a /btw session: ${params.childSessionId}`);
   }
@@ -334,6 +389,13 @@ export async function sendMessageToBtwSession(params: {
     parentDialogTurnId: params.parentDialogTurnId ?? childSession.btwOrigin?.parentDialogTurnId,
     parentTurnIndex: params.parentTurnIndex ?? childSession.btwOrigin?.parentTurnIndex,
   }, 'btw');
+  if (isNativeAgentSession(childSession)) {
+    await trackBtwSessionSubmission(params.childSessionId, () => flowChatManager.sendMessage(
+      question, params.childSessionId, params.displayMessage ?? question, undefined, undefined,
+      { ...params.imagePayload, userMessageMetadata: params.userMessageMetadata },
+    ));
+    return { requestId };
+  }
   const modelId = params.modelId?.trim();
   await trackBtwSessionSubmission(params.childSessionId, () => btwAPI.askStream({
     requestId,
@@ -378,9 +440,14 @@ export async function startBtwThread(params: {
     throw new Error('Empty /btw question');
   }
 
-  await flowChatManager.ensureBackendSession(params.parentSessionId);
+  const scope = getActiveSurfaceScope();
+  const nativeParent = isNativeAgentSession(requireSession(params.parentSessionId));
+  if (!nativeParent) {
+    await flowChatManager.ensureBackendSession(params.parentSessionId);
+    scope.assertCurrent('prepare side question parent');
+  }
   const childSessionName = buildChildSessionName(question);
-  const { childSessionId, parentDialogTurnId, parentTurnIndex } = createBtwSessionPlaceholder({
+  const { childSessionId, parentDialogTurnId, parentTurnIndex } = await createBtwSession({
     parentSessionId: params.parentSessionId,
     workspacePath: params.workspacePath,
     childSessionName,
@@ -399,7 +466,15 @@ export async function startBtwThread(params: {
     });
     return { requestId, childSessionId };
   } catch (error) {
-    flowChatManager.discardLocalSession(childSessionId);
+    if (scope.isCurrent()) {
+      if (nativeParent) {
+        await agentAPI.cancelSession(childSessionId);
+        scope.assertCurrent('delete failed native side chat');
+        await agentAPI.deleteSession(childSessionId, requireSessionOwningWorkspaceId(requireSession(params.parentSessionId)));
+        scope.assertCurrent('release failed native side chat');
+      }
+      flowChatManager.discardLocalSession(childSessionId);
+    }
     throw error;
   }
 }

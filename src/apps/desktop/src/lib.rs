@@ -1808,6 +1808,7 @@ pub async fn run() {
             set_acp_session_config_option,
             rollback_acp_session_turn,
             fork_acp_session,
+            save_native_side_chat,
             stop_acp_session_task,
             steer_acp_dialog_turn,
             continue_imported_acp_session,

@@ -14,12 +14,14 @@ import { withConversationExcerpts } from '../utils/composerPresentation';
 const mocks = vi.hoisted(() => ({
   sessions: new Map<string, unknown>(),
   setTarget: vi.fn(), focus: vi.fn(), openPane: vi.fn(), expand: vi.fn(), create: vi.fn(),
+  error: vi.fn(),
   queue: vi.fn<() => QueuedMessage[]>(() => []),
 }));
+vi.mock('@/shared/notification-system', () => ({ notificationService: { error: mocks.error } }));
 vi.mock('../store/FlowChatStore', () => ({ flowChatStore: {
   getState: () => ({ sessions: mocks.sessions, activeSessionId: 'main' }),
 } }));
-vi.mock('../services/BtwThreadService', () => ({ createBtwSessionPlaceholder: mocks.create }));
+vi.mock('../services/BtwThreadService', () => ({ createBtwSession: mocks.create }));
 vi.mock('../services/flow-chat-manager/PendingQueueModule', () => ({ pendingQueueManager: { listForSurface: mocks.queue } }));
 vi.mock('../services/btwSessionPane', () => ({ openBtwSessionInAuxPane: mocks.openPane }));
 vi.mock('../services/sessionActivation', () => ({ openMainSession: vi.fn() }));
@@ -125,7 +127,7 @@ describe('scoped excerpt composer routing', () => {
     expect(sessionComposerStore.getState().getDraft('main').contexts).toEqual([{ ...excerpt, annotationNumber: 4 }]);
   });
 
-  it('creates a new ordinary side draft instead of using review or already submitted sessions', () => {
+  it('creates a new ordinary side draft instead of using review or already submitted sessions', async () => {
     mocks.sessions.set('draft', { sessionId: 'draft', parentSessionId: 'main', sessionKind: 'review', dialogTurns: [] });
     mocks.sessions.set('sent', { sessionId: 'sent', parentSessionId: 'main', sessionKind: 'btw', btwOrigin: { requestId: 'sent-1' }, dialogTurns: [] });
     mocks.create.mockImplementationOnce(() => {
@@ -133,9 +135,32 @@ describe('scoped excerpt composer routing', () => {
       return { childSessionId: 'new-side' };
     });
     act(() => root.render(<Probe />));
-    act(() => requestExcerptAction(excerpt, 'main', 'ask'));
+    await act(async () => { requestExcerptAction(excerpt, 'main', 'ask'); });
     expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ parentSessionId: 'main', parentDialogTurnId: 'turn-2' }));
     expect(sessionComposerStore.getState().getDraft('new-side').contexts).toEqual([{ ...excerpt, annotationNumber: 1 }]);
+  });
+
+  it('shows asynchronous fork errors and preserves the excerpt without opening a local side chat', async () => {
+    mocks.sessions.delete('draft');
+    mocks.create.mockRejectedValueOnce(new Error('Native checkpoint refused'));
+    act(() => root.render(<Probe />));
+    await act(async () => { requestExcerptAction(excerpt, 'main', 'ask'); });
+    expect(mocks.error).toHaveBeenCalledWith('Native checkpoint refused');
+    expect(mocks.openPane).not.toHaveBeenCalled();
+    expect(sessionComposerStore.getState().getDraft('main').contexts).toEqual([]);
+  });
+
+  it('fences excerpt insertion and navigation if the surface switches while a fork is pending', async () => {
+    mocks.sessions.delete('draft');
+    let resolve!: (result: { childSessionId: string }) => void;
+    mocks.create.mockReturnValueOnce(new Promise(done => { resolve = done; }));
+    act(() => root.render(<Probe />));
+    act(() => requestExcerptAction(excerpt, 'main', 'ask'));
+    activateSurface('local');
+    await act(async () => { resolve({ childSessionId: 'remote-fork' }); });
+    expect(mocks.openPane).not.toHaveBeenCalled();
+    expect(mocks.error).not.toHaveBeenCalled();
+    expect(sessionComposerStore.getState().getDraft('remote-fork').contexts).toEqual([]);
   });
 
   it('ignores inactive composers and events from another session or an earlier surface activation', () => {
