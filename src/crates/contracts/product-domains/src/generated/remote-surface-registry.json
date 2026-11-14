@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "fnv1a64:e62d715f043bdf34",
+  "digest": "fnv1a64:00e7b30fdba153e3",
   "retiredCommandPrefixes": [
     {
       "prefix": "lsp_",
@@ -6879,18 +6879,6 @@
       },
       "cliPeer": {
         "kind": "handled"
-      }
-    },
-    {
-      "id": "save_native_side_chat",
-      "surface": "tauri_command",
-      "remoteWorkspace": "RemoteRouted",
-      "peer": {
-        "kind": "proxied"
-      },
-      "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the CLI peer host has no handler for this command"
       }
     },
     {

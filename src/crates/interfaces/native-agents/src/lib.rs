@@ -24,7 +24,6 @@ mod round_latency;
 pub mod runtime_status;
 pub mod session_options;
 pub mod session_persistence;
-pub mod side_chat;
 pub(crate) mod title;
 pub mod tool_card;
 mod turn_recorder;

@@ -127,8 +127,8 @@ describe('BtwThreadService', () => {
     mockNativeFork.mockResolvedValueOnce({ sessionId: 'native-child' });
     await createBtwSession({ parentSessionId: 'parent-1', childSessionName: 'Why?', parentDialogTurnId: 'older-excerpt' });
     expect(mockNativeFork).toHaveBeenCalledWith(expect.objectContaining({ sourceSessionId: 'parent-1',
-      clientId: 'codex-native', turnId: 'completed', workspaceId: 'workspace-1',
-      sideChat: { requestId: expect.any(String), sessionName: 'Why?' } }));
+      clientId: 'codex-native', turnId: 'completed', workspaceId: 'workspace-1' }));
+    expect(mockNativeFork.mock.calls[0][0]).not.toHaveProperty('sideChat');
     expect(mockAddExternalSession).toHaveBeenCalledWith('native-child', 'Why?', 'acp:codex-native', '/workspace',
       expect.objectContaining({ sessionKind: 'btw', isTransient: true, agentBackedTransient: true }), 'remote-1', 'host-1');
     expect(parent.dialogTurns.at(-1).id).toBe('running');

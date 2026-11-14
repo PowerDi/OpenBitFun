@@ -226,7 +226,6 @@
       "evidence": [
         "command:btw_ask_stream",
         "command:btw_cancel",
-        "command:save_native_side_chat",
         "command:editor_ai_stream",
         "command:editor_ai_cancel"
       ]

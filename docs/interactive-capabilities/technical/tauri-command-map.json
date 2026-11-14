@@ -2,10 +2,10 @@
   "schemaVersion": 2,
   "generatedFrom": "src/shared/interactive-capabilities/catalog.json",
   "catalogDigest": "8a02be2b328791ebb823e4b7a956bf0371c523caa7f881a6c778cbaa42d72575",
-  "commandCount": 713,
+  "commandCount": 712,
   "coverage": {
-    "commandCount": 713,
-    "documentedCommandCount": 652,
+    "commandCount": 712,
+    "documentedCommandCount": 651,
     "implementationCommandCount": 61,
     "implementationDigest": "fdb6f78b009b95270d26834349aade36e0987553167f325a9c674a085b876a2d"
   },
@@ -8847,22 +8847,6 @@
       "sourceFile": "src/apps/desktop/src/api/model_pool_api.rs",
       "signature": "fn save_model_pool(request: SaveModelPoolRequest) -> Result<ModelPoolDocument, String>",
       "remoteWorkspacePolicy": "WorkspaceAgnostic"
-    },
-    {
-      "id": "save_native_side_chat",
-      "moduleId": "acp_client",
-      "capabilityId": "feature.ai-assistant",
-      "capabilityIds": [
-        "feature.ai-assistant"
-      ],
-      "documentedItemIds": [
-        "feature.ai-assistant:btw-editor-ai"
-      ],
-      "visibility": "documented",
-      "rustPath": "save_native_side_chat",
-      "sourceFile": "src/apps/desktop/src/api/acp_client_api.rs",
-      "signature": "fn save_native_side_chat( state: State<'_, AppState>, request: SaveNativeSideChatRequest, ) -> Result<(), String>",
-      "remoteWorkspacePolicy": "RemoteRouted"
     },
     {
       "id": "save_project_permission_rules",

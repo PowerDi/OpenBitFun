@@ -165,7 +165,6 @@ export interface ForkAcpSessionRequest {
   clientId: string;
   turnId: string;
   workspaceId: string;
-  sideChat?: { requestId: string; sessionName: string };
 }
 
 export interface GetAcpSessionOptionsRequest {
@@ -679,10 +678,6 @@ export class ACPClientAPI {
   }
 
   /** Native agents advertising `history.fork` only. */
-  static async saveNativeSideChat(sessionId: string, workspaceId: string): Promise<void> {
-    return api.invoke('save_native_side_chat', { request: { sessionId, workspaceId } });
-  }
-
   static async forkSession(request: ForkAcpSessionRequest): Promise<CreateAcpFlowSessionResponse> {
     return api.invoke('fork_acp_session', { request });
   }
