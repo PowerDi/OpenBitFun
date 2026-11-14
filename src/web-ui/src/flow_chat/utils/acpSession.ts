@@ -30,6 +30,11 @@ export function isAcpFlowSession(
   return acpAgentTypeFromSession(session) !== null;
 }
 
+export function isNativeAgentSession(session: { mode?: string; config?: { agentType?: string } } | null | undefined): boolean {
+  const clientId = acpClientIdFromAgentType(session?.config?.agentType) ?? acpClientIdFromAgentType(session?.mode);
+  return Boolean(clientId && Object.prototype.hasOwnProperty.call(NATIVE_AGENT_NAMES, clientId));
+}
+
 export interface AcpSessionRef {
   sessionId: string;
   clientId: string;

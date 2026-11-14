@@ -146,6 +146,22 @@ describe('useMessageSender', () => {
     vi.clearAllMocks();
   });
 
+  it.each([false, true])('routes native excerpt questions through BTW without local model selection, submitted=%s', async submitted => {
+    mocks.sessions.set('native-side', { sessionId: 'native-side', parentSessionId: 'parent', sessionKind: 'btw',
+      mode: 'acp:codex-native', config: { agentType: 'acp:codex-native', modelName: 'gpt-5.5' },
+      dialogTurns: submitted ? [{ id: 'prior-side-question' }] : [], lastSubmittedMode: submitted ? 'acp:codex-native' : undefined });
+    act(() => root.render(<ExcerptProbe sessionId="native-side" />));
+    await act(async () => { await sendFromProbe?.(); });
+    expect(mocks.sendBtw).toHaveBeenCalledWith(expect.objectContaining({ parentSessionId: 'parent',
+      childSessionId: 'native-side', question: expect.stringContaining('Quoted content') }));
+    const request = mocks.sendBtw.mock.calls[0][0];
+    expect(request.initialModelSelection).toBeUndefined();
+    expect(request.initialModelTarget).toBeUndefined();
+    expect(request.modelId).toBeUndefined();
+    expect(mocks.ensureBackendSession).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
   it('creates a Session with the selected Agent type and no Harness overlay', async () => {
     await act(async () => {
       root.render(<Probe />);

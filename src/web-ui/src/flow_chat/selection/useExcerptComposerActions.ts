@@ -1,3 +1,4 @@
+import { notificationService } from '@/shared/notification-system';
 import { useEffect, useRef } from 'react';
 import { usePeerDeviceModeOptional } from '@/infrastructure/peer-device/peerDeviceContextState';
 import { getActiveSurfaceScope } from '@/infrastructure/peer-device/deviceSurface';
@@ -9,7 +10,8 @@ import { pendingQueueManager } from '../services/flow-chat-manager/PendingQueueM
 import { expandSessionAuxPane } from '@/app/scenes/session/sessionPanelLayout';
 import { flowChatStore } from '../store/FlowChatStore';
 import { sessionComposerStore } from '../store/sessionComposerStore';
-import { createBtwSessionPlaceholder } from '../services/BtwThreadService';
+import { isNativeAgentSession } from '../utils/acpSession';
+import { createBtwSession } from '../services/BtwThreadService';
 import { openBtwSessionInAuxPane } from '../services/btwSessionPane';
 import { resolveSessionDriverId } from '../session-drivers/resolve';
 import { getSessionConversationCapability } from '../session-drivers/conversationCapability';
@@ -55,12 +57,14 @@ export function useExcerptComposerActions({ mainSessionId, targetSessionId, acti
         } else {
           const draft = [...state.sessions.values()].find(session => session.sessionKind === 'btw'
             && session.parentSessionId === mainSessionId && !session.isHistorical
-            && !session.btwOrigin?.requestId && session.dialogTurns.length === 0);
-          destination = draft?.sessionId ?? createBtwSessionPlaceholder({
+            && (!session.btwOrigin?.requestId || (isNativeAgentSession(session) && !session.lastSubmittedMode))
+            && session.dialogTurns.length === 0);
+          destination = draft?.sessionId ?? (await createBtwSession({
             parentSessionId: mainSessionId, workspacePath: parent.workspacePath,
             childSessionName: request.excerpt.fragments[0].text.replace(/\s+/g, ' ').trim().slice(0, 48),
             parentDialogTurnId: request.excerpt.fragments[0].turnId,
-          }).childSessionId;
+          })).childSessionId;
+          scope.assertCurrent('prepare excerpt side chat');
         }
       }
       if (getSessionConversationCapability(destination, flowChatStore.getState().sessions.get(destination)).access !== 'available') return;
@@ -92,7 +96,13 @@ export function useExcerptComposerActions({ mainSessionId, targetSessionId, acti
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => { if (scope.isCurrent()) focus(); });
     };
-    window.addEventListener(FLOWCHAT_EXCERPT_ACTION, handle);
-    return () => { cancelAnimationFrame(frame); window.removeEventListener(FLOWCHAT_EXCERPT_ACTION, handle); };
+    const onAction = (event: Event) => {
+      const scope = getActiveSurfaceScope();
+      void handle(event).catch(error => {
+        if (scope.isCurrent()) notificationService.error(error instanceof Error ? error.message : String(error));
+      });
+    };
+    window.addEventListener(FLOWCHAT_EXCERPT_ACTION, onAction);
+    return () => { cancelAnimationFrame(frame); window.removeEventListener(FLOWCHAT_EXCERPT_ACTION, onAction); };
   }, [active, mainSessionId, selectTargetSession, focus, peer, contextsStore, viewScope]);
 }

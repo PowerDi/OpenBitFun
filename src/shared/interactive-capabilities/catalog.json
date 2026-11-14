@@ -1106,19 +1106,18 @@
         },
         {
           "id": "btw-editor-ai",
-          "titleZh": "用 /btw（或 Ctrl+Alt+B）随手发起临时「侧问」，以及在代码编辑器中使用内联 AI",
-          "titleEn": "Ask quick ephemeral side questions with /btw (or Ctrl+Alt+B) and invoke inline AI inside the code editor",
-          "descriptionZh": "正在跑大重构时突然想查个语法或正则？输入 `/btw 这个问题` 会开启一个继承当前上下文、不调工具、关掉即焚的轻量侧问，完全不打断也不撑爆主对话；写代码时也可直接在编辑器内呼出内联 AI。",
-          "descriptionEn": "Need a quick syntax check mid-task? `/btw your question` opens a lightweight, tool-free side chat that inherits context without cluttering or saving to your main transcript; inline AI is also available right inside the editor.",
+          "titleZh": "使用 BTW 轻量问答与编辑器内联 AI，并可随时取消",
+          "titleEn": "Use lightweight BTW questions and inline editor AI, with cancellation",
           "control": {
             "kind": "open",
             "reasonCode": "unstructuredInteraction",
-            "reasonZh": "「用 /btw（或 Ctrl+Alt+B）随手发起临时「侧问」，以及在代码编辑器中使用内联 AI」是在你当前阅读或编码位置即开即用的轻量交互，可随时发起或按取消键中止。",
-            "reasonEn": "“Ask quick ephemeral side questions with /btw (or Ctrl+Alt+B) and invoke inline AI inside the code editor” is an on-the-spot lightweight interaction launched from your active chat composer or editor cursor and cancellable anytime."
+            "reasonZh": "“使用 BTW 轻量问答与编辑器内联 AI，并可随时取消”由多个实时状态相关步骤组成，目前没有一个能确定完成整个流程的单一结构化 Command；智能体会打开精确入口，并把后续交互保留在用户可见界面。",
+            "reasonEn": "“Use lightweight BTW questions and inline editor AI, with cancellation” spans multiple live-state-dependent steps and currently has no single structured Command that can deterministically complete the whole workflow; the Agent opens the exact entry and keeps the remaining interaction visible to the user."
           },
           "evidence": [
             "command:btw_ask_stream",
             "command:btw_cancel",
+            "command:save_native_side_chat",
             "command:editor_ai_stream",
             "command:editor_ai_cancel"
           ]
@@ -6125,7 +6124,9 @@
             "reasonZh": "请在当前设备的「设备与连接」概览中切换「本机可被控制」，选择其他设备能否连接这台设备。",
             "reasonEn": "Choose “Allow control of this device” in the local Devices & Connections overview to set whether other devices can connect to this one."
           },
-          "evidence": ["command:remote_connect_set_allowed"]
+          "evidence": [
+            "command:remote_connect_set_allowed"
+          ]
         },
         {
           "id": "connection-methods",

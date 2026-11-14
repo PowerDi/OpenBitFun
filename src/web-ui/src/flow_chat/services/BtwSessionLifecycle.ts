@@ -1,6 +1,8 @@
 import { agentAPI, btwAPI, sessionAPI } from '@/infrastructure/api';
+import { ACPClientAPI } from '@/infrastructure/api/service-api/ACPClientAPI';
 import { classifyPeerHostRefusal } from '@/infrastructure/peer-device/peerHostRefusal';
 import { renderedHostCanForkSessions } from '@/infrastructure/peer-device/renderedHostCapabilities';
+import { isNativeAgentSession } from '../utils/acpSession';
 import { removeBtwSessionFromAgentCanvas } from '@/app/components/panels/content-canvas/stores/canvasStore';
 import { getActiveSurfaceScope } from '@/infrastructure/peer-device/deviceSurface';
 import { askUserQuestionDraftStore } from '../store/askUserQuestionDraftStore';
@@ -47,6 +49,24 @@ export function saveBtwSessionAsFork(sessionId: string): Promise<void> {
     scope.assertCurrent('fork BTW session');
     const latest = flowChatStore.getState().sessions.get(sessionId) ?? session;
     const workspaceId = requireSessionOwningWorkspaceId(latest);
+    if (isNativeAgentSession(latest)) {
+      await ACPClientAPI.saveNativeSideChat(sessionId, workspaceId);
+      scope.assertCurrent('publish saved native side chat');
+      if (!await flowChatStore.ensurePersistedSessionMetadata(sessionId, workspaceId, true)) {
+        throw new Error('Saved native side chat metadata is unavailable');
+      }
+      scope.assertCurrent('release native side chat tab');
+      flowChatStore.setState(previous => {
+        const sessions = new Map(previous.sessions);
+        const current = sessions.get(sessionId);
+        if (current) sessions.set(sessionId, { ...current, sessionKind: 'normal',
+          parentSessionId: undefined, btwOrigin: undefined, isTransient: false, agentBackedTransient: false });
+        return { ...previous, sessions };
+      });
+      pendingQueueManager.clear(sessionId);
+      removeBtwSessionFromAgentCanvas(sessionId);
+      return;
+    }
     const key = scope.key('btw-saved-fork', sessionId);
     let forkId = savedForks.get(key);
     if (!forkId) {
@@ -104,7 +124,7 @@ export function discardBtwSession(sessionId: string): Promise<void> {
     const latest = flowChatStore.getState().sessions.get(sessionId) ?? session;
     // An empty side draft has no host session yet. A request ID also covers
     // forks whose acknowledgement failed after the host accepted them.
-    if (!isBtwSessionDraft(latest) || latest.btwOrigin?.requestId) {
+    if (isNativeAgentSession(latest) || !isBtwSessionDraft(latest) || latest.btwOrigin?.requestId) {
       await cancelBtwRuntime(sessionId, latest.btwOrigin?.requestId);
       scope.assertCurrent('delete BTW session');
       await agentAPI.deleteSession(sessionId, requireSessionOwningWorkspaceId(latest));

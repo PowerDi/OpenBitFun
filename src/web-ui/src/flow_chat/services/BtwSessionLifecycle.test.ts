@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const state = vi.hoisted(() => ({ sessions: new Map<string, any>(), cancel: vi.fn(), btwCancel: vi.fn(), delete: vi.fn(), discard: vi.fn(), fork: vi.fn(), metadata: vi.fn() }));
+const state = vi.hoisted(() => ({ sessions: new Map<string, any>(), cancel: vi.fn(), btwCancel: vi.fn(), delete: vi.fn(), discard: vi.fn(), fork: vi.fn(), metadata: vi.fn(), saveNative: vi.fn() }));
+vi.mock('@/infrastructure/api/service-api/ACPClientAPI', () => ({ ACPClientAPI: { saveNativeSideChat: state.saveNative } }));
 vi.mock('@/infrastructure/api', () => ({ agentAPI: { cancelSession: state.cancel, deleteSession: state.delete }, btwAPI: { cancel: state.btwCancel }, sessionAPI: { forkSession: state.fork } }));
-vi.mock('../store/FlowChatStore', () => ({ flowChatStore: { getState: () => ({ sessions: state.sessions }), ensurePersistedSessionMetadata: state.metadata } }));
+vi.mock('../store/FlowChatStore', () => ({ flowChatStore: { getState: () => ({ sessions: state.sessions }), ensurePersistedSessionMetadata: state.metadata,
+  setState: (update: (previous: any) => any) => { state.sessions = update({ sessions: state.sessions }).sessions; },
+} }));
 vi.mock('./FlowChatManager', () => ({ flowChatManager: { discardLocalSession: state.discard } }));
 
 import { canSaveBtwSessionAsFork, discardBtwSession, saveBtwSessionAsFork, trackBtwSessionSubmission } from './BtwSessionLifecycle';
@@ -30,6 +33,40 @@ describe('BTW session lifetime', () => {
       sessionId: 'child', sessionKind: 'btw', workspaceId: 'worktree', projectWorkspaceId: 'project',
       config: { executionTarget: { kind: 'managedWorktree' } }, dialogTurns: [], isTransient: true, agentBackedTransient: true,
     });
+  });
+
+  it('promotes a native child in place and keeps its composer without forking or deleting it', async () => {
+    Object.assign(state.sessions.get('child'), { mode: 'acp:codex-native', config: { agentType: 'acp:codex-native', executionTarget: { kind: 'managedWorktree' } },
+      parentSessionId: 'parent', btwOrigin: { requestId: 'native-fork' } });
+    sessionComposerStore.getState().setValue('child', 'follow up');
+    await saveBtwSessionAsFork('child');
+    expect(state.saveNative).toHaveBeenCalledWith('child', 'project');
+    expect(state.metadata).toHaveBeenCalledWith('child', 'project', true);
+    expect(state.sessions.get('child')).toMatchObject({ sessionKind: 'normal', isTransient: false });
+    expect(state.sessions.get('child').btwOrigin).toBeUndefined();
+    expect(state.fork).not.toHaveBeenCalled();
+    expect(state.delete).not.toHaveBeenCalled();
+    expect(state.discard).not.toHaveBeenCalled();
+    expect(sessionComposerStore.getState().getDraft('child').value).toBe('follow up');
+  });
+
+  it('keeps a native side chat when promotion fails and supports retry', async () => {
+    Object.assign(state.sessions.get('child'), { mode: 'acp:codex-native', btwOrigin: { requestId: 'native-fork' } });
+    state.saveNative.mockRejectedValueOnce(new Error('host offline'));
+    await expect(saveBtwSessionAsFork('child')).rejects.toThrow('host offline');
+    expect(state.sessions.get('child').sessionKind).toBe('btw');
+    expect(state.delete).not.toHaveBeenCalled();
+    await saveBtwSessionAsFork('child');
+    expect(state.sessions.get('child').sessionKind).toBe('normal');
+    expect(state.fork).not.toHaveBeenCalled();
+  });
+
+  it('deletes an unsent native excerpt fork even without a submitted question', async () => {
+    Object.assign(state.sessions.get('child'), { mode: 'acp:codex-native' });
+    await discardBtwSession('child');
+    expect(state.cancel).toHaveBeenCalledWith('child');
+    expect(state.delete).toHaveBeenCalledWith('child', 'project');
+    expect(state.fork).not.toHaveBeenCalled();
   });
 
   it('offers saving only after a question has been submitted', () => {

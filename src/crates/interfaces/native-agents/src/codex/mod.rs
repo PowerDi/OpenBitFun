@@ -55,6 +55,7 @@ impl NativeAgentDriver for CodexNativeDriver {
         NativeAgentCapabilities {
             select_model: true,
             permission_mode: true,
+            side_chat: true,
             thinking: true,
             plan: true,
             history: super::capabilities::NativeHistoryCapabilities {
@@ -276,6 +277,13 @@ mod codex_driver_tests {
         metadata.turn_count = 2;
         metadata.custom_metadata = Some(custom);
         metadata
+    }
+
+    #[test]
+    fn capabilities_enable_native_side_chat_only_for_codex() {
+        assert!(CodexNativeDriver.capabilities().side_chat);
+        assert!(!crate::claude::ClaudeNativeDriver.capabilities().side_chat);
+        assert!(!crate::pi::PiNativeDriver.capabilities().side_chat);
     }
 
     #[test]

@@ -1482,7 +1482,7 @@ impl PiNativeSession {
         if let Some(anchor) = lock(&self.history).anchor_mut(&turn_id) {
             anchor.prompted = true;
         }
-        let mut command = json!({"type":"prompt", "message":input.text});
+        let mut command = json!({"type":"prompt", "message":input.prompt_text()});
         if !input.images.is_empty() {
             command["images"] = images_value(&input);
         }
@@ -1634,7 +1634,7 @@ impl PiNativeSession {
                 display,
             });
         }
-        let mut command = json!({"type":"steer", "message":input.text});
+        let mut command = json!({"type":"steer", "message":input.prompt_text()});
         if !input.images.is_empty() {
             command["images"] = images_value(&input);
         }

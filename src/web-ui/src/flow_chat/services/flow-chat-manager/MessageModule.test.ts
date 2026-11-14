@@ -319,6 +319,18 @@ describe('MessageModule session writer conflict', () => {
     expect(mockPrewarmHistoricalSession).toHaveBeenCalledTimes(historyState === 'metadata-only' ? 1 : 0);
   });
 
+  it.each(['btw', 'normal'])('marks native %s submissions for the wire reminder without changing visible text', async sessionKind => {
+    const { context, session } = conflictContext(`native-${sessionKind}`);
+    Object.assign(session, { mode: 'acp:codex-native', sessionKind });
+    mockGetCurrentState.mockReturnValue('processing');
+    mockHostQueueSupported.mockReturnValue(false);
+    await sendMessage(context, 'Why?', session.sessionId, 'Visible question', undefined, undefined,
+      { userMessageMetadata: { excerpt: 'selection' } });
+    expect(mockPendingEnqueue).toHaveBeenCalledWith(expect.objectContaining({ content: 'Why?',
+      displayMessage: 'Visible question', userMessageMetadata: { excerpt: 'selection',
+        ...(sessionKind === 'btw' ? { nativeSideChat: true } : {}) } }));
+  });
+
   it.each([false, true])('preserves the plan build turn ID while busy, host queue=%s', async hostQueue => {
     const { context, session } = conflictContext('plan-build');
     mockGetCurrentState.mockReturnValue('processing');

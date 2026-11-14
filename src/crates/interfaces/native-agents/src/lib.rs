@@ -24,6 +24,7 @@ mod round_latency;
 pub mod runtime_status;
 pub mod session_options;
 pub mod session_persistence;
+pub mod side_chat;
 pub(crate) mod title;
 pub mod tool_card;
 mod turn_recorder;
@@ -199,6 +200,24 @@ pub struct NativeTurnInput {
     pub images: Vec<NativeImageInput>,
     /// Host metadata of the user message, recorded on `DialogTurnStarted`.
     pub metadata: Option<serde_json::Value>,
+}
+
+impl NativeTurnInput {
+    /// Per-turn side-question guidance is user input, never a system/config
+    /// override. Keep `text` unchanged for host persistence and presentation.
+    pub(crate) fn prompt_text(&self) -> String {
+        if self.metadata.as_ref().and_then(|m| m.get("nativeSideChat"))
+            == Some(&serde_json::Value::Bool(true))
+        {
+            format!(
+                "<system-reminder>\n{}\n</system-reminder>\n\n{}",
+                openbitfun_core::agentic::side_question::btw_system_reminder(),
+                self.text
+            )
+        } else {
+            self.text.clone()
+        }
+    }
 }
 
 impl From<String> for NativeTurnInput {

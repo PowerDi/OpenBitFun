@@ -2836,11 +2836,11 @@ fn user_frame(
     priority: Option<&str>,
 ) -> Value {
     let content = if input.images.is_empty() {
-        Value::String(input.text.clone())
+        Value::String(input.prompt_text())
     } else {
         let mut blocks = Vec::with_capacity(input.images.len() + 1);
         if !input.text.trim().is_empty() {
-            blocks.push(json!({"type":"text", "text":input.text}));
+            blocks.push(json!({"type":"text", "text":input.prompt_text()}));
         }
         blocks.extend(input.images.iter().map(|image| {
             json!({"type":"image", "source":{"type":"base64",

@@ -12,6 +12,16 @@ const mockEnsureBackendSession = vi.fn();
 const mockUpdateSessionModelPool = vi.fn();
 const mockLoadRelaySessionHistory = vi.fn();
 const mockRelayHostHasTurn = vi.fn();
+const mockNativeFork = vi.fn();
+const mockNativeSend = vi.fn();
+
+vi.mock('@/infrastructure/api/service-api/ACPClientAPI', () => ({ ACPClientAPI: {
+  forkSession: (...args: unknown[]) => mockNativeFork(...args),
+  getCachedSessionOptions: () => undefined,
+  getCachedCapabilityClients: () => [{ id: 'codex-native', capabilities: {
+    sideChat: true, history: { fork: true }, input: { queue: true },
+  } }],
+} }));
 
 const sessions = new Map<string, any>();
 
@@ -51,6 +61,7 @@ vi.mock('../state-machine', () => ({
 
 vi.mock('./FlowChatManager', () => ({
   flowChatManager: {
+    sendMessage: (...args: unknown[]) => mockNativeSend(...args),
     discardLocalSession: vi.fn(),
     ensureBackendSession: (...args: any[]) => mockEnsureBackendSession(...args),
   },
@@ -65,6 +76,7 @@ vi.mock('@/shared/notification-system', () => ({
 import {
   createBtwChildSession,
   createBtwSessionPlaceholder,
+  createBtwSession,
   sendMessageToBtwSession,
   startBtwThread,
 } from './BtwThreadService';
@@ -97,6 +109,59 @@ describe('BtwThreadService', () => {
     mockCreateSession.mockResolvedValue({
       sessionId: 'child-1',
     });
+  });
+
+  function nativeParent() {
+    const parent = sessions.get('parent-1');
+    parent.mode = 'acp:codex-native';
+    parent.config.agentType = parent.mode;
+    parent.dialogTurns = [
+      { id: 'completed', status: 'completed', modelRounds: [] },
+      { id: 'running', status: 'streaming', modelRounds: [] },
+    ];
+    return parent;
+  }
+
+  it('forks native context at the last completed turn and retains remote identity', async () => {
+    const parent = nativeParent();
+    mockNativeFork.mockResolvedValueOnce({ sessionId: 'native-child' });
+    await createBtwSession({ parentSessionId: 'parent-1', childSessionName: 'Why?', parentDialogTurnId: 'older-excerpt' });
+    expect(mockNativeFork).toHaveBeenCalledWith(expect.objectContaining({ sourceSessionId: 'parent-1',
+      clientId: 'codex-native', turnId: 'completed', workspaceId: 'workspace-1',
+      sideChat: { requestId: expect.any(String), sessionName: 'Why?' } }));
+    expect(mockAddExternalSession).toHaveBeenCalledWith('native-child', 'Why?', 'acp:codex-native', '/workspace',
+      expect.objectContaining({ sessionKind: 'btw', isTransient: true, agentBackedTransient: true }), 'remote-1', 'host-1');
+    expect(parent.dialogTurns.at(-1).id).toBe('running');
+    expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(mockAskStream).not.toHaveBeenCalled();
+  });
+
+  it('sends native questions through the ordinary agent path without overriding model or permissions', async () => {
+    nativeParent();
+    sessions.set('native-child', { ...sessions.get('parent-1'), sessionId: 'native-child', sessionKind: 'btw',
+      parentSessionId: 'parent-1', dialogTurns: [], isTransient: true, agentBackedTransient: true });
+    await sendMessageToBtwSession({ parentSessionId: 'parent-1', childSessionId: 'native-child', question: 'Why?',
+      modelId: 'must-not-override', initialModelSelection: { modelId: 'other' }, userMessageMetadata: { excerpt: 'quoted' } });
+    expect(mockNativeSend).toHaveBeenCalledWith('Why?', 'native-child', 'Why?', undefined, undefined,
+      { userMessageMetadata: { excerpt: 'quoted' } });
+    expect(mockAskStream).not.toHaveBeenCalled();
+    expect(mockUpdateSessionModelName).not.toHaveBeenCalled();
+  });
+
+  it('refuses missing completed context, steered boundaries, failed forks and parent identities without local fallback', async () => {
+    const parent = nativeParent();
+    parent.dialogTurns = [{ id: 'running', status: 'streaming', modelRounds: [] }];
+    await expect(createBtwSession({ parentSessionId: 'parent-1', childSessionName: 'Why?' })).rejects.toThrow('completed turn');
+    parent.dialogTurns = [{ id: 'done', status: 'completed', modelRounds: [{ items: [{ type: 'user-steering' }] }] }];
+    await expect(createBtwSession({ parentSessionId: 'parent-1', childSessionName: 'Why?' })).rejects.toThrow('steered input');
+    parent.dialogTurns[0].modelRounds = [];
+    mockNativeFork.mockRejectedValueOnce(new Error('checkpoint refused'));
+    await expect(startBtwThread({ parentSessionId: 'parent-1', workspacePath: '/workspace', question: 'Why?' })).rejects.toThrow('checkpoint refused');
+    mockNativeFork.mockResolvedValueOnce({ sessionId: 'parent-1' });
+    await expect(createBtwSession({ parentSessionId: 'parent-1', childSessionName: 'Why?' })).rejects.toThrow('parent session');
+    expect(mockAddExternalSession).not.toHaveBeenCalled();
+    expect(mockAskStream).not.toHaveBeenCalled();
+    expect(mockEnsureBackendSession).not.toHaveBeenCalled();
   });
 
   it('passes structured relationship metadata to backend-created review sessions', async () => {

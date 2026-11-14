@@ -25,6 +25,7 @@ import { isConversationExcerpt, withConversationExcerptFallback } from '@/shared
 import { getActiveSurfaceScope } from '@/infrastructure/peer-device/deviceSurface';
 import { usePeerDeviceModeOptional } from '@/infrastructure/peer-device/peerDeviceContextState';
 import { isBtwSessionDraft } from '../utils/modelSelectionTarget';
+import { isNativeAgentSession } from '../utils/acpSession';
 import { sendMessageToBtwSession } from '../services/BtwThreadService';
 import { supportsBtwModelPools } from '@/infrastructure/api/service-api/ModelPoolAPI';
 import type { BtwInitialModelTarget } from '@/infrastructure/api/service-api/BtwAPI';
@@ -252,7 +253,12 @@ export function useMessageSender(props: UseMessageSenderProps): UseMessageSender
       // whether to expose a path to analyze_image or attach pixels directly.
       surfaceScope.assertCurrent('submit conversation excerpts');
       const targetSession = flowChatManager.getFlowChatState().sessions.get(sessionId!);
-      if (targetSession && isBtwSessionDraft(targetSession)) {
+      if (targetSession?.sessionKind === 'btw' && isNativeAgentSession(targetSession)) {
+        if (!targetSession.parentSessionId) throw new Error('Side question is missing its parent session');
+        await sendMessageToBtwSession({ parentSessionId: targetSession.parentSessionId,
+          childSessionId: targetSession.sessionId, question: fullMessage, displayMessage: displayFallback,
+          imagePayload, userMessageMetadata });
+      } else if (targetSession && isBtwSessionDraft(targetSession)) {
         const parentSessionId = targetSession.parentSessionId;
         if (!parentSessionId) throw new Error('Side question is missing its parent session');
         await flowChatManager.ensureBackendSession(parentSessionId);

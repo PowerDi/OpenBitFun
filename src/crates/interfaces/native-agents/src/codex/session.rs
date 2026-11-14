@@ -862,6 +862,14 @@ impl CodexNativeSession {
             .filter(|id| !id.is_empty())
             .ok_or_else(|| service_error(format!("Codex {method} returned no thread id")))?
             .to_string();
+        if pending
+            .as_ref()
+            .is_some_and(|fork| fork.thread_id == thread)
+        {
+            return Err(service_error(
+                "Codex fork returned the source thread; refusing to send side input",
+            ));
+        }
         if let Some(model) = response["model"].as_str().filter(|m| !m.is_empty()) {
             *lock(&self.active_model) = Some(model.to_string());
             let mut state = self.state.lock().await;
@@ -2352,7 +2360,7 @@ pub(super) fn user_input(input: &NativeTurnInput) -> Value {
     let mut items = Vec::with_capacity(input.images.len() + 1);
     // Exactly empty with no images: an input-less (wake-up) turn.
     if !input.text.trim().is_empty() || (input.images.is_empty() && !input.text.is_empty()) {
-        items.push(json!({"type": "text", "text": input.text, "text_elements": []}));
+        items.push(json!({"type": "text", "text": input.prompt_text(), "text_elements": []}));
     }
     items.extend(input.images.iter().map(|image| {
         json!({"type": "image", "url": format!("data:{};base64,{}", image.media_type, image.data)})

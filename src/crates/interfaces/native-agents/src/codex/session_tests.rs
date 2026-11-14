@@ -310,6 +310,59 @@ async fn pending_fork_launches_thread_fork_and_rebinds_anchors() {
     assert_eq!(session.ensure_thread(&process).await.unwrap(), "th-new");
 }
 
+#[tokio::test]
+async fn side_chat_refuses_a_fork_that_reuses_the_source_thread() {
+    let (session, process, mut lines) = fixture(None);
+    session.apply_history(CodexHistory {
+        pending: Some(PendingFork {
+            thread_id: "source".into(),
+            last_turn_id: Some("c1".into()),
+        }),
+        ..Default::default()
+    });
+    let ensure = {
+        let session = session.clone();
+        let process = process.clone();
+        tokio::spawn(async move { session.ensure_thread(&process).await })
+    };
+    answer(
+        &session,
+        &process,
+        &mut lines,
+        json!({"thread":{"id":"source","turns":[]}}),
+    )
+    .await;
+    assert!(ensure
+        .await
+        .unwrap()
+        .unwrap_err()
+        .to_string()
+        .contains("source thread"));
+    assert!(session.thread_id().is_none());
+    assert!(lock(&session.history).pending.is_some());
+}
+
+#[test]
+fn side_chat_reminder_is_only_in_native_user_input() {
+    let (session, _, _) = fixture(Some("fork-thread"));
+    *lock(&session.selected_model) = "gpt-5.5".into();
+    *lock(&session.permission_mode) = "full-access".into();
+    let question = NativeTurnInput::from("Why?");
+    let plain = session.turn_params("fork-thread", &question);
+    let side = NativeTurnInput {
+        metadata: Some(json!({"nativeSideChat":true})),
+        ..question
+    };
+    let mut params = session.turn_params("fork-thread", &side);
+    assert!(params["input"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains(openbitfun_core::agentic::side_question::btw_system_reminder()));
+    assert_eq!(side.text, "Why?");
+    params["input"] = plain["input"].clone();
+    assert_eq!(params, plain);
+}
+
 #[test]
 fn turn_params_carry_images_and_overrides() {
     let (session, _, _) = fixture(Some("th1"));

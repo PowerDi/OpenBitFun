@@ -39,7 +39,7 @@ import {
 import { isOutcomeUnknownError, isSessionInUseError } from '@/infrastructure/api/errors/TauriCommandError';
 import { i18nService } from '@/infrastructure/i18n';
 import { driverForSession } from '../../session-drivers/registry';
-import { isAcpAgentType } from '../../utils/acpSession';
+import { isAcpAgentType, isNativeAgentSession } from '../../utils/acpSession';
 import { assertSessionConversationCanSubmit, getSessionConversationCapability } from '../../session-drivers/conversationCapability';
 import type { SendMessageOptions, SessionDriver, StartTurnResult, SubmissionDraft, TurnTracker } from '../../session-drivers/types';
 import { assertSessionSubmissionAllowed } from '../../store/sessionMutationStore';
@@ -392,6 +392,9 @@ async function sendMessageInternal(
     throw new Error(`Session does not exist: ${sessionId}`);
   }
   const surfaceScopeAtSend = getActiveSurfaceScope();
+  if (session.sessionKind === 'btw' && isNativeAgentSession(session)) {
+    options = { ...options, userMessageMetadata: { ...options?.userMessageMetadata, nativeSideChat: true } };
+  }
   if (session.externalHistory?.mode === 'follow') {
     if (surfaceScopeAtSend.surfaceId !== 'local') throw new Error(i18nService.t('flow-chat:externalHistory.unsupportedSurface'));
     assertSessionConversationCanSubmit(sessionId, session, i18nService.t('flow-chat:chatInput.targetUnavailable'));
