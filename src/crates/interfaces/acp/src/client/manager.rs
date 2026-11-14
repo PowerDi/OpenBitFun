@@ -236,10 +236,6 @@ impl AcpClientService {
         native::native_driver(client_id)
     }
 
-    pub fn native_session_persistence(&self) -> &AcpSessionPersistence {
-        &self.session_persistence
-    }
-
     pub fn is_native_client(&self, client_id: &str) -> bool {
         native::is_native_client(client_id)
     }

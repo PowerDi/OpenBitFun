@@ -1,4 +1,3 @@
-import { ACPClientAPI } from '@/infrastructure/api/service-api/ACPClientAPI';
 import { isNativeAgentSession } from '../utils/acpSession';
 import { agentAPI, sessionAPI } from '@/infrastructure/api';
 import { removeBtwSessionFromAgentCanvas } from '@/app/components/panels/content-canvas/stores/canvasStore';
@@ -46,12 +45,8 @@ export function saveBtwSessionAsFork(sessionId: string): Promise<void> {
     const latest = flowChatStore.getState().sessions.get(sessionId) ?? session;
     const workspaceId = requireSessionOwningWorkspaceId(latest);
     if (isNativeAgentSession(latest)) {
-      await ACPClientAPI.saveNativeSideChat(sessionId, workspaceId);
-      scope.assertCurrent('publish saved native side chat');
-      if (!await flowChatStore.ensurePersistedSessionMetadata(sessionId, workspaceId, true)) {
-        throw new Error('Saved native side chat metadata is unavailable');
-      }
-      scope.assertCurrent('release native side chat tab');
+      // The child is already a persisted native fork. Saving only ends the
+      // side-chat presentation; the host record needs no change.
       flowChatStore.setState(previous => {
         const sessions = new Map(previous.sessions);
         const current = sessions.get(sessionId);
@@ -61,6 +56,8 @@ export function saveBtwSessionAsFork(sessionId: string): Promise<void> {
       });
       pendingQueueManager.clear(sessionId);
       removeBtwSessionFromAgentCanvas(sessionId);
+      // Show the host's fork name instead of the side question; best effort.
+      await flowChatManager.reloadSessionTitle(sessionId).catch(() => undefined);
       return;
     }
     const key = scope.key('btw-saved-fork', sessionId);

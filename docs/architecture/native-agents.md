@@ -362,35 +362,30 @@ alive across a controller disconnect, new native agents (D1).
 
 ## Native side chat (`/btw` and excerpt Ask)
 
-Native side chats use `fork_acp_session` with an optional `sideChat` request,
-then submit through the normal native host queue. The boundary is the parent's
-last completed turn, even when the parent is still running or the selected
-excerpt comes from an older turn. The host checks the boundary again; missing
-checkpoints, steered boundaries and refused forks surface errors without falling
-back to the OpenBitFun agent loop. Codex also rejects a `thread/fork` response
-that returns the source thread identity before sending any question.
+A native side chat is an ordinary native fork that the Web UI presents as a
+`/btw` child. `createBtwSession` calls the existing `fork_acp_session` at the
+parent's last completed turn (even when the parent is still running or the
+excerpt comes from an older turn), then submits the question through the normal
+native host queue. A parent without a completed turn, a steered boundary turn or
+a refused fork surfaces an error; native parents never fall back to the
+OpenBitFun agent-loop `/btw`. Codex also rejects a `thread/fork` response that
+returns the source thread identity.
 
-The child keeps the parent's workspace/remote connection, native model,
-thinking and permission preferences. It is writable and runs in its own CLI
-process. Its persisted kind is `EphemeralChild`, with the existing BTW
-relationship. Save as Fork promotes that record to `Standard` and removes the
-BTW relationship; it never forks a second time. Discard cancels and deletes the
-OpenBitFun child record. The provider's transcript may remain on disk.
+The side-chat identity lives only in the Web UI session state; the host record
+is a normal fork that inherits the parent's custom metadata (native model,
+thinking and permission preferences) like any other fork. Save as Fork only
+ends the side-chat presentation and reloads the host fork name. Discard cancels
+and deletes the child. A side chat left open when the app exits is therefore
+restored as a normal fork session; the provider's transcript stays on disk.
 
-Native BTW turns carry `nativeSideChat: true` in user-message metadata. The
-shared `NativeTurnInput::prompt_text` prepends the exact `btw_system_reminder()`
-inside a reminder block only when encoding the CLI user input. The stored and
-visible message stays the question; system prompts, model and permission mode
-are not changed. This preserves the fork's provider prompt-cache prefix.
-Codex alone advertises `side_chat`; Claude and Pi keep it disabled, with the
-same fork/submission/reminder path ready behind their capability flags.
-
-The Web UI retains existing desktop/Peer capability gates. Fork and promotion
-resolve workspace identity on the executing host, preserving the existing SSH
-and container routing. CLI peer hosts explicitly reject these commands; mobile,
-IM and Detached Dispatch gain no side-chat creation entry point. Unit fixtures
-cover remote connection propagation and surface-switch fencing, not live remote
-execution or provider cache measurements.
+Native BTW turns carry `nativeSideChat: true` in user-message metadata.
+`NativeTurnInput::prompt_text` prepends `btw_system_reminder()` in a reminder
+block only when encoding the CLI user input; the stored and visible message
+stays the question, and system prompt, model and permission mode are unchanged,
+so the fork keeps the provider prompt-cache prefix. Only Codex advertises
+`side_chat`; Claude and Pi use the same path once their flag is enabled.
+Desktop and Peer reuse the existing capability gates and fork routing; mobile,
+IM and Detached Dispatch get no side-chat entry point.
 
 ## Driver contract gaps (follow-up)
 

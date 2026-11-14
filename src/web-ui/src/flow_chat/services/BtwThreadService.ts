@@ -330,7 +330,6 @@ export async function createBtwSession(
   const fork = await ACPClientAPI.forkSession({
     sourceSessionId: parent.sessionId, clientId: ref.clientId, turnId: boundary.id,
     workspaceId: requireSessionOwningWorkspaceId(parent),
-    sideChat: { requestId, sessionName: params.childSessionName },
   });
   scope.assertCurrent('create native side chat');
   if (fork.sessionId === parent.sessionId) throw new Error('Native fork returned the parent session');

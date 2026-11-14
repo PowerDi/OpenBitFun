@@ -163,24 +163,6 @@ impl TurnRecorder {
                 );
                 (RecordAction::Checkpoint, Some(turn))
             }
-            AgenticEvent::UserSteeringInjected {
-                session_id,
-                turn_id,
-                ..
-            } => {
-                let Some(open) = self.open(session_id, turn_id) else {
-                    return (RecordAction::None, None);
-                };
-                let metadata = open
-                    .turn
-                    .user_message
-                    .metadata
-                    .get_or_insert_with(|| serde_json::json!({}));
-                if let Some(object) = metadata.as_object_mut() {
-                    object.insert("nativeSteeredInput".into(), serde_json::json!(true));
-                }
-                (RecordAction::Checkpoint, Some(open.turn.clone()))
-            }
             AgenticEvent::ModelRoundStarted {
                 session_id,
                 turn_id,
@@ -705,33 +687,6 @@ mod tests {
         assert_eq!(round.tool_items[0].tool_call.input["cmd"], "ls");
         // Settled turns are forgotten.
         assert_eq!(recorder.record(&text("late")).0, RecordAction::None);
-    }
-
-    #[test]
-    fn side_chat_steering_boundary_survives_turn_settlement() {
-        let mut recorder = TurnRecorder::default();
-        recorder.record(&started("steered", 0));
-        let (action, checkpoint) = recorder.record(&AgenticEvent::UserSteeringInjected {
-            session_id: "s".into(),
-            turn_id: "steered".into(),
-            round_index: 0,
-            steering_id: "steer-1".into(),
-            content: "More input".into(),
-            display_content: "More input".into(),
-        });
-        assert_eq!(action, RecordAction::Checkpoint);
-        assert_eq!(
-            checkpoint.unwrap().user_message.metadata.unwrap()["nativeSteeredInput"],
-            true
-        );
-        let (_, settled) = recorder.record(&AgenticEvent::DialogTurnCancelled {
-            session_id: "s".into(),
-            turn_id: "steered".into(),
-        });
-        assert_eq!(
-            settled.unwrap().user_message.metadata.unwrap()["nativeSteeredInput"],
-            true
-        );
     }
 
     #[test]

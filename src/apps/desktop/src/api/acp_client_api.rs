@@ -1179,8 +1179,6 @@ pub struct ForkAcpSessionRequest {
     pub turn_id: String,
     /// Workspace identity; authoritative.
     pub workspace_id: String,
-    #[serde(default)]
-    pub side_chat: Option<openbitfun_acp::client::native::side_chat::NativeSideChat>,
 }
 
 pub use openbitfun_acp::client::native::NativeRollbackOutcome as RollbackAcpSessionTurnResponse;
@@ -1378,72 +1376,13 @@ pub async fn fork_acp_session(
     }
     let scope =
         resolve_acp_workspace_scope(&state, Some(&request.workspace_id), None, None, None).await?;
-    let persistence = service.native_session_persistence();
-    if request.side_chat.is_some() {
-        if !service
-            .native_driver(&request.client_id)
-            .is_some_and(|driver| driver.capabilities().side_chat)
-        {
-            return Err(format!("{} does not support side chat", request.client_id));
-        }
-        persistence
-            .validate_side_chat_boundary(
-                &scope.session_storage_path,
-                &request.source_session_id,
-                &request.turn_id,
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-    }
-    let fork = service
+    service
         .fork_native_session(
             &request.client_id,
             &scope.session_storage_path,
             &request.source_session_id,
             &request.turn_id,
         )
-        .await
-        .map_err(|error| error.to_string())?;
-    if let Some(side_chat) = &request.side_chat {
-        persistence
-            .mark_native_side_chat(
-                &scope.session_storage_path,
-                &fork.session_id,
-                &request.source_session_id,
-                &request.turn_id,
-                side_chat,
-                service
-                    .native_session(&request.source_session_id)
-                    .map(|session| session.options()),
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(fork)
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SaveNativeSideChatRequest {
-    pub session_id: String,
-    pub workspace_id: String,
-}
-
-/// Promote the existing native fork; its agent transcript and identity stay intact.
-#[tauri::command]
-pub async fn save_native_side_chat(
-    state: State<'_, AppState>,
-    request: SaveNativeSideChatRequest,
-) -> Result<(), String> {
-    let service = state
-        .acp_client_service
-        .as_ref()
-        .ok_or_else(|| "ACP client service not initialized".to_string())?;
-    let scope =
-        resolve_acp_workspace_scope(&state, Some(&request.workspace_id), None, None, None).await?;
-    service
-        .native_session_persistence()
-        .save_native_side_chat(&scope.session_storage_path, &request.session_id)
         .await
         .map_err(|error| error.to_string())
 }
