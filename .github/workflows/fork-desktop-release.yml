@@ -212,7 +212,10 @@ jobs:
           no-cache: true
 
       - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        # Pinned: rustc 1.100.0 fails to compile screenshots 0.8.10 on Linux
+        # (never-type inference change, rust-lang/rust#148922). Return to
+        # stable once that dependency builds again.
+        uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: ${{ matrix.platform.target }}
 
