@@ -67,6 +67,7 @@ impl NativeAgentDriver for ClaudeNativeDriver {
                 read_transcript: true,
                 ..Default::default()
             },
+            side_chat: true,
             autonomous_turns: true,
             history: super::capabilities::NativeHistoryCapabilities {
                 rollback_last_turn: true,

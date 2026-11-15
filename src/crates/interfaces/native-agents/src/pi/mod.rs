@@ -165,6 +165,7 @@ pub(crate) fn capabilities() -> NativeAgentCapabilities {
         },
         thinking: true,
         commands: true,
+        side_chat: true,
         compact: true,
         context_usage: true,
         input: super::capabilities::NativeInputCapabilities {

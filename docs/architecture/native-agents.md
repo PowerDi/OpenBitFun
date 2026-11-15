@@ -382,8 +382,11 @@ Native BTW turns carry `nativeSideChat: true` in user-message metadata.
 `NativeTurnInput::prompt_text` prepends `btw_system_reminder()` in a reminder
 block only when encoding the CLI user input; the stored and visible message
 stays the question, and system prompt, model and permission mode are unchanged,
-so the fork keeps the provider prompt-cache prefix. Only Codex advertises
-`side_chat`; Claude and Pi use the same path once their flag is enabled.
+so the fork keeps the provider prompt-cache prefix. Codex, Claude and Pi all
+advertise `side_chat`. Each fork must land in a new provider conversation:
+Claude passes `--fork-session` with a fresh `--session-id`; Codex and Pi learn
+the branch id from the provider and refuse to bind one equal to the source, so
+a side question can never be appended to the parent conversation.
 Desktop and Peer reuse the existing capability gates and fork routing; mobile,
 IM and Detached Dispatch get no side-chat entry point.
 
