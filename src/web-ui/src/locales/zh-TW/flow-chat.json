@@ -1317,6 +1317,7 @@
     "close": "關閉"
   },
   "btw": {
+    "preparing": "正在準備側問…",
     "title": "側問",
     "temporaryLabel": "臨時",
     "temporaryHint": "關閉標籤頁後，對話內容將消失，無法復原。",

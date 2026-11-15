@@ -66,6 +66,8 @@ vi.mock('./FlowChatManager', () => ({
 vi.mock('@/shared/notification-system', () => ({
   notificationService: {
     warning: vi.fn(),
+    info: () => 'notice-1',
+    dismiss: vi.fn(),
   },
 }));
 
@@ -127,6 +129,18 @@ describe('BtwThreadService', () => {
     expect(parent.dialogTurns.at(-1).id).toBe('running');
     expect(mockCreateSession).not.toHaveBeenCalled();
     expect(mockAskStream).not.toHaveBeenCalled();
+  });
+
+  it('joins a pending native fork instead of forking the parent again', async () => {
+    nativeParent();
+    let resolveFork!: (value: { sessionId: string }) => void;
+    mockNativeFork.mockReturnValueOnce(new Promise(resolve => { resolveFork = resolve; }));
+    const first = createBtwSession({ parentSessionId: 'parent-1', childSessionName: 'Why?' });
+    const second = createBtwSession({ parentSessionId: 'parent-1', childSessionName: 'Why?' });
+    resolveFork({ sessionId: 'native-child' });
+    expect((await first).childSessionId).toBe('native-child');
+    expect((await second).childSessionId).toBe('native-child');
+    expect(mockNativeFork).toHaveBeenCalledTimes(1);
   });
 
   it('sends native questions through the ordinary agent path without overriding model or permissions', async () => {

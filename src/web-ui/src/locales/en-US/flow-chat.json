@@ -1317,6 +1317,7 @@
     "close": "Close"
   },
   "btw": {
+    "preparing": "Preparing the side question…",
     "title": "Side question",
     "temporaryLabel": "Temporary",
     "temporaryHint": "This conversation is discarded when you close its tab.",

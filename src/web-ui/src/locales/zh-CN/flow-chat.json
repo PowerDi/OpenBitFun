@@ -1317,6 +1317,7 @@
     "close": "关闭"
   },
   "btw": {
+    "preparing": "正在准备侧问…",
     "title": "侧问",
     "temporaryLabel": "临时",
     "temporaryHint": "关闭标签页后，对话内容将消失，无法恢复。",
