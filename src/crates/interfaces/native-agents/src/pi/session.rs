@@ -589,6 +589,13 @@ impl PiNativeSession {
             .filter(|id| super::valid_pi_session_id(id))
             .ok_or_else(|| service_error("Pi did not report the forked session id"))?
             .to_string();
+        if id == pending.session_id {
+            // Binding it would append the branch (or a side chat) to the
+            // source conversation.
+            return Err(service_error(
+                "Pi fork returned the source session; refusing to send input",
+            ));
+        }
         self.bind_pi_session(&id).await?;
         {
             let mut history = lock(&self.history);

@@ -793,3 +793,33 @@ async fn extension_dialogs_are_answered_from_the_question_card() {
     .await;
     task.abort();
 }
+
+fn same_session_responses(command: &Value) -> Value {
+    match command["type"].as_str() {
+        Some("get_state") => json!({"sessionId": "pi-src"}),
+        _ => json!({"cancelled": false}),
+    }
+}
+
+#[tokio::test]
+async fn pending_fork_refuses_a_branch_that_is_the_source_session() {
+    let (session, process, output) = fixture().await;
+    let (task, _sent) = respond(
+        session.clone(),
+        process.clone(),
+        output,
+        same_session_responses,
+    );
+    session.apply_history(PiHistory {
+        pending: Some(PendingFork {
+            session_id: "pi-src".into(),
+            cut_before: None,
+        }),
+        ..Default::default()
+    });
+    let error = session.apply_pending(&process).await.unwrap_err();
+    task.abort();
+    assert!(error.to_string().contains("source session"));
+    assert_ne!(session.active_pi_session(), "pi-src");
+    assert!(lock(&session.history).pending.is_some());
+}

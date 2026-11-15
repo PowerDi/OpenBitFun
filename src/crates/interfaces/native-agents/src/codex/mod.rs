@@ -280,10 +280,10 @@ mod codex_driver_tests {
     }
 
     #[test]
-    fn capabilities_enable_native_side_chat_only_for_codex() {
+    fn capabilities_enable_native_side_chat_for_every_driver() {
         assert!(CodexNativeDriver.capabilities().side_chat);
-        assert!(!crate::claude::ClaudeNativeDriver.capabilities().side_chat);
-        assert!(!crate::pi::PiNativeDriver.capabilities().side_chat);
+        assert!(crate::claude::ClaudeNativeDriver.capabilities().side_chat);
+        assert!(crate::pi::PiNativeDriver.capabilities().side_chat);
     }
 
     #[test]
