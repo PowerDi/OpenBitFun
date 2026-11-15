@@ -344,19 +344,47 @@ async function btwQuestionReachedHost(
   try {
     await flowChatStore.loadRelaySessionHistory(childSessionId);
   } catch {
-    // The host never created the child, so it never admitted the question.
     return false;
   }
   return scope.isCurrent()
     && flowChatStore.relayHostHasTurn(childSessionId, `btw-turn-${requestId.trim()}`);
 }
 
-/** Native side chats are real forks from creation, including excerpt Ask drafts. */
+type BtwSessionCreation = ReturnType<typeof createBtwSessionPlaceholder>;
+const nativeForks = new Map<string, Promise<BtwSessionCreation>>();
+
+/**
+ * Native side chats are real forks from creation, including excerpt Ask drafts.
+ * The host copies the parent's history, which takes seconds on a long session;
+ * a repeated request for the same parent meanwhile joins the pending fork
+ * instead of creating another, and a loading notice shows that work started.
+ */
 export async function createBtwSession(
   params: Parameters<typeof createBtwSessionPlaceholder>[0],
-): Promise<ReturnType<typeof createBtwSessionPlaceholder>> {
+): Promise<BtwSessionCreation> {
   const parent = requireSession(params.parentSessionId);
   if (!isNativeAgentSession(parent)) return createBtwSessionPlaceholder(params);
+  const scope = getActiveSurfaceScope();
+  const key = scope.key('native-btw-fork', scope.epoch, parent.sessionId);
+  const pending = nativeForks.get(key);
+  if (pending) return pending;
+  // A toast, not `loading`: task notifications stay out of the toast stack.
+  const notice = notificationService.info(i18nService.t('flow-chat:btw.preparing'), {
+    title: i18nService.t('flow-chat:btw.title'), duration: 0, closable: false,
+  });
+  const fork = forkNativeBtwSession(parent, params)
+    .finally(() => {
+      notificationService.dismiss(notice);
+      if (nativeForks.get(key) === fork) nativeForks.delete(key);
+    });
+  nativeForks.set(key, fork);
+  return fork;
+}
+
+async function forkNativeBtwSession(
+  parent: Session,
+  params: Parameters<typeof createBtwSessionPlaceholder>[0],
+): Promise<BtwSessionCreation> {
   const scope = getActiveSurfaceScope();
   const capabilities = resolveExternalAgentCapabilities(parent);
   if (!externalAgentSupports(capabilities, 'sideChat') || !externalAgentSupports(capabilities, 'history.fork')) {
