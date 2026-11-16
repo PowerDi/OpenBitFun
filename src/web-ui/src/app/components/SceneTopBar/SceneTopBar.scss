@@ -13,6 +13,7 @@
   background: var(--openbitfun-color-surface-scene);
   container-name: scene-top-bar;
   container-type: inline-size;
+  -webkit-user-select: none;
   user-select: none;
 
   // Header and body inherit the same resolved/live-drag width from SplitView.

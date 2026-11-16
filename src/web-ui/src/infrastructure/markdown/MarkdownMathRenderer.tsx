@@ -7,7 +7,8 @@ import { remarkAutolinkBoundaries } from './remarkAutolinkBoundaries';
 import { remarkStreamingTableLinks } from './remarkStreamingTableLinks';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import rehypeRaw from 'rehype-raw';
+import { remarkCachedParse } from './markdownParseCache';
+import { rehypeRawIfNeeded } from './rehypeRawIfNeeded';
 import rehypeSanitize from 'rehype-sanitize';
 import type { Options as RehypeSanitizeOptions } from 'rehype-sanitize';
 import type { Pluggable } from 'unified';
@@ -41,8 +42,8 @@ export const MarkdownMathRenderer: React.FC<MarkdownMathRendererProps> = ({
 }) => {
   const content = (
     <ReactMarkdown
-      remarkPlugins={[[remarkGfm, markdownGfmOptions], remarkMath, [remarkStreamingTableLinks, { isStreaming }], remarkAutolinkBoundaries, remarkAutolinkComputerFileLinks]}
-      rehypePlugins={[rehypeRaw, [rehypeWindowsDrivePaths, { markdownSource: markdownContent }], [rehypeSanitize, sanitizeSchema], [rehypeSourceRange, sourceRange], rehypeKatex, [rehypeImageThumbnails, { enabled: imageThumbnails }]]}
+      remarkPlugins={[[remarkGfm, markdownGfmOptions], ...(!isStreaming ? [remarkCachedParse] : []), remarkMath, [remarkStreamingTableLinks, { isStreaming }], remarkAutolinkBoundaries, remarkAutolinkComputerFileLinks]}
+      rehypePlugins={[rehypeRawIfNeeded, [rehypeWindowsDrivePaths, { markdownSource: markdownContent }], [rehypeSanitize, sanitizeSchema], [rehypeSourceRange, sourceRange], rehypeKatex, [rehypeImageThumbnails, { enabled: imageThumbnails }]]}
       urlTransform={urlTransform}
       components={components}
     >

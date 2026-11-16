@@ -1,3 +1,4 @@
+import { VisualSkinSurfacePaint } from '@/infrastructure/visual-skin/VisualSkinSurfacePaint';
 import { lazyWithRecovery } from '@/shared/utils/lazyWithRecovery';
 import { OverflowText } from '@openbitfun/ui';
 /**
@@ -45,7 +46,6 @@ import { AcpSessionNotifications } from './AcpSessionNotifications';
 import { api } from '@/infrastructure/api/service-api/ApiClient';
 import { AppearanceBackgroundMediaLayer, appearanceRuntime, useAppearance } from '@/infrastructure/appearance';
 import { PeerConnectionStatus } from '@/infrastructure/peer-device/PeerConnectionStatus';
-import './AppLayout.scss';
 
 type TransitionDirection = 'entering' | 'returning' | null;
 
@@ -654,9 +654,12 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
           data-testid="app-layout"
           data-openbitfun-component="app-layout"
           data-openbitfun-part="root"
+          data-openbitfun-surface="shell"
+          data-openbitfun-skin-slot="shell-background"
           data-openbitfun-state="toolbar"
           data-openbitfun-background-media={backgroundMedia?.url ? 'video' : undefined}
         >
+          <VisualSkinSurfacePaint />
           <AppearanceBackgroundMediaLayer
             media={backgroundMedia}
             revision={currentAppearance?.revision}
@@ -681,9 +684,12 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
         data-testid="app-layout"
         data-openbitfun-component="app-layout"
         data-openbitfun-part="root"
+        data-openbitfun-surface="shell"
+        data-openbitfun-skin-slot="shell-background"
         data-openbitfun-state={isFullscreen ? 'fullscreen' : undefined}
         data-openbitfun-background-media={backgroundMedia?.url ? 'video' : undefined}
       >
+        <VisualSkinSurfacePaint />
         <AppearanceBackgroundMediaLayer
           media={backgroundMedia}
           revision={currentAppearance?.revision}

@@ -15,7 +15,7 @@ import { remarkCachedParse } from './markdownParseCache';
 import { remarkAutolinkBoundaries } from './remarkAutolinkBoundaries';
 import { remarkStreamingTableLinks } from './remarkStreamingTableLinks';
 import { rehypeImageThumbnails } from './rehypeImageThumbnails';
-import rehypeRaw from 'rehype-raw';
+import { rehypeRawIfNeeded } from './rehypeRawIfNeeded';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import { visit } from 'unist-util-visit';
 import { i18nService } from '@/infrastructure/i18n';
@@ -175,16 +175,39 @@ function mayNeedWorkspacePathForMarkdownLinks(content: string): boolean {
     /<a\s+[^>]*href=["']\s*(?!https?:|mailto:|visualization:|tab:|#)[^"']+["']/i.test(content);
 }
 
+function stripMarkdownCodeForMathCheck(content: string): string {
+  let stripped = content;
+  if (stripped.includes('```') || stripped.includes('~~~')) {
+    stripped = stripped.replace(
+      /(^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^[ \t]{0,3}\2[ \t]*$|$))/gm,
+      '\n',
+    );
+  }
+  if (stripped.includes('`')) {
+    stripped = stripped.replace(/(`+)[^\n]*?\1/g, ' ');
+  }
+  return stripped;
+}
+
 function mayContainMarkdownMath(content: string): boolean {
   if (!content) {
     return false;
   }
 
-  if (content.includes('$$') || content.includes('\\(') || content.includes('\\[')) {
+  if (
+    !content.includes('$') &&
+    !content.includes('\\(') &&
+    !content.includes('\\[')
+  ) {
+    return false;
+  }
+
+  const prose = stripMarkdownCodeForMathCheck(content);
+  if (prose.includes('$$') || prose.includes('\\(') || prose.includes('\\[')) {
     return true;
   }
 
-  return /(^|[^\\$])\$[^$\n]{1,240}\$(?!\d)/.test(content);
+  return /(^|[^\\$])\$[^$\n]{1,240}\$(?!\d)/.test(prose);
 }
 
 /** Catches render errors from react-markdown/remark-gfm (e.g. RegExp in transformGfmAutolinkLiterals) and shows plain text fallback. */
@@ -1620,7 +1643,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
     table({ children }: any) {
       return (
         <div className="table-wrapper" data-openbitfun-component="markdown" data-openbitfun-part="table">
-          <table>{children}</table>
+          <table data-openbitfun-component="markdown" data-openbitfun-part="tableSurface">{children}</table>
         </div>
       );
     },
@@ -1685,6 +1708,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
     th({ node: _node, children, className, align, style, ...props }: any) {
       return (
         <th {...props} className={['markdown-header-cell', className].filter(Boolean).join(' ')}
+          data-openbitfun-component="markdown" data-openbitfun-part="tableHeadingCell"
           style={align ? { ...style, textAlign: align } : style}>
           <div className="markdown-table-cell-content">
             <div className="markdown-table-cell-body">{children}</div>
@@ -1764,7 +1788,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
     const basicFragment = (
       <ReactMarkdown
         remarkPlugins={[[remarkGfm, markdownGfmOptions], remarkAutolinkBoundaries, remarkAutolinkInternalLinks]}
-        rehypePlugins={[rehypeRaw, [rehypeWindowsDrivePaths, { markdownSource: fragment }], [rehypeSanitize, sanitizeSchema]]}
+        rehypePlugins={[rehypeRawIfNeeded, [rehypeWindowsDrivePaths, { markdownSource: fragment }], [rehypeSanitize, sanitizeSchema]]}
         urlTransform={markdownUrlTransform}
         components={fragmentComponents}
       >{fragment}</ReactMarkdown>
@@ -1786,7 +1810,7 @@ const MarkdownSurface = React.memo<MarkdownRendererProps & { thinking?: boolean;
   const basicMarkdownRenderer = (
     <ReactMarkdown
       remarkPlugins={[[remarkGfm, markdownGfmOptions], ...(!isStreaming ? [remarkCachedParse] : []), [remarkStreamingTableLinks, { isStreaming }], remarkAutolinkBoundaries, remarkAutolinkInternalLinks]}
-      rehypePlugins={[rehypeRaw, [rehypeWindowsDrivePaths, { markdownSource: markdownContent }], [rehypeSanitize, sanitizeSchema], [rehypeSourceRange, sourceRange], [rehypeImageThumbnails, { enabled: imageThumbnails }]]}
+      rehypePlugins={[rehypeRawIfNeeded, [rehypeWindowsDrivePaths, { markdownSource: markdownContent }], [rehypeSanitize, sanitizeSchema], [rehypeSourceRange, sourceRange], [rehypeImageThumbnails, { enabled: imageThumbnails }]]}
       urlTransform={markdownUrlTransform}
       components={components}
     >

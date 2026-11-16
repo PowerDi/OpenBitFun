@@ -13,6 +13,8 @@
     display: inline-flex;
     align-items: center;
     gap: var(--openbitfun-control-tab-group-gap);
+    -webkit-user-select: none;
+    user-select: none;
   }
 
   .tabGroup[data-size="sm"] {
@@ -62,6 +64,8 @@
     line-height: var(--openbitfun-type-label-md-line-height);
     white-space: nowrap;
     cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
     transition: color var(--openbitfun-motion-duration-fast) var(--openbitfun-motion-easing-standard);
   }
 

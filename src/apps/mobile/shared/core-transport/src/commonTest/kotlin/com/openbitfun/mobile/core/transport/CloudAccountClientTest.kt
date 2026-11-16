@@ -30,6 +30,8 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlin.test.assertNotNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -132,8 +134,8 @@ class CloudAccountClientTest {
     fun deviceDirectoryCarriesTheRelayCompatibilityVerdict() = runTest {
         val engine = MockEngine { _ ->
             json("""[
-                {"device_id":"d-1","device_name":"Desktop 1","device_kind":"desktop","online":true,"compatible":true},
-                {"device_id":"d-2","device_name":"Desktop 2","device_kind":"desktop","online":true,"compatible":false},
+                {"device_id":"d-1","device_name":"Desktop 1","device_alias":"Office","device_kind":"desktop","online":true,"compatible":true},
+                {"device_id":"d-2","device_name":"Desktop 2","device_alias":null,"device_kind":"desktop","online":true,"compatible":false},
                 {"device_id":"d-3","device_name":"Desktop 3","device_kind":"desktop","online":true}
             ]""")
         }
@@ -145,6 +147,8 @@ class CloudAccountClientTest {
         // An older Relay that does not gate reads as "unknown but usable".
         assertEquals(null, devices.getValue("d-3").compatible)
         assertEquals(listOf(true, false, true), listOf("d-1", "d-2", "d-3").map { devices.getValue(it).controllable })
+        assertEquals(listOf("Office", null, null), listOf("d-1", "d-2", "d-3").map { devices.getValue(it).deviceAlias })
+        assertEquals("Desktop 1", devices.getValue("d-1").deviceName)
     }
 
     @Test
@@ -175,12 +179,12 @@ class CloudAccountClientTest {
         val engine = MockEngine {
             json(
                 """[
-                  {"device_id":"desktop-1","device_name":"Studio Mac","online":true,"device_kind":"desktop"},
+                  {"device_id":"desktop-1","device_name":"Studio Mac","device_alias":"HarmonyOS Phone","online":true,"device_kind":"desktop"},
                   {"device_id":"cli-1","device_name":"Build host","online":true,"device_kind":"cli"},
                   {"device_id":"phone-2","device_name":"Pixel 8","online":true,"device_kind":"mobile"},
                   {"device_id":"watch-1","device_name":"Watch","online":false,"device_kind":"watch"},
                   {"device_id":"phone-1","device_name":"Pixel 8","online":true},
-                  {"device_id":"harmony-phone","device_name":"HarmonyOS Phone","online":true},
+                  {"device_id":"harmony-phone","device_name":"HarmonyOS Phone","device_alias":"Studio Mac","online":true},
                   {"device_id":"harmony-watch","device_name":"HarmonyOS Watch","online":false},
                   {"device_id":"phone-3","device_name":"Legacy Phone","online":true},
                   {"device_id":"watch-2","device_name":"Legacy Watch","online":false},
@@ -203,6 +207,8 @@ class CloudAccountClientTest {
         assertEquals("desktop", devices[0].deviceKind)
         assertEquals("cli", devices[1].deviceKind)
         assertEquals(null, devices[2].deviceKind)
+        assertEquals("Studio Mac", devices[0].deviceName)
+        assertEquals("HarmonyOS Phone", devices[0].deviceAlias)
     }
 
     @Test
@@ -364,6 +370,7 @@ class CloudAccountClientTest {
      */
     @Test
     fun hostStreamRecoversRepeatsOnlyTheReadAndUnsubscribesOnClose() = runTest {
+      for (supportsScoped in listOf(true, false)) {
         val commands = mutableListOf<RemoteCommand>()
         val master = ByteArray(32)
         val peerSecret = ByteArray(32) { 11 }
@@ -383,7 +390,11 @@ class CloudAccountClientTest {
                 "unsubscribe_stream" -> """{"resp":"stream_unsubscribed","stream_id":"session"}"""
                 else -> error("unexpected ${command.cmd}")
             }
-            val encrypted = CloudAccountCipher.encrypt(response.encodeToByteArray(), key, nonce)
+            val answer = if (supportsScoped && command.cmd == "read_stream") {
+                JsonObject(RelayJson.parseToJsonElement(response).jsonObject +
+                    ("subscription_id" to JsonPrimitive(command.subscriptionId))).toString()
+            } else response
+            val encrypted = CloudAccountCipher.encrypt(answer.encodeToByteArray(), key, nonce)
             RelayJson.encodeToJsonElement(EncryptedPayload.serializer(),
                 EncryptedPayload(Base64.Default.encode(encrypted), Base64.Default.encode(nonce)))
         }
@@ -395,11 +406,58 @@ class CloudAccountClientTest {
             "desktop-1", "session", {}, {})
             .onEach { received += it.getValue("event").jsonPrimitive.content }
             .first { it.getValue("event").jsonPrimitive.content == STREAM_EVENT_READY }
-        assertEquals(listOf("read_stream", "read_stream", "unsubscribe_stream"), commands.map { it.cmd })
-        assertEquals(RemoteCommand(cmd = "read_stream", streamId = "session", subscribe = true), commands[1])
+        assertEquals(if (supportsScoped) listOf("read_stream", "read_stream", "unsubscribe_stream")
+            else listOf("read_stream", "read_stream"), commands.map { it.cmd })
+        assertNotNull(commands.first().subscriptionId)
+        assertTrue(commands.all { it.subscriptionId == commands.first().subscriptionId })
+        assertEquals(RemoteCommand(cmd = "read_stream", streamId = "session", subscribe = true), commands[1].copy(subscriptionId = null))
         assertEquals(listOf("session-record", STREAM_EVENT_READY), received)
         assertEquals("session", commands.last().streamId)
         assertEquals(1, keyReads, "the peer key is fetched once and reused for every read")
+      }
+    }
+
+    @Test
+    fun collectingTheSameStreamTwiceOwnsIndependentSubscriptions() = runTest {
+        val master = ByteArray(32)
+        val peerSecret = ByteArray(32) { 11 }
+        val key = DeviceIdentity.messageKey(peerSecret, DeviceIdentity.publicKey(master))
+        val commands = mutableListOf<RemoteCommand>()
+        val client = rpcClient(DeviceIdentity.publicKey(peerSecret)) { _, params ->
+            val envelope = RelayJson.decodeFromJsonElement(EncryptedPayload.serializer(), params)
+            val plain = CloudAccountCipher.decrypt(Base64.Default.decode(envelope.encryptedData), key,
+                Base64.Default.decode(envelope.nonce)).decodeToString()
+            val command = RelayJson.decodeFromString(RemoteCommand.serializer(), plain)
+            commands += command
+            val response = if (command.cmd == "read_stream")
+                """{"resp":"stream_page","stream_id":"session","subscription_id":"${command.subscriptionId}","epoch":1,"events":[],"has_more":false,"cursor":0,"oldest_seq":1,"truncated":false}"""
+            else """{"resp":"stream_unsubscribed","stream_id":"session"}"""
+            val nonce = ByteArray(12) { commands.size.toByte() }
+            val encrypted = CloudAccountCipher.encrypt(response.encodeToByteArray(), key, nonce)
+            RelayJson.encodeToJsonElement(EncryptedPayload.serializer(),
+                EncryptedPayload(Base64.Default.encode(encrypted), Base64.Default.encode(nonce)))
+        }
+        val stream = client.subscribeSession("http://192.168.1.2:9700",
+            CloudAccountSession("token-1", "user-1", master), "desktop-1", "session", {}, {})
+        val ready = Channel<Unit>(Channel.UNLIMITED)
+        val first = launch { stream.collect { if (it["event"]?.jsonPrimitive?.content == STREAM_EVENT_READY) ready.send(Unit) } }
+        ready.receive()
+        val second = launch { stream.collect { if (it["event"]?.jsonPrimitive?.content == STREAM_EVENT_READY) ready.send(Unit) } }
+        try {
+            ready.receive()
+            val ids = commands.filter { it.cmd == "read_stream" }.map { it.subscriptionId }
+            assertEquals(2, ids.size)
+            assertNotNull(ids[0])
+            assertNotNull(ids[1])
+            assertTrue(ids[0] != ids[1], "each collector owns its lease and history lane")
+            first.cancelAndJoin()
+            assertEquals(ids[0], commands.last().subscriptionId)
+            assertEquals("unsubscribe_stream", commands.last().cmd)
+            assertTrue(second.isActive)
+        } finally {
+            first.cancelAndJoin()
+            second.cancelAndJoin()
+        }
     }
 
     @Test

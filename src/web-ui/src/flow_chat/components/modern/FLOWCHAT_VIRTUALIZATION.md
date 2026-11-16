@@ -44,6 +44,23 @@ shift the historical tail. Only a measured newer row wholly below a reader can
 shift their chosen position; that uses the viewport register and publishes its
 actual readback before another window is selected.
 
+During registered reader gestures, a covered overscan window is reused until its visible range comes
+within two leaves of an unbounded edge. Fresh windows keep the existing pixel
+budget and eight speculative leaves per edge; a reused window retains at most
+sixteen leaves outside either visible edge. This avoids repeatedly mounting and
+synchronously measuring a few replacement rows for every small wheel movement.
+Large steps still select and measure their visible rows immediately. Active
+programmatic aims and opening use fresh windows. Reader ownership, rather than
+the core's transient `isScrolling` flag, survives compensated offset readbacks.
+Changes to boundary keys, viewport height
+or pinned internal indexes invalidate reuse; pins remain outside the ordinary
+overscan budget. A structural transaction's retained rows cannot seed reuse:
+they may intentionally omit inserted indexes for one commit. Top- and
+bottom-origin layouts use the same internal indexes.
+The core adapter skips synchronous scroll notifications to React only when the
+rendered index array and observed viewport dimensions are unchanged. Measurement
+notifications still render, and offset reconciliation always runs first.
+
 History rows stay in normal chronological DOM flow inside the bottom-origin
 extent. No CSS transform reverses text or selection. The scroller's native
 layout holds visible tail content while earlier rows arrive or reflow, before
@@ -62,6 +79,62 @@ search/Turn navigation and existing bookmark coordinates. Native tail cases
 assert zero scroll writes as well as node and screen-position continuity.
 These supplied-geometry tests do not establish native paint or live remote
 behavior.
+
+## First-entry viewport reservations
+
+The hosting chat pane retains only its last usable viewport rectangle across a
+cold session's temporary loading surface. A new list uses that rectangle to seed
+its initial size and virtual window; same-session measured rows remain separately
+owned by the existing three-view memory. Another pane owns another rectangle.
+Native dimension observation, width reflow, suspension and the opening settlement
+gate still replace stale estimates before presentation. No follow, scroll offset,
+anchor, navigation or session content crosses sessions through this reservation.
+
+For a native-history tail open without a reader bookmark, speculative overscan
+starts at two leaves per edge while all estimated visible rows and interaction
+pins remain resident. After the loading boundary publishes content and the
+two-paint handoff, each idle frame may add one leaf up to the ordinary eight.
+Insufficient idle budget defers preparation; hidden/inactive/resizing views cancel
+it. Live output and restored reader positions keep the ordinary margins. A gesture
+or navigation aim immediately takes the ordinary window, invalidating a smaller
+preparation cache rather than waiting for idle work.
+
+Opening readiness and history reads are unchanged; only offscreen preparation
+runs later. The first-open benchmark therefore also observes the following two
+seconds, including long tasks and the static reading anchor, separately from the
+original readiness timing. A faster first frame alone cannot establish success if
+preparation introduces later stalls or displaces visible content.
+
+## Prepared Turn navigation
+
+The origin inset observes the actual current header/footer element, not only its
+ref object. A history range can replace the tail Turn and its footer without
+changing that ref. Rebind only when the node changes, disconnect the retired
+observer and ignore its queued deliveries. Publish the new inset in the layout
+phase; otherwise the physical footer can occupy space while the virtual
+`scrollMargin` remains zero, leaving a navigated user message above the viewport.
+Repeated streaming renders keep the same observer for an unchanged node.
+
+An instant Turn navigation can load a new history projection while the scroller
+still has its previous offset. Selecting the first new window from that offset
+mounts unrelated rows, then discards them when the navigation effect places the
+requested Turn. `VirtualMessageList` supplies the prepared user-message or
+background-run key so the adapter can select that header and a viewport of its
+content in the first commit. The adapter handles both internal index directions,
+uses current virtual measurements, and preserves interaction pins.
+
+This is window selection, not a viewport write. The existing registered navigation
+still owns placement, top gap, blank-space clamping and re-aiming. Publish its
+actual offset readback before releasing the prepared target, so a delayed native
+scroll event cannot select the old window again. Smooth navigation, suspended
+viewports and reader gestures retain their existing selection path. Missing keys
+do not manufacture targets. History request spans, complete-Turn publication and
+stored coordinates are unchanged.
+
+The initial-window fixture verifies first-commit target residency in both origins,
+interaction pins and reader priority; disabling the prepared-window branch makes
+both direction cases fail. Native streaming-jump measurements separately cover
+actual rail clicks, target-message landings and stability after continued output.
 
 ## Projection cache lifetime
 
@@ -94,6 +167,83 @@ an unchanged prefix or disjoint object graph.
 Search caches only match metadata for an active query in its owning view. Clearing
 search drops that cache, and unmounting drops the matcher. Lowercase transcript
 text exists only during a cache miss and is not retained beside the source body.
+
+Turn navigation summaries use a reader-owned `createFlowChatTurnSummaryProjector`.
+It retains only scalar Turn/catalog identities, ordinals and storage indexes.
+Body-only streaming updates compare those identities and reuse the summary arrays;
+structural changes rebuild one ordinal lookup shared by live and rendered
+summaries. Catalog corrections, partial-tail offsets, provisional usage reports
+and explicit history-window offsets keep their existing precedence. No Session,
+Turn body, viewport position or editor state is retained by this cache.
+
+### Session switch retention
+
+`VirtualMessageList` keys its session subtree by session id, so a switch
+remounts the virtualizer, its key cache, every row and the timeline projection.
+Before retention, reopening a session cost exactly what its first open did: rows
+reserved estimates again, the opening reveal corrected each mounted row, and
+rows selected from those estimates mounted only to be dropped. In the
+supplied-geometry fixture (24 Turns, real heights far from estimates) a
+native-history open spent 7 size corrections, 6 commits, 7 row mounts and 3
+dropped rows; a live open 6 / 6 / 6 / 2.
+
+The remount itself stays. Follow, anchor, opening reveal and viewport
+ownership start fresh on every mount, and scroll restoration still comes only
+from the saved viewport snapshot. What survives is derived and rebuildable:
+
+- `retainedTimelineProjections` (`useConversationTimeline.ts`) keeps the
+  `ConversationDocumentProjection`, so a reopened view resumes its rows and its
+  view-local key aliases instead of rebuilding them.
+- `retainedTranscriptRowSizes` (`timeline/retainedViewMemory.ts`) keeps the
+  measured row sizes by stable item key, newest first and at most 4096 per
+  view. `useFlowChatVirtualizer` seeds them as the rows' reservations on mount
+  (`retainedItemSizes`) and hands them back through `snapshotItemSizes()`. The
+  live tail seed sums reservations, so it also starts from retained sizes.
+
+Both are keyed by the view's reader store, which is already scoped by surface
+epoch, viewport and session, so device sources never share an entry. A mounted
+view claims its entry and returns it on unmount; only the three most recently
+left views are held. A retained size is a reservation like any other: a
+mounted row is still measured and still replaces it, and a width or font change
+leaves it in place under the same rule as a live reservation. It is also a
+measurement: the next resize of a retained row is judged as a resize of content
+the reader may be looking at, never as a first measurement, so a partly visible
+retained row that grows does not shift the viewport. That holds only at the
+content width the sizes were measured at, which the snapshot records: reopened at
+another width, retained sizes still reserve space but their rows owe the
+first-measurement repair again. A retained key that leaves the projection and
+returns starts from an estimate rather than handing one back as a measurement.
+The snapshot reads no geometry, so the unmount-phase DOM cannot skew it. A retained
+projection holds its rows strongly, so up to three inactive views keep their
+derived rows until they are reopened or evicted.
+
+The row-size entry also keeps the last usable viewport width and height. On a
+warm mount these seed the virtualizer's initial rectangle and the list's local
+dimension reservations, avoiding a zero-height window and zero-width estimates
+before native observation. They carry no scroll offset or viewport ownership.
+The native resize observer remains authoritative, including when the hidden
+view's dimensions changed or the window is suspended. Only positive boxes are
+retained, using already observed state; unmount performs no geometry reads.
+The session-switch fixture compares a reopened view with a fresh view after
+both shrinking and growing the hidden viewport, in historical and live layout.
+
+With the original size-only retention the same fixture reopened a native-history session with 0
+corrections, 5 commits, 3 mounts and 0 dropped rows, at the same placement. A
+live reopen makes 0 corrections and 5 mounts at an unchanged 6 commits; it
+still drops 2 rows, because the
+one-time tail seed starts at the last item's start before follow takes the end.
+A row that changed while the session was hidden costs one correction.
+`VirtualMessageList.session-switch.test.tsx`,
+`useFlowChatVirtualizer.retained-sizes.test.tsx` and
+`useConversationTimeline.retention.test.tsx` cover this with supplied geometry
+on the local surface. Native switching time, paint and remote surfaces are not
+measured by them.
+
+The Turn rail no longer rebuilds per flush. `ModernFlowChatContainer` keeps the
+previous `dialogTurns` input while every Turn's id, user-message content and
+composer presentation are unchanged, parses capsule previews once per stored
+presentation object, and passes `FlowChatTurnRail` (now `React.memo`) a stable
+navigation callback and empty visible-Turn list.
 
 ### Settled record identity
 
@@ -185,6 +335,15 @@ changes. Native evidence and remaining coverage limits are in
 `FLOWCHAT_VERIFICATION.md`.
 
 ### Mounted-row lifetime and opening readiness
+
+The list's viewport ResizeObserver lives for the scroller's lifetime and reads
+its committed callbacks through a ref. Streaming replaced several of those
+callbacks on every flush, and rebinding the observer delivered a fresh initial
+observation that re-measured every mounted row once per streamed chunk. The
+Turn-boundary list (`userMessageItems`) also keeps its previous array while its
+user-message items and indexes are unchanged. Streaming Markdown section
+boundaries use a small separate cache, so intermediate prefixes do not evict
+settled replies' sections before their session reopens.
 
 Row refs attach without a state update. Search focus and excerpt highlights
 resolve the ref in the row's layout phase, so first-mount behavior stays intact
@@ -411,6 +570,31 @@ not trigger this readback. All viewport writes remain with the existing owner.
 scroll-end delivery using the real virtualizer and supplied geometry; it does
 not establish browser performance.
 
+## Running tool group presentation
+
+A running group's automatic disclosure lists only its in-flight tool calls below a
+collapsed header that keeps the group summary. Settled thinking folds with the
+finished calls; the assistant's text and any thinking still streaming stay visible,
+and a thought that just finished stays while nothing follows it so its reveal is
+not cut off. A serial run therefore shows one call, and a
+parallel batch shows the calls still running. Between two serial calls the most
+recent call stays, so the group does not empty and refill for each step. A member
+awaiting approval stays visible even in a group the reader folded. The reader's
+explicit expansion, an expanded member capsule and a failed file revision still
+list every member; a settled group folds to its header as before.
+
+A member row holding focus, a selection or a live instance stays in a live group,
+so a settling call never takes the reader's caret or highlighted text with it.
+A hold (a revealing text member, or member rows on screen while the reader is not
+following) never widens a live group: a group that settles under a hold keeps its
+live presentation until the hold releases, and a held folded group still opens.
+Treating every hold as expansion flipped a running group between its live call and
+every finished call on each streamed reveal, which moved the transcript across the
+viewport edge and toggled the scrollbar thumb. This is a timeline projection choice (`readerMemberPresentation` in
+`timeline/document.ts`, `liveFlowGroupMembers` in `grouping/lifecycle.ts`). It
+does not change group membership, lifecycle, persisted records or the embedded
+inline renderer.
+
 ## Collapsed thinking content lifetime
 
 Thinking cards mount their Markdown body only while expanded or finishing a
@@ -528,7 +712,13 @@ the items have not moved yet.
 and asks the viewport owner to apply a real measured delta only when the whole
 item precedes the viewport in its internal coordinate direction: above the
 reader for live layout, below the reader for bottom-origin history. A partly visible row is left alone because its changed content is
-inside what the reader is looking at. TanStack's adjustment is always refused:
+inside what the reader is looking at. A live row's *first* measurement is the
+exception: it replaces a reservation, not content anyone saw, so a row that
+starts above the viewport owes its whole delta even when its estimated end
+reached into it. Judging that row by its estimated end let rows that mounted
+while the reader wheeled up push or pull the visible transcript by the estimate
+error (measured in a supplied-geometry fixture: 104px, 166px and 441px single-frame
+jumps; zero with the rule). Measured rows that resize keep the visible-row rule. TanStack's adjustment is always refused:
 it applies its delta to `scrollOffset`, the library's copy refreshed only from
 scroll events. Every continuous writer here assigns `scrollTop` directly and
 the matching scroll event lands a frame later, so that base can be stale. The

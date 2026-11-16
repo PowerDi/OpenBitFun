@@ -690,7 +690,12 @@ impl SessionManager {
         });
 
         // Generate name
-        let name = name.unwrap_or_else(|| format!("Terminal {}", &session_id[..8]));
+        let name = name.unwrap_or_else(|| {
+            format!(
+                "Terminal {}",
+                session_id.chars().take(8).collect::<String>()
+            )
+        });
 
         // Generate nonce for shell integration
         let nonce = uuid::Uuid::new_v4().to_string();

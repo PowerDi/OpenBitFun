@@ -62,10 +62,22 @@ function getSelectedValue(
     : getFirstEnabledValue(items);
 }
 
+function clearContainedSelection(container: HTMLElement) {
+  const selection = container.ownerDocument.defaultView?.getSelection?.();
+  if (!selection || selection.isCollapsed) return;
+  if (
+    (selection.anchorNode && container.contains(selection.anchorNode))
+    || (selection.focusNode && container.contains(selection.focusNode))
+  ) {
+    selection.removeAllRanges();
+  }
+}
+
 export const TabGroup = forwardRef<HTMLDivElement, TabGroupProps>(function TabGroup({
   className,
   defaultValue,
   items,
+  onContextMenuCapture,
   onValueChange,
   renderItem,
   size = "md",
@@ -132,6 +144,10 @@ export const TabGroup = forwardRef<HTMLDivElement, TabGroupProps>(function TabGr
       data-openbitfun-component="tab-group"
       data-openbitfun-part="root"
       data-size={size}
+      onContextMenuCapture={(event) => {
+        clearContainedSelection(event.currentTarget);
+        onContextMenuCapture?.(event);
+      }}
       ref={ref}
       role="tablist"
     >
@@ -155,6 +171,8 @@ export const TabGroup = forwardRef<HTMLDivElement, TabGroupProps>(function TabGr
               aria-selected={selected}
               className={classNames(styles.tab, item.tabProps?.className)}
               data-openbitfun-part="tab"
+              data-openbitfun-paint-layer="before"
+              data-openbitfun-edge-layer="before"
               data-openbitfun-value={item.value}
               disabled={item.disabled}
               id={item.id ?? `${generatedId}-tab-${index}`}

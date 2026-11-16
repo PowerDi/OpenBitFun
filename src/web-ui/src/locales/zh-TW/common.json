@@ -83,7 +83,11 @@
       "noSessions": "尚無會話",
       "sessionUnavailable": "該裝置上已找不到這個會話。",
       "sessionActionFailed": "無法在另一台裝置上完成此操作，請重試。",
-      "connecting": "正在連線 {{name}}…"
+      "connecting": "正在連線 {{name}}…",
+      "linkReconnecting": "重新連線中",
+      "linkReconnectingLabel": "正在重新連線 {{name}}，其會話可能尚未更新。",
+      "linkStarting": "啟動中",
+      "linkStartingLabel": "{{name}} 上的 OpenBitFun 仍在啟動。"
     },
     "aria": {
       "navControl": "導航控制",
@@ -518,7 +522,11 @@
       "discoveryWarningTitle": "外部工作階段探索",
       "discoveryReadFailed": "部分 {{source}} 工作階段記錄無法讀取，既有工作階段仍可使用。",
       "discoveryWorkspaceUnresolved": "部分 {{source}} 工作階段無法對應到工作區，既有工作階段仍可使用。",
-      "discoveringExternal": "正在探索外部工作階段…"
+      "discoveringExternal": "正在探索外部工作階段…",
+      "deleteFailed": "刪除會話失敗",
+      "archiveFailed": "歸檔會話失敗",
+      "renameFailed": "重新命名會話失敗",
+      "workspaceBindingMismatch": "此會話屬於其他工作區，無法在此處修改。請重新開啟 OpenBitFun，會話會在其所屬工作區下重新載入。"
     },
     "scheduledJobs": {
       "title": "定時任務",
@@ -678,8 +686,7 @@
           "connected": "已連線",
           "connecting": "連線中",
           "disconnected": "已中斷",
-          "error": "連線異常",
-          "unknown": "狀態未知"
+          "error": "連線異常"
         }
       },
       "actions": {
@@ -930,6 +937,8 @@
   },
   "peerConnection": {
     "reconnectingShort": "正在重新連線…",
+    "startingShort": "主機啟動中…",
+    "starting": "「{{name}}」上的 OpenBitFun 仍在啟動，就緒後即可使用。",
     "returnLocalShort": "返回本機",
     "returningShort": "正在返回…",
     "reconnecting": "正在重新連線至「{{name}}」。內容可能尚未更新。"
@@ -1778,6 +1787,7 @@
     "scrollPrevious": "向左捲動標籤頁",
     "scrollNext": "向右捲動標籤頁",
     "closeTab": "關閉{{label}}",
+    "closeDeviceTabs": "關閉該裝置全部標籤頁",
     "workspaceUnavailable": "此工作階段所屬的工作區尚未開啟，請先重新開啟該工作區，再切換至此工作階段。"
   },
   "loading": {
@@ -2375,6 +2385,8 @@
   },
   "peerHost": {
     "connectionInterrupted": "與裝置的連線中斷了，請重試。",
+    "notResponding": "該裝置沒有回應。請確認該裝置上的 OpenBitFun 正在執行，然後重試。",
+    "starting": "該裝置上的 OpenBitFun 仍在啟動，請稍後再試。",
     "unavailable": "此功能在該裝置上無法使用。",
     "updateRequired": "該裝置上的 OpenBitFun 版本不支援此功能。請嘗試在該裝置上更新 OpenBitFun。",
     "withDetail": "{{message}}（{{detail}}）"

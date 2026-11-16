@@ -87,6 +87,21 @@ gamut. Palette colors, the current-color ring and the lightness ramp represent
 editable color content; they deliberately do not follow theme or status colors.
 Chrome, borders, focus and shadows use existing semantic/system tokens. No theme
 color literal or new token is needed. The component has no storage or host API.
+## Decorative paint ownership
+
+Components that paint their background in an existing `::before` layer advertise
+`data-openbitfun-paint-layer="before"` on that part (Button, IconButton and
+TabGroup tabs). Glass variants use `self`. Product paint adapters can target the
+existing background without inserting children, replacing pseudo-elements or
+changing geometry. TabGroup also advertises `data-openbitfun-edge-layer="before"`:
+its border and shadow follow the expanding surface, including the close action.
+Button and IconButton borders remain on their native element. Unmarked parts paint their own box. Switch exposes `input`,
+`track` and `thumb` parts; its native input still owns checked/disabled behavior.
+
+`data-openbitfun-paint-layer="none"` delegates a part's decorations to its
+container. SearchField uses it for embedded/panel inner Inputs and for its
+unpainted default wrapper. Skin adapters must omit those part decorations,
+including focus shadows, while retaining native input behavior and token colors.
 
 ## Pane layouts
 
@@ -244,7 +259,12 @@ or contains visible keyboard focus. Leaving the viewport hides it; scrolling
 from streaming output does not reveal an unattended panel. Touch surfaces retain
 visible native thumbs, and forced colors retains system accessibility colors.
 Tracks stay transparent. Only color changes, so hover never changes viewport
-width, overflow, or scrollbar gutters.
+width, overflow, or scrollbar gutters. `DesignSystemProvider`, `ThemeRoot`, and
+standalone `ScrollArea` share one document focus subscription. It reads native
+`:focus-visible` after input/focus changes; streaming and scrolling do not write
+focus state. This avoids applying `:has()` to every descendant of the theme root.
+CSS-only consumers without these React owners keep `:focus-within` viewports
+visible as a conservative keyboard-accessibility fallback.
 
 `ScrollArea` keeps `scrollbarVisibility="auto"` as the default. `always` keeps
 the thumb visible and reserves a scrolling track; `hidden` deliberately hides
@@ -575,7 +595,7 @@ backing or fading parent cannot prevent it from sampling the content behind it.
 ### Capsule actions
 
 Wrap a pill-shaped `Button`, inline `Input`, or tag label in `Capsule`, matching
-its `size` to the child. Pass one `IconButton` (optionally inside `Tooltip`) to
+its `size` to the child. Pass an `IconButton` or an array of keyed `IconButton`s (optionally inside `Tooltip`) to
 `action`. The slot selects circular glass presentation and compact geometry;
 the consumer keeps the action's accessible label, tone, disabled/loading state,
 and callbacks. The action is a sibling of the primary control, never a nested
@@ -594,13 +614,14 @@ available. Its right inset equals the top and bottom clearance at every density.
 The default `actionPlacement="overlay"` floats over the intact label: do not clip,
 mask, hide, resize, or add action padding to its text when revealing the icon.
 Use `actionPlacement="reserved"` with a `Button` child for short selectable labels.
-The Button always reserves trailing padding for the action inside its pill surface,
-keeping the gaps between capsules compact. Its content is centered at rest, then
+The Button always reserves trailing padding for one action inside its pill surface,
+keeping the gaps between capsules compact. Additional actions overlay the content
+without adding padding. Its content is centered at rest, then
 shifts toward the leading edge as the icon fades in on pointer hover. Only the
 content transform and icon opacity change: hovering a row-end capsule cannot
 change its width or trigger wrapping. Keyboard focus reveals the action and moves
-the content immediately; touch keeps the action visible and the content clear of
-it. Reduced motion disables both transitions. Capsules without an action do not
+the content immediately; touch keeps the actions visible.
+Reduced motion disables both transitions. Capsules without an action do not
 reserve empty space.
 Normal constrained-width `OverflowText` behavior remains available.
 `TabGroupItem.endAction` uses a reserved slot as described above; removable

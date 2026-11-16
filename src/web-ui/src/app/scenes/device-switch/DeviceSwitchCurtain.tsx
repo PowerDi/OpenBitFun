@@ -8,8 +8,8 @@
  * the action settled and the target scene had a frame to paint.
  *
  * Opening an existing session needs no curtain: its tab is held in front and
- * the session view shows its own loading skeleton, in its own layout, so the
- * loading presentation never changes size or position mid-open.
+ * the session view shows its own centered loading spinner, in its own layout,
+ * so the loading presentation never changes size or position mid-open.
  */
 
 import React, { useEffect, useRef, useState } from 'react';

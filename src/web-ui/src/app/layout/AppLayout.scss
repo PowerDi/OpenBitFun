@@ -6,12 +6,10 @@
  */
 @use '@/shared/styles/surface-recipes' as surfaces;
 
-// ==================== CSS reset ====================
-// Note: keep box-sizing !important for global consistency.
-*, *::before, *::after {
-  box-sizing: border-box !important;
-}
-
+// ==================== Shell root ====================
+// `box-sizing: border-box` is owned by `@layer openbitfun.reset` in index.html
+// and `@openbitfun/ui/styles.css`; avoid unlayered universal `*::before/*::after`
+// `!important` rules that force WebKit pseudo-element style resolution on every node.
 html, body {
   margin: 0;
   padding: 0;

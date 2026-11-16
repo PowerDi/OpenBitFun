@@ -152,12 +152,16 @@ function isStableTurnProjection(turn: DialogTurn): boolean {
 }
 
 interface SessionProjectionCache {
+  sessionId: Session['sessionId'];
   turnCatalogRef: Session['turnCatalog'] | undefined;
   isPartial: boolean | undefined;
   totalTurnCount: number | undefined;
   needsUserAttention: Session['needsUserAttention'];
   virtualItems: VirtualItem[];
 }
+
+// A retained projection stays reachable only while its source turn array does.
+const retainedSessionProjections = new WeakMap<DialogTurn[], SessionProjectionCache>();
 
 // Settled source Turns can be shared by live, history and side views without
 // making any one view the owner of another view's streaming state or body.
@@ -423,11 +427,15 @@ function projectTurnItemsWithPrefixCache(
   return reconciled;
 }
 
-/** Each mounted projection owns its mutable streaming prefix and warm snapshots. */
-export function createSessionVirtualItemProjector(): (session: Session | null) => VirtualItem[] {
+/** Each mounted projection owns its mutable streaming prefix. */
+export function createSessionVirtualItemProjector(
+  { reuseSnapshotsAcrossMounts = false }: { reuseSnapshotsAcrossMounts?: boolean } = {},
+): (session: Session | null) => VirtualItem[] {
   let sessionId: string | null = null;
   let previousProjection: SessionProjectionCache | undefined;
-  let warmProjections = new WeakMap<DialogTurn[], SessionProjectionCache>();
+  let warmProjections = reuseSnapshotsAcrossMounts
+    ? retainedSessionProjections
+    : new WeakMap<DialogTurn[], SessionProjectionCache>();
   const cachedTurnPrefixById = new Map<string, CachedTurnPrefixProjection>();
   const emptyItems: VirtualItem[] = [];
 
@@ -435,7 +443,7 @@ export function createSessionVirtualItemProjector(): (session: Session | null) =
     if (!session) {
       sessionId = null;
       previousProjection = undefined;
-      warmProjections = new WeakMap();
+      if (!reuseSnapshotsAcrossMounts) warmProjections = new WeakMap();
       cachedTurnPrefixById.clear();
       return emptyItems;
     }
@@ -443,6 +451,7 @@ export function createSessionVirtualItemProjector(): (session: Session | null) =
     sessionId = session.sessionId;
     const restored = warmProjections.get(session.dialogTurns);
     if (restored
+      && restored.sessionId === session.sessionId
       && restored.turnCatalogRef === session.turnCatalog
       && restored.isPartial === session.isPartial
       && restored.totalTurnCount === session.totalTurnCount
@@ -461,6 +470,7 @@ export function createSessionVirtualItemProjector(): (session: Session | null) =
 
     const items = projectSessionItems(session, cachedTurnPrefixById);
     const projection = {
+      sessionId: session.sessionId,
       turnCatalogRef: session.turnCatalog,
       isPartial: session.isPartial,
       totalTurnCount: session.totalTurnCount,

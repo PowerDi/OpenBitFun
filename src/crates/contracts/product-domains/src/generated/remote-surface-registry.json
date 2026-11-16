@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "fnv1a64:00e7b30fdba153e3",
+  "digest": "fnv1a64:e2df34545ad16a6a",
   "retiredCommandPrefixes": [
     {
       "prefix": "lsp_",
@@ -50,6 +50,7 @@
       "workspace_icon_v1",
       "workspace_id_references_v1",
       "workspace_html_preview_v1",
+      "workspace_latex_preview_v1",
       "whole_session_copy_v1",
       "session_trajectory_v1",
       "session_reference_browse_v1",
@@ -57,7 +58,8 @@
       "user_question_interaction_v1",
       "ssh_none_auth_v1",
       "terminal_cursor_replay_v1",
-      "git_tracked_change_count_v1"
+      "git_tracked_change_count_v1",
+      "peer_attachment_status_v1"
     ],
     "desktop": [
       "gen_ui_libraries_v1",
@@ -101,13 +103,15 @@
       "workspace_icon_v1",
       "workspace_id_references_v1",
       "workspace_html_preview_v1",
+      "workspace_latex_preview_v1",
       "whole_session_copy_v1",
       "session_trajectory_v1",
       "session_reference_browse_v1",
       "user_question_response",
       "user_question_interaction_v1",
       "ssh_none_auth_v1",
-      "git_tracked_change_count_v1"
+      "git_tracked_change_count_v1",
+      "peer_attachment_status_v1"
     ],
     "cli": [
       "model_routing_v1",
@@ -137,7 +141,8 @@
       "user_question_response",
       "user_question_interaction_v1",
       "terminal_cursor_replay_v1",
-      "git_tracked_change_count_v1"
+      "git_tracked_change_count_v1",
+      "peer_attachment_status_v1"
     ]
   },
   "operations": [
@@ -442,114 +447,6 @@
       }
     },
     {
-      "id": "appearance_market_browse",
-      "surface": "tauri_command",
-      "remoteWorkspace": "WorkspaceAgnostic",
-      "peer": {
-        "kind": "controller_local"
-      },
-      "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
-      }
-    },
-    {
-      "id": "appearance_market_download_release",
-      "surface": "tauri_command",
-      "remoteWorkspace": "LocalOnly",
-      "peer": {
-        "kind": "controller_local"
-      },
-      "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
-      }
-    },
-    {
-      "id": "appearance_market_get_listing",
-      "surface": "tauri_command",
-      "remoteWorkspace": "WorkspaceAgnostic",
-      "peer": {
-        "kind": "controller_local"
-      },
-      "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
-      }
-    },
-    {
-      "id": "appearance_market_get_review_submission",
-      "surface": "tauri_command",
-      "remoteWorkspace": "WorkspaceAgnostic",
-      "peer": {
-        "kind": "controller_local"
-      },
-      "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
-      }
-    },
-    {
-      "id": "appearance_market_list_review_submissions",
-      "surface": "tauri_command",
-      "remoteWorkspace": "WorkspaceAgnostic",
-      "peer": {
-        "kind": "controller_local"
-      },
-      "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
-      }
-    },
-    {
-      "id": "appearance_market_list_submissions",
-      "surface": "tauri_command",
-      "remoteWorkspace": "WorkspaceAgnostic",
-      "peer": {
-        "kind": "controller_local"
-      },
-      "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
-      }
-    },
-    {
-      "id": "appearance_market_review_submission",
-      "surface": "tauri_command",
-      "remoteWorkspace": "WorkspaceAgnostic",
-      "peer": {
-        "kind": "controller_local"
-      },
-      "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
-      }
-    },
-    {
-      "id": "appearance_market_submit_package",
-      "surface": "tauri_command",
-      "remoteWorkspace": "LocalOnly",
-      "peer": {
-        "kind": "controller_local"
-      },
-      "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
-      }
-    },
-    {
-      "id": "appearance_market_withdraw_submission",
-      "surface": "tauri_command",
-      "remoteWorkspace": "WorkspaceAgnostic",
-      "peer": {
-        "kind": "controller_local"
-      },
-      "cliPeer": {
-        "kind": "unsupported",
-        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
-      }
-    },
-    {
       "id": "append_flow_chat_diagnostics",
       "surface": "tauri_command",
       "remoteWorkspace": "LocalOnly",
@@ -834,6 +731,18 @@
       }
     },
     {
+      "id": "cancel_app_update_download",
+      "surface": "tauri_command",
+      "remoteWorkspace": "WorkspaceAgnostic",
+      "peer": {
+        "kind": "controller_local"
+      },
+      "cliPeer": {
+        "kind": "unsupported",
+        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
+      }
+    },
+    {
       "id": "cancel_dialog_turn",
       "surface": "tauri_command",
       "remoteWorkspace": "WorkspaceAgnostic",
@@ -1032,6 +941,17 @@
       }
     },
     {
+      "id": "clear_decision_model_credential",
+      "surface": "tauri_command",
+      "remoteWorkspace": "WorkspaceAgnostic",
+      "peer": {
+        "kind": "proxied"
+      },
+      "cliPeer": {
+        "kind": "handled"
+      }
+    },
+    {
       "id": "clear_mcp_remote_auth",
       "surface": "tauri_command",
       "remoteWorkspace": "LegacyUnaudited",
@@ -1091,6 +1011,18 @@
     },
     {
       "id": "compact_session",
+      "surface": "tauri_command",
+      "remoteWorkspace": "RemoteRouted",
+      "peer": {
+        "kind": "proxied"
+      },
+      "cliPeer": {
+        "kind": "unsupported",
+        "reason": "the CLI peer host has no handler for this command"
+      }
+    },
+    {
+      "id": "compile_workspace_latex",
       "surface": "tauri_command",
       "remoteWorkspace": "RemoteRouted",
       "peer": {
@@ -2706,6 +2638,17 @@
       "cliPeer": {
         "kind": "unsupported",
         "reason": "the CLI peer host has no handler for this command"
+      }
+    },
+    {
+      "id": "get_decision_model_credential_status",
+      "surface": "tauri_command",
+      "remoteWorkspace": "WorkspaceAgnostic",
+      "peer": {
+        "kind": "proxied"
+      },
+      "cliPeer": {
+        "kind": "handled"
       }
     },
     {
@@ -5570,6 +5513,18 @@
       }
     },
     {
+      "id": "peer_host_bridge_ready",
+      "surface": "tauri_command",
+      "remoteWorkspace": "WorkspaceAgnostic",
+      "peer": {
+        "kind": "controller_local"
+      },
+      "cliPeer": {
+        "kind": "unsupported",
+        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
+      }
+    },
+    {
       "id": "peer_host_invoke_complete",
       "surface": "tauri_command",
       "remoteWorkspace": "WorkspaceAgnostic",
@@ -6832,6 +6787,17 @@
       "cliPeer": {
         "kind": "unsupported",
         "reason": "the CLI peer host has no handler for this command"
+      }
+    },
+    {
+      "id": "save_decision_model_credential",
+      "surface": "tauri_command",
+      "remoteWorkspace": "WorkspaceAgnostic",
+      "peer": {
+        "kind": "proxied"
+      },
+      "cliPeer": {
+        "kind": "handled"
       }
     },
     {
@@ -8716,6 +8682,18 @@
       "cliPeer": {
         "kind": "unsupported",
         "reason": "the CLI peer host has no handler for this command"
+      }
+    },
+    {
+      "id": "write_clipboard_image",
+      "surface": "tauri_command",
+      "remoteWorkspace": "LocalOnly",
+      "peer": {
+        "kind": "controller_local"
+      },
+      "cliPeer": {
+        "kind": "unsupported",
+        "reason": "the controller keeps this command; peer hosts refuse it before dispatch"
       }
     },
     {

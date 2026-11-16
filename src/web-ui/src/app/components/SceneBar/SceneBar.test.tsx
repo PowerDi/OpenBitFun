@@ -14,6 +14,7 @@ import { writeSessionTabDrag } from '../../workbench/canvasTabTransfer';
 import { clearAgentCanvasForPeerSwitch, switchAgentCanvasScope, useAgentCanvasStore } from '../panels/content-canvas/stores';
 import { activateSurface } from '@/infrastructure/peer-device/deviceSurface';
 import { useDeviceDirectory } from '@/infrastructure/account/deviceDirectory';
+import { useContextMenuStore } from '@/shared/context-menu-system/store/ContextMenuStore';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -99,12 +100,16 @@ describe('SceneBar overflow navigation', () => {
     sceneHarness.closeScene.mockReset();
     clearAgentCanvasForPeerSwitch();
     useContentResourceStore.setState({ resources: {} });
+    useContextMenuStore.getState().reset();
+    window.getSelection()?.removeAllRanges();
     resetSceneStoreForTest();
   });
 
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    useContextMenuStore.getState().reset();
+    window.getSelection()?.removeAllRanges();
     activateSurface('local');
     vi.restoreAllMocks();
   });
@@ -520,5 +525,216 @@ describe('SceneBar overflow navigation', () => {
       }));
     });
     expect(sceneHarness.closeScene).toHaveBeenCalledWith('session');
+  });
+
+  it('prevents text selection on tabs and device labels in styles', () => {
+    const barRule = sceneBarStyles.match(/\.openbitfun-scene-bar\s*\{([^}]*)\}/s)?.[1] ?? '';
+    const deviceGroupRule = sceneBarStyles.match(/&__device-group\s*\{([^}]*)\}/s)?.[1] ?? '';
+
+    expect(barRule).toMatch(/-webkit-user-select:\s*none;/);
+    expect(barRule).toMatch(/user-select:\s*none;/);
+    expect(deviceGroupRule).toMatch(/cursor:\s*default;/);
+    expect(deviceGroupRule).toMatch(/-webkit-user-select:\s*none;/);
+    expect(deviceGroupRule).toMatch(/user-select:\s*none;/);
+    expect(deviceGroupRule).not.toMatch(/pointer-events:\s*none;/);
+  });
+
+  it('clears tab text selection on contextmenu while preserving external selections', () => {
+    sceneHarness.state.sessionTitle = 'OpenBitFun ACP能力';
+    renderSceneBar();
+
+    const sessionTab = container.querySelector<HTMLElement>('[role="tab"][data-openbitfun-value="session"]')!;
+    const labelText = sessionTab.querySelector('[data-openbitfun-part="label"]')?.firstChild;
+    expect(labelText).not.toBeNull();
+
+    const selection = window.getSelection()!;
+    const tabRange = document.createRange();
+    tabRange.selectNodeContents(sessionTab.querySelector('[data-openbitfun-part="label"]')!);
+    selection.removeAllRanges();
+    selection.addRange(tabRange);
+    expect(selection.isCollapsed).toBe(false);
+
+    act(() => {
+      sessionTab.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 40,
+        clientY: 16,
+      }));
+    });
+
+    expect(selection.rangeCount).toBe(0);
+    expect(useContextMenuStore.getState().visible).toBe(true);
+
+    const external = document.createElement('div');
+    external.textContent = 'External transcript text';
+    document.body.appendChild(external);
+    try {
+      const externalRange = document.createRange();
+      externalRange.selectNodeContents(external);
+      selection.removeAllRanges();
+      selection.addRange(externalRange);
+      expect(selection.toString()).toBe('External transcript text');
+
+      act(() => {
+        sessionTab.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: 44,
+          clientY: 18,
+        }));
+      });
+
+      expect(selection.rangeCount).toBe(1);
+      expect(selection.toString()).toBe('External transcript text');
+    } finally {
+      selection.removeAllRanges();
+      external.remove();
+    }
+  });
+
+  it('opens a device-group context menu to close all closable tabs under that device', async () => {
+    const [session, settings, terminal] = sceneHarness.state.openTabs;
+    session.session = { surfaceId: 'peer-tab-device', workspaceKey: 'workspace-a', sessionId: 'remote' };
+    terminal.session = { surfaceId: 'peer-tab-device', workspaceKey: 'workspace-a', sessionId: 'remote-2' };
+    settings.session = { surfaceId: 'local', workspaceKey: 'workspace-b', sessionId: 'here' };
+    useDeviceDirectory.setState({
+      devices: [
+        { device_id: 'peer-tab-device', device_name: 'Studio' } as never,
+        { device_id: 'me', device_name: 'MacBook' } as never,
+      ],
+      localId: 'me',
+    });
+
+    const originalDefs = sceneHarness.state.tabDefs;
+    try {
+      sceneHarness.state.activeTabId = 'settings';
+      renderSceneBar();
+      const labels = Array.from(container.querySelectorAll<HTMLElement>('[data-openbitfun-part="tabDevice"]'));
+      expect(labels.map(label => label.textContent)).toEqual(['Studio', 'MacBook']);
+
+      act(() => {
+        labels[0].dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: 20,
+          clientY: 12,
+        }));
+      });
+
+      let menu = useContextMenuStore.getState();
+      expect(menu.visible).toBe(true);
+      expect(menu.items).toHaveLength(1);
+      expect(menu.items[0]).toMatchObject({
+        id: 'close-device-tabs',
+        label: 'sceneBar.closeDeviceTabs',
+        disabled: false,
+      });
+
+      await act(async () => {
+        menu.items[0].onClick?.(menu.context!);
+        await Promise.resolve();
+      });
+      expect(sceneHarness.closeScene.mock.calls.map(call => call[0])).toEqual(['session', 'terminal']);
+
+      sceneHarness.closeScene.mockReset();
+      act(() => {
+        labels[1].dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: 220,
+          clientY: 12,
+        }));
+      });
+      menu = useContextMenuStore.getState();
+      await act(async () => {
+        menu.items[0].onClick?.(menu.context!);
+        await Promise.resolve();
+      });
+      expect(sceneHarness.closeScene.mock.calls.map(call => call[0])).toEqual(['git', 'settings']);
+
+      sceneHarness.closeScene.mockReset();
+      sceneHarness.state.tabDefs = originalDefs.map(def =>
+        def.id === 'settings' || def.id === 'git' ? { ...def, closable: false } : def,
+      );
+      renderSceneBar();
+      const updatedLabels = Array.from(container.querySelectorAll<HTMLElement>('[data-openbitfun-part="tabDevice"]'));
+      act(() => {
+        updatedLabels[1].dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: 220,
+          clientY: 12,
+        }));
+      });
+      menu = useContextMenuStore.getState();
+      expect(menu.items[0]?.disabled).toBe(true);
+
+      sceneHarness.state.tabDefs = originalDefs.map(def =>
+        def.id === 'settings' ? { ...def, closable: false } : def,
+      );
+      renderSceneBar();
+      const partialLabels = Array.from(container.querySelectorAll<HTMLElement>('[data-openbitfun-part="tabDevice"]'));
+      act(() => {
+        partialLabels[1].dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: 220,
+          clientY: 12,
+        }));
+      });
+      menu = useContextMenuStore.getState();
+      expect(menu.items[0]?.disabled).toBe(false);
+      await act(async () => {
+        menu.items[0].onClick?.(menu.context!);
+        await Promise.resolve();
+      });
+      expect(sceneHarness.closeScene.mock.calls.map(call => call[0])).toEqual(['git']);
+    } finally {
+      sceneHarness.state.tabDefs = originalDefs;
+      act(() => { useDeviceDirectory.setState({ devices: [], localId: null }); });
+    }
+  });
+
+  it('dismisses the device-group context menu and skips closing when the active surface switches', async () => {
+    const [session, settings, terminal] = sceneHarness.state.openTabs;
+    session.session = { surfaceId: 'peer-tab-device', workspaceKey: 'workspace-a', sessionId: 'remote' };
+    terminal.session = { surfaceId: 'peer-tab-device', workspaceKey: 'workspace-a', sessionId: 'remote-2' };
+    settings.session = { surfaceId: 'local', workspaceKey: 'workspace-b', sessionId: 'here' };
+    useDeviceDirectory.setState({
+      devices: [
+        { device_id: 'peer-tab-device', device_name: 'Studio' } as never,
+        { device_id: 'me', device_name: 'MacBook' } as never,
+      ],
+      localId: 'me',
+    });
+
+    try {
+      renderSceneBar();
+      const labels = Array.from(container.querySelectorAll<HTMLElement>('[data-openbitfun-part="tabDevice"]'));
+      act(() => {
+        labels[0].dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: 20,
+          clientY: 12,
+        }));
+      });
+      const menu = useContextMenuStore.getState();
+      expect(menu.visible).toBe(true);
+
+      act(() => {
+        activateSurface('peer-tab-device');
+      });
+      expect(useContextMenuStore.getState().visible).toBe(false);
+
+      await act(async () => {
+        menu.items[0].onClick?.(menu.context!);
+        await Promise.resolve();
+      });
+      expect(sceneHarness.closeScene).not.toHaveBeenCalled();
+    } finally {
+      act(() => { useDeviceDirectory.setState({ devices: [], localId: null }); });
+    }
   });
 });

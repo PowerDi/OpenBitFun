@@ -129,6 +129,18 @@ locale's `scenes/capabilities.json`; the catalog generator does not write these
 resources. The shared search acceptance corpus exercises both the Playbook and
 Web UI, including the matched sub-capability.
 
+For visual-skin storage, projection, painting, and settings regressions:
+
+```bash
+pnpm --dir src/web-ui run test:run src/infrastructure/visual-skin src/infrastructure/config/components/common/ConfigPageLayout.skin.test.tsx src/infrastructure/config/components/VisualSkinConfigSection.test.tsx src/app/scenes/session/ChatPane.composer-layout.test.tsx
+```
+
+The paint tests run the production SCSS/runtime output in an available headless
+Chrome/Edge/Chromium, or skip that browser case explicitly when unavailable.
+Set `OPENBITFUN_TEST_BROWSER` to select an executable. These are local DOM and
+browser fixtures, not native WebView or live remote verification. Authoring
+helper commands are documented in the core assembly guide and the Skill.
+
 For Agent creation, hidden internal IDs, editing, and surface-switch draft fences:
 
 ```bash
@@ -187,6 +199,21 @@ TabGroup items sit inside positioned drag wrappers; their `offsetLeft` is not a
 scroll-strip coordinate. Preserve reveal across edge-control layout changes, and
 release automatic reveal when the user wheels or pages the strip. These fixtures
 use supplied geometry; native overflow coverage is in `tests/e2e/AGENTS.md`.
+
+For SceneBar projection caching and render costs:
+
+```bash
+SCENE_BAR_BENCH=1 pnpm --dir src/web-ui run test:run src/app/components/SceneBar/SceneBar.performance.test.tsx
+```
+
+This fixture uses the real scene manager, session-label hooks and TabGroup with
+24 tabs, ten warm-up renders and 100 updates per scenario. It reports React
+Profiler render time and item-array identities for parent renders, history-only
+updates and selection payloads including `lastUsed`. Timing is diagnostic, not a
+CI threshold. To compare the same fixture against an unoptimized checkout, set
+`SCENE_BAR_BASELINE=1` to omit optimization-specific assertions. These jsdom
+fixtures cover simulated SSH resource badges and Peer surface/title changes;
+they do not measure native layout/paint, live transport or end-to-end navigation.
 
 For project creation entry points, work-location/environment selection, and local / SSH / WSL / Docker routing:
 
@@ -399,6 +426,12 @@ establish visual fidelity):
 ```bash
 pnpm --dir src/web-ui run test:run src/infrastructure/update src/infrastructure/api/service-api/SystemAPI.test.ts src/shared/notification-system/components/NotificationContainer.test.tsx
 ```
+
+For Markdown section boundaries, streaming prefix reuse, and cache isolation, run
+`pnpm --dir src/web-ui run test:run src/infrastructure/markdown/markdownSections.test.ts src/infrastructure/markdown/markdownSections.streaming.test.ts`.
+These local parser fixtures compare streamed and cold boundaries and measure the
+actual parser input size. They do not establish native frame latency or live
+remote behavior.
 
 For Markdown parse prewarming or dependency resolution, run
 `pnpm --dir src/web-ui run test:run src/infrastructure/markdown/markdownParse.worker.test.ts src/infrastructure/markdown/markdownParseCache.test.ts`.

@@ -70,6 +70,7 @@ const apiMocks = vi.hoisted(() => ({
   relayRecord: null as ((value: any) => void) | null,
   relayReady: null as ((value: any) => void) | null,
   relayGap: null as ((value: any) => void) | null,
+  relaySyncError: null as ((value: any) => void) | null,
   listSessions: vi.fn(),
   loadSessionMetadata: vi.fn(),
   listSessionsPage: vi.fn(),
@@ -169,7 +170,7 @@ vi.mock('@/infrastructure/api/service-api/RemoteConnectAPI', () => ({
   onSessionRecord: (listener: (value: any) => void) => { apiMocks.relayRecord = listener; return () => { apiMocks.relayRecord = null; }; },
     onSessionReady: (listener: (value: any) => void) => { apiMocks.relayReady = listener; return () => { apiMocks.relayReady = null; }; },
     onSessionGap: (listener: (value: any) => void) => { apiMocks.relayGap = listener; return () => { apiMocks.relayGap = null; }; },
-    onSessionSyncError: vi.fn(() => () => {}),
+    onSessionSyncError: (listener: (value: any) => void) => { apiMocks.relaySyncError = listener; return () => { apiMocks.relaySyncError = null; }; },
     subscribeSession: apiMocks.subscribeRelaySession,
     loadOlderSession: apiMocks.loadOlderRelaySession,
     unsubscribeSession: vi.fn(async () => {}),
@@ -891,6 +892,64 @@ describe('FlowChatStore metadata persistence callbacks', () => {
   });
 });
 
+describe('FlowChatStore remote-driven placeholder adoption', () => {
+  beforeEach(() => { resetStore(); apiMocks.loadSessionMetadata.mockReset(); });
+  afterEach(() => { resetStore(); });
+
+  const addPlaceholder = (workspaceId: string) => {
+    flowChatStore.addExternalSession('persisted-session', 'Remote Session', 'Standard', 'D:/repo', {
+      workspaceId, projectWorkspacePath: 'D:/repo', externalPlaceholder: true, persistedHistory: true,
+    });
+    flowChatStore.addDialogTurn('persisted-session', {
+      id: 'harmony-turn-1', sessionId: 'persisted-session', status: 'processing', modelRounds: [],
+      userMessage: { id: 'user-1', content: 'Continue', timestamp: 1 }, startTime: 1, backendTurnIndex: 20,
+    } as any);
+  };
+
+  it('hydrates history on open and adopts the persisted title, mode and binding', async () => {
+    const workspaceId = fixtureWorkspaceId('D:/repo');
+    addPlaceholder(workspaceId);
+    expect(flowChatStore.getState().sessions.get('persisted-session')).toMatchObject({
+      externalPlaceholder: true, isHistorical: true, historyState: 'metadata-only',
+    });
+    apiMocks.loadSessionMetadata.mockResolvedValueOnce({
+      sessionId: 'persisted-session', sessionName: 'Fuse gate kernels', agentType: 'Claw',
+      modelName: 'primary', createdAt: 10, lastActiveAt: 20, turnCount: 21, messageCount: 42,
+      toolCallCount: 0, status: 'active', workspacePath: 'D:/repo', workspaceId,
+    });
+
+    await expect(flowChatStore.ensurePersistedSessionMetadata('persisted-session', workspaceId, true))
+      .resolves.toBe(true);
+
+    const adopted = flowChatStore.getState().sessions.get('persisted-session');
+    expect(adopted).toMatchObject({
+      title: 'Fuse gate kernels', mode: 'Claw', workspaceId, historyState: 'metadata-only', isHistorical: true,
+    });
+    expect(adopted?.externalPlaceholder).toBeUndefined();
+    expect(adopted?.dialogTurns.map(turn => turn.id)).toEqual(['harmony-turn-1']);
+  });
+
+  it('rebinds a placeholder created before the owning workspace was known', () => {
+    flowChatStore.addExternalSession('persisted-session', 'Remote Session', 'Standard', 'C:/assistant', {
+      workspaceId: 'assistant-workspace', externalPlaceholder: true,
+    });
+    flowChatStore.rebindExternalPlaceholder('persisted-session', {
+      workspaceId: 'project-workspace', workspacePath: 'D:/repo', persistedHistory: true,
+    });
+    expect(flowChatStore.getState().sessions.get('persisted-session')).toMatchObject({
+      workspaceId: 'project-workspace', workspacePath: 'D:/repo', projectWorkspacePath: 'D:/repo',
+      historyState: 'metadata-only', config: expect.objectContaining({ workspaceId: 'project-workspace' }),
+    });
+  });
+
+  it('never rebinds a session loaded from the host', () => {
+    const session = createSession();
+    flowChatStore.setState(() => ({ sessions: new Map([[session.sessionId, session]]) }));
+    flowChatStore.rebindExternalPlaceholder(session.sessionId, { workspaceId: 'other-workspace' });
+    expect(flowChatStore.getState().sessions.get(session.sessionId)).toBe(session);
+  });
+});
+
 describe('FlowChatStore session removal active selection', () => {
   beforeEach(() => {
     resetStore();
@@ -901,6 +960,29 @@ describe('FlowChatStore session removal active selection', () => {
   afterEach(() => {
     resetStore();
     sessionComposerStore.setState({ drafts: {} });
+  });
+
+  it.each(['absent', 'present', 'offline'] as const)('reads back an uncertain peer deletion with host state=%s', async hostState => {
+    activateSurface('peer-deletion');
+    const session = createSession();
+    flowChatStore.setState(() => ({ sessions: new Map([[session.sessionId, session]]), activeSessionId: session.sessionId }));
+    sessionComposerStore.getState().setValue(session.sessionId, 'Unsent message');
+    const failure = new Error('outcome_unknown: Relay connection closed before the reply arrived');
+    apiMocks.deleteSession.mockRejectedValueOnce(failure);
+    apiMocks.loadSessionMetadata.mockReset();
+    if (hostState === 'offline') apiMocks.loadSessionMetadata.mockRejectedValueOnce(new Error('offline'));
+    else apiMocks.loadSessionMetadata.mockResolvedValueOnce(hostState === 'absent' ? null : { sessionId: session.sessionId });
+    const deletion = flowChatStore.deleteSession(session.sessionId);
+    if (hostState === 'absent') {
+      await expect(deletion).resolves.toBeUndefined();
+      expect(flowChatStore.getState().sessions.has(session.sessionId)).toBe(false);
+    } else {
+      await expect(deletion).rejects.toBe(failure);
+      expect(flowChatStore.getState().sessions.get(session.sessionId)).toBe(session);
+      expect(sessionComposerStore.getState().getDraft(session.sessionId).value).toBe('Unsent message');
+    }
+    expect(apiMocks.deleteSession).toHaveBeenCalledTimes(1);
+    expect(apiMocks.loadSessionMetadata).toHaveBeenCalledWith(session.sessionId, session.workspaceId);
   });
 
   it('keeps a failed deletion selected with its history, state machine and draft, then permits retry', async () => {
@@ -2194,6 +2276,102 @@ describe('FlowChatStore historical session hydration state', () => {
     }
     vi.clearAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it.each(['metadata-only', 'hydrating', undefined] as const)(
+    'does not cache a guessed live ordinal before history hydration (%s)', historyState => {
+      const session = createSession({ sessionId: 'history-1', isHistorical: true, historyState, persistedTurnCount: 80 });
+      const live = { id: 'live-81', sessionId: session.sessionId, backendTurnIndex: 80,
+        userMessage: { id: 'live-user', content: 'Continue', timestamp: 81 }, modelRounds: [],
+        status: 'processing', startTime: 81 } as any;
+      flowChatStore.setState(() => ({ sessions: new Map([[session.sessionId, session]]) }));
+      flowChatStore.addDialogTurn(session.sessionId, live);
+      expect(flowChatStore.getState().sessions.get(session.sessionId)?.dialogTurns).toEqual([live]);
+      expect(flowChatStore.getSessionHistoryViewState(session.sessionId)?.loadedRanges ?? []).toEqual([]);
+    },
+  );
+
+  it.each([false, true])('retains known live ordinals with a sparse catalog (legacy field: %s)', legacy => {
+    const session = createSession({ sessionId: 'history-1', isHistorical: true, historyState: 'metadata-only',
+      turnCatalog: { ...createTurnCatalog(3), entries: [
+        { ordinal: 0, storageTurnIndex: 1, turnId: 'old', previewTruncated: false },
+        { ordinal: 2, storageTurnIndex: 9, turnId: 'live', previewTruncated: false },
+      ] } });
+    const live = { id: 'live', sessionId: session.sessionId,
+      ...(legacy ? { backendTurnIndex: 9 } : { storageTurnIndex: 9 }),
+      userMessage: { id: 'live-user', content: 'Continue', timestamp: 1 }, modelRounds: [], status: 'processing', startTime: 1 } as any;
+    flowChatStore.setState(() => ({ sessions: new Map([[session.sessionId, session]]) }));
+    flowChatStore.addDialogTurn(session.sessionId, live);
+    expect(flowChatStore.getSessionHistoryViewState(session.sessionId)?.loadedRanges).toMatchObject([
+      { startOrdinal: 2, endOrdinalExclusive: 3, turns: [{ id: 'live' }] },
+    ]);
+  });
+
+  it('retains live ranges for a legacy complete session with non-contiguous storage slots', () => {
+    const old = { id: 'old', storageTurnIndex: 3, userMessage: { id: 'u-old', content: 'old', timestamp: 1 },
+      modelRounds: [], status: 'completed', startTime: 1 } as any;
+    const live = { ...old, id: 'live', storageTurnIndex: 9, status: 'processing' };
+    const session = createSession({ sessionId: 'history-1', dialogTurns: [old] });
+    flowChatStore.setState(() => ({ sessions: new Map([[session.sessionId, session]]) }));
+    flowChatStore.addDialogTurn(session.sessionId, live);
+    expect(flowChatStore.getSessionHistoryViewState(session.sessionId)?.loadedRanges).toMatchObject([
+      { startOrdinal: 1, endOrdinalExclusive: 2, turns: [{ id: 'live' }] },
+    ]);
+  });
+
+  it('retains a known partial-tail ordinal on legacy hosts without a catalog', () => {
+    const tail = { id: 'turn-79', backendTurnIndex: 79, userMessage: { id: 'u-old', content: 'old', timestamp: 1 },
+      modelRounds: [], status: 'completed', startTime: 1 } as any;
+    const live = { ...tail, id: 'turn-80', backendTurnIndex: 80, status: 'processing' };
+    const session = createSession({ sessionId: 'history-1', dialogTurns: [tail], historyState: 'ready',
+      isPartial: true, totalTurnCount: 80 });
+    flowChatStore.setState(() => ({ sessions: new Map([[session.sessionId, session]]) }));
+    flowChatStore.addDialogTurn(session.sessionId, live);
+    expect(flowChatStore.getSessionHistoryViewState(session.sessionId)?.loadedRanges).toMatchObject([
+      { startOrdinal: 80, endOrdinalExclusive: 81, turns: [{ id: 'turn-80' }] },
+    ]);
+  });
+
+  it('reloads a conflicting cached slot when a legacy catalog omits Turn IDs', async () => {
+    const catalog: NonNullable<Session['turnCatalog']> = createTurnCatalog(81);
+    delete catalog.entries[0].turnId;
+    const live = { id: 'turn-80', backendTurnIndex: 80, sessionId: 'history-1',
+      userMessage: { id: 'live-user', content: 'Continue', timestamp: 81 }, modelRounds: [], status: 'processing', startTime: 81 } as any;
+    const session = createSession({ sessionId: 'history-1', dialogTurns: [live], isPartial: true,
+      totalTurnCount: 81, historyState: 'ready', turnCatalog: catalog });
+    flowChatStore.setState(() => ({ sessions: new Map([[session.sessionId, session]]) }));
+    (flowChatStore as any).cacheSessionLoadedTurnRange(session.sessionId, {
+      startOrdinal: 0, endOrdinalExclusive: 1, turns: [live], source: 'live', lastAccessedAt: 1,
+    }, catalog);
+    apiMocks.loadSessionTurnWindow.mockResolvedValueOnce({ status: 'ready', catalogRevision: catalog.revision,
+      totalTurnCount: 81, startOrdinal: 0, endOrdinalExclusive: 1, targetTurnId: 'turn-0', turns: [createPersistedTurn(0)] });
+    const result = await flowChatStore.loadSessionTurnWindow(session.sessionId, 0);
+    expect(result).toMatchObject({ status: 'ready', cacheHit: false, targetTurnId: 'turn-0' });
+    expect(apiMocks.loadSessionTurnWindow).toHaveBeenCalledTimes(1);
+    expect(flowChatStore.getState().sessions.get(session.sessionId)?.dialogTurns[0]).toBe(live);
+  });
+
+  it.each(['seed', 'authoritative'] as const)('discards unversioned ranges on first catalog adoption (%s)', source => {
+    const live = { id: 'turn-80', storageTurnIndex: 80, sessionId: 'history-1',
+      userMessage: { id: 'live-user', content: 'Continue', timestamp: 81 }, modelRounds: [], status: 'processing', startTime: 81 } as any;
+    const session = createSession({ sessionId: 'history-1', dialogTurns: [live], totalTurnCount: 1 });
+    flowChatStore.setState(() => ({ sessions: new Map([[session.sessionId, session]]) }));
+    (flowChatStore as any).cacheSessionLoadedTurnRange(session.sessionId, {
+      startOrdinal: 0, endOrdinalExclusive: 1, turns: [live], source: 'live', lastAccessedAt: 1,
+    }, null);
+    const catalog = createTurnCatalog(81);
+    if (source === 'seed') {
+      flowChatStore.setState(() => ({ sessions: new Map([[session.sessionId, {
+        ...session, isPartial: true, totalTurnCount: 81, turnCatalog: catalog,
+      }]]) }));
+      (flowChatStore as any).seedSessionHistoryLoadedRanges(session.sessionId);
+    } else {
+      (flowChatStore as any).updateAuthoritativeSessionTurnCatalog(session.sessionId, catalog);
+    }
+    const ranges = flowChatStore.getSessionHistoryViewState(session.sessionId)!.loadedRanges;
+    expect(ranges.some(range => range.startOrdinal === 0 && range.turns.some(turn => turn.id === live.id))).toBe(false);
+    expect(flowChatStore.getState().sessions.get(session.sessionId)?.dialogTurns[0]).toBe(live);
+    if (source === 'seed') expect(ranges).toMatchObject([{ startOrdinal: 80, endOrdinalExclusive: 81, turns: [{ id: live.id }] }]);
   });
 
   it.each([0, 3, undefined])('loads persisted metadata as metadata-only historical sessions (turns=%s)', async turnCount => {
@@ -6869,6 +7047,20 @@ describe('FlowChatStore historical session hydration state', () => {
       && range.endOrdinalExclusive > 3
       && range.turns.some(turn => turn.id === 'turn-23')
     )).toBe(false);
+
+    // Live output already owns this Turn, while the persisted catalog still
+    // ends at ordinal 22. Reading forwards must use that same canonical tail.
+    const newest = await flowChatStore.loadSessionTurnWindow('history-1', 23, { source: 'prefetch' });
+    expect(newest).toMatchObject({ status: 'ready', cacheHit: true, targetTurnId: 'turn-23' });
+    flowChatStore.setState(prev => {
+      const sessions = new Map(prev.sessions);
+      const current = sessions.get('history-1')!;
+      sessions.set('history-1', { ...current, dialogTurns: current.dialogTurns.filter(turn => turn.id !== 'turn-23') });
+      return { ...prev, sessions };
+    });
+    await expect(flowChatStore.loadSessionTurnWindow('history-1', 23, { source: 'prefetch' }))
+      .resolves.toMatchObject({ status: 'not-found', cacheHit: false });
+    expect(apiMocks.loadSessionTurnWindow).not.toHaveBeenCalled();
   });
 
   it('adopts an optimistic partial-tail turn in place without incrementing projected history twice', async () => {
@@ -7446,6 +7638,43 @@ describe('FlowChatStore historical session hydration state', () => {
       'catalog-v2',
     );
   });
+
+  it.each(['ready', 'stale', 'not-found'] as const)(
+    'retires old cached bodies and ignores a late %s page after a catalog refresh', async lateStatus => {
+      const catalog = createTurnCatalog(8, 'before-refresh');
+      const refreshed = createTurnCatalog(8, 'after-refresh');
+      flowChatStore.setState(() => ({
+        sessions: new Map([['history-1', createSession({
+          sessionId: 'history-1', historyState: 'ready', isPartial: true,
+          totalTurnCount: 8, turnCatalog: catalog,
+        })]]), activeSessionId: 'history-1',
+      }));
+      const ready = (revision: string, start: number, end: number) => ({
+        status: 'ready' as const, catalogRevision: revision, totalTurnCount: 8,
+        startOrdinal: start, endOrdinalExclusive: end, targetTurnId: `turn-${start}`,
+        turns: Array.from({ length: end - start }, (_, i) => createPersistedTurn(start + i)),
+      });
+      apiMocks.loadSessionTurnWindow.mockResolvedValueOnce(ready(catalog.revision, 0, 2));
+      await flowChatStore.loadSessionTurnWindow('history-1', 0, { source: 'prefetch' });
+      const oldPage = createDeferred<any>();
+      apiMocks.loadSessionTurnWindow.mockReturnValueOnce(oldPage.promise)
+        .mockResolvedValueOnce({ status: 'stale', catalog: refreshed })
+        .mockResolvedValueOnce(ready(refreshed.revision, 4, 5));
+      const oldRead = flowChatStore.loadSessionTurnWindow('history-1', 6, { source: 'prefetch' });
+      const freshRead = await flowChatStore.loadSessionTurnWindow('history-1', 4, { source: 'prefetch' });
+      expect(freshRead).toMatchObject({ status: 'ready', isCurrent: true });
+      expect(flowChatStore.reactivateSessionHistoryWindow('history-1', {
+        startOrdinal: 0, endOrdinalExclusive: 2, targetTurnId: 'turn-0', mode: 'history-window',
+      })).toBeNull();
+      oldPage.resolve(lateStatus === 'ready' ? ready(catalog.revision, 6, 7)
+        : { status: lateStatus, catalog: createTurnCatalog(8, 'late-intermediate-revision') });
+      await expect(oldRead).resolves.toMatchObject({ isCurrent: false });
+      expect(flowChatStore.getState().sessions.get('history-1')?.turnCatalog?.revision).toBe(refreshed.revision);
+      expect(flowChatStore.getSessionHistoryViewState('history-1')?.loadedRanges)
+        .toMatchObject([{ startOrdinal: 4, endOrdinalExclusive: 5 }]);
+      expect(apiMocks.loadSessionTurnWindow).toHaveBeenCalledTimes(4);
+    },
+  );
 
   it('marks an unsupported window command per host and requests full-history fallback', async () => {
     const catalog = createTurnCatalog(5);
@@ -8151,6 +8380,47 @@ describe('FlowChatStore reconcile snapshot content safety', () => {
     expect(apiMocks.restoreSessionView).not.toHaveBeenCalled();
   });
 
+  it('resynchronizes an obsolete complete catalog from a fresh windowed host catalog', async () => {
+    await hydrateSessionWithContent();
+    const obsolete = createTurnCatalog(1, 'obsolete');
+    flowChatStore.setState(previous => ({
+      ...previous,
+      sessions: new Map(previous.sessions).set('history-1', {
+        ...previous.sessions.get('history-1')!, turnCatalog: obsolete,
+      }),
+    }));
+    const fresh = { ...createTurnCatalog(80, 'restored'), complete: false };
+    const snapshot = {
+      session: { ...hostSession(), turnCount: 80 },
+      turns: [createPersistedTurn(79)], turnCatalog: fresh, contextRestoreState: 'ready',
+    };
+    apiMocks.restoreSessionView.mockResolvedValueOnce(snapshot);
+    await flowChatStore.refreshPeerSessionSnapshot('history-1');
+    expect(flowChatStore.getState().sessions.get('history-1')?.turnCatalog).toBe(obsolete);
+    apiMocks.restoreSessionView.mockResolvedValueOnce(snapshot);
+    const synchronized = await flowChatStore.synchronizeSessionHistory('history-1');
+    expect(synchronized.applied).toBe(true);
+    expect(flowChatStore.getState().sessions.get('history-1')?.turnCatalog).toBe(fresh);
+    expect(flowChatStore.getSessionHistoryViewState('history-1')?.catalog).toBe(fresh);
+  });
+
+  it('retains complete previews when history synchronization confirms the same catalog revision', async () => {
+    await hydrateSessionWithContent();
+    const complete = createTurnCatalog(1, 'unchanged');
+    flowChatStore.setState(previous => ({
+      ...previous,
+      sessions: new Map(previous.sessions).set('history-1', {
+        ...previous.sessions.get('history-1')!, turnCatalog: complete,
+      }),
+    }));
+    apiMocks.restoreSessionView.mockResolvedValueOnce({
+      session: hostSession(), turns: [createPersistedTurn(0)],
+      turnCatalog: { ...complete, complete: false }, contextRestoreState: 'ready',
+    });
+    await flowChatStore.synchronizeSessionHistory('history-1');
+    expect(flowChatStore.getState().sessions.get('history-1')?.turnCatalog).toBe(complete);
+  });
+
   it('keeps a hydrated turn when a wholesale replace snapshot carries none of its work', async () => {
     // The reported failure: after switching device away and back, the rebuilt
     // projection has no state machines, so every turn reads as idle and every
@@ -8326,6 +8596,38 @@ describe('FlowChatStore reconcile snapshot content safety', () => {
       flowChatStore.getState().sessions.get('history-1')
         ?.dialogTurns[0].modelRounds[0].items,
     ).toContainEqual(expect.objectContaining({ id: 'plan-display-test' }));
+  });
+
+  it.each([
+    ['adopts', 'OpenBitFun is an agentic IDE with the complete final answer.', true],
+    ['refuses', 'OpenBitFun is an', false],
+  ] as const)('%s a settled record against text painted with lost chunks', async (_case, persisted, adopted) => {
+    await hydrateSessionWithContent();
+    // Chunks lost under load leave a hole: "agentic " never arrived.
+    const painted = 'OpenBitFun is an IDE with the';
+    flowChatStore.setState(prev => {
+      const session = prev.sessions.get('history-1')!;
+      const turn = session.dialogTurns[0];
+      const round = turn.modelRounds[0];
+      return { sessions: new Map(prev.sessions).set('history-1', { ...session, dialogTurns: [{
+        ...turn, status: 'completed',
+        modelRounds: [{ ...round, items: round.items.map(item => (item.type === 'text'
+          ? { ...item, content: painted } : item)) }],
+      }] }) };
+    });
+    apiMocks.restoreSessionView.mockResolvedValueOnce({
+      session: hostSession(),
+      turns: [{
+        ...createPersistedTurn(0),
+        modelRounds: [{ ...HYDRATED_ROUND, textItems: [{ id: 'text-0', content: persisted, timestamp: 2 }] }],
+        endTime: 3,
+      }],
+      contextRestoreState: 'ready',
+    });
+
+    await expect(flowChatStore.reconcileSettledDialogTurn('history-1', 'turn-0')).resolves.toBe(adopted);
+    expect(flowChatStore.getState().sessions.get('history-1')?.dialogTurns[0].modelRounds[0].items
+      .find(item => item.type === 'text')).toMatchObject({ content: adopted ? persisted : painted });
   });
 
   it('keeps live round timing when the settled host record lost it', async () => {
@@ -8818,6 +9120,23 @@ describe('FlowChatStore device surfaces', () => {
       expect(getSubmittedMessagePreviews(scope, 'peer-preview')).toEqual([]);
     });
 
+    it('prunes turns the host no longer has when resynced after an unknown mutation', async () => {
+      await openPeerSession('peer-unknown-rollback', 3);
+      const subscriptions = apiMocks.subscribeRelaySession.mock.calls.length;
+      // The host ran the rollback; its stream sends no tombstones for it.
+      apiMocks.subscribeRelaySession.mockImplementationOnce(async () => {
+        apiMocks.relayRecord?.(itemRecord('peer-unknown-rollback', 0, 0, 1));
+        apiMocks.relayReady?.({ sessionId: 'peer-unknown-rollback', hasMore: false, oldestSeq: 1, cursor: 1 });
+        return 'peer-unknown-rollback-resync';
+      });
+
+      await flowChatStore.resyncRelaySessionFromHost('peer-unknown-rollback');
+
+      expect(apiMocks.subscribeRelaySession).toHaveBeenCalledTimes(subscriptions + 1);
+      expect(turnIds('peer-unknown-rollback')).toEqual(['turn-0']);
+      expect(flowChatStore.getState().sessions.get('peer-unknown-rollback')!.historyState).toBe('ready');
+    });
+
     it('keeps rendered turns for a host-appended gap without a replay', async () => {
       await openPeerSession('peer-source-gap', 2);
 
@@ -9012,6 +9331,63 @@ describe('FlowChatStore device surfaces', () => {
       await flowChatStore.loadRelaySessionHistory('peer-switch');
 
       expect(texts('peer-switch')).toHaveLength(1);
+    });
+
+    it('settles a turn that finished while unsubscribed when the host rebuilt its stream', async () => {
+      const acceptRuntimeStatus = vi.fn();
+      stateMachineManagerMock.getOrCreate.mockReturnValue({ acceptRuntimeStatus });
+      activateSurface(PEER_SURFACE_ID);
+      seedSession('peer-stale');
+      const liveRevision = 2 ** 52 + 3;
+      const running = { ...itemRecord('peer-stale', 0, 0, liveRevision) };
+      running.turn = { ...running.turn, status: 'inprogress' } as typeof running.turn;
+      apiMocks.subscribeRelaySession.mockImplementationOnce(async () => {
+        apiMocks.relayReady?.({ sessionId: 'peer-stale', hasMore: false, oldestSeq: 1, cursor: 0 });
+        return 'peer-stale-subscription';
+      });
+      await flowChatStore.loadRelaySessionHistory('peer-stale');
+      apiMocks.relayRecord?.(running);
+      await vi.waitFor(() => expect(acceptRuntimeStatus).toHaveBeenCalled());
+      expect(acceptRuntimeStatus.mock.lastCall?.[0]).toMatchObject({ turnId: 'turn-0' });
+      expect(acceptRuntimeStatus.mock.lastCall?.[0].state).not.toBe('idle');
+
+      // Switched away; the turn completed and the unobserved host stream
+      // expired. The rebuilt stream stamps its snapshot below the live revision.
+      activateSurface(LOCAL_SURFACE_ID);
+      activateSurface(PEER_SURFACE_ID);
+      apiMocks.subscribeRelaySession.mockImplementationOnce(async () => {
+        apiMocks.relayRecord?.(itemRecord('peer-stale', 0, 0, 2 ** 52 - 1));
+        apiMocks.relayReady?.({ sessionId: 'peer-stale', hasMore: false, oldestSeq: 1, cursor: 1 });
+        return 'peer-stale-resubscription';
+      });
+      await flowChatStore.loadRelaySessionHistory('peer-stale');
+
+      expect(flowChatStore.getState().sessions.get('peer-stale')!.dialogTurns
+        .find(turn => turn.id === 'turn-0')?.status).toBe('completed');
+      expect(acceptRuntimeStatus).toHaveBeenLastCalledWith(
+        expect.objectContaining({ state: 'idle', turnId: 'turn-0', phase: null }));
+    });
+
+    it('re-reads a peer session from the host and keeps a rollback fence across subscriptions', async () => {
+      await openPeerSession('peer-reread', 2);
+      flowChatStore.retireRelaySessionTurns('peer-reread', ['turn-1']);
+      expect(turnIds('peer-reread')).toEqual(['turn-0']);
+      const subscriptions = apiMocks.subscribeRelaySession.mock.calls.length;
+
+      apiMocks.subscribeRelaySession.mockImplementationOnce(async () => {
+        // The host stream has not restarted yet and still replays the retired turn.
+        apiMocks.relayRecord?.(itemRecord('peer-reread', 1, 0, 1));
+        apiMocks.relayRecord?.(itemRecord('peer-reread', 0, 1, 1));
+        apiMocks.relayReady?.({ sessionId: 'peer-reread', hasMore: false, oldestSeq: 1, cursor: 2 });
+        return 'peer-reread-resubscription';
+      });
+      await flowChatStore.reloadRelaySessionFromHost('peer-reread');
+
+      expect(apiMocks.subscribeRelaySession).toHaveBeenCalledTimes(subscriptions + 1);
+      // The retired turn stays hidden; held content is kept and the re-read adds to it.
+      expect(turnIds('peer-reread')).toEqual(['turn-0']);
+      expect(texts('peer-reread', 0).map(item => (item as { content?: string }).content))
+        .toEqual(['item 0', 'item 1']);
     });
 
     it('fails an overdue first page as retryable, keeps known history, and recovers on the late page', async () => {
@@ -9285,6 +9661,29 @@ describe('FlowChatStore device surfaces', () => {
     expect(apiMocks.loadSessionTurnWindow).not.toHaveBeenCalled();
     expect(apiMocks.restoreSessionView).not.toHaveBeenCalled();
     expect(apiMocks.restoreSessionWithTurns).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('recovers terminal state after a lost final read with active session=%s', async active => {
+    activateSurface(PEER_SURFACE_ID);
+    seedSession('peer-recovery');
+    if (!active) flowChatStore.setState(state => ({ ...state, activeSessionId: null }));
+    const acceptRuntimeStatus = vi.fn();
+    stateMachineManagerMock.getOrCreate.mockReturnValue({ acceptRuntimeStatus });
+    const { modelRounds: _rounds, ...stored } = createPersistedTurn(0, 'peer-recovery');
+    apiMocks.subscribeRelaySession.mockClear().mockImplementationOnce(async () => {
+      apiMocks.relayRecord?.({ sessionId: 'peer-recovery', id: 'turn/turn-0', revision: 1, turn: { ...stored, status: 'inprogress' } });
+      apiMocks.relayReady?.({ sessionId: 'peer-recovery', hasMore: false, oldestSeq: 1, cursor: 1 });
+      return 'recovery-subscription';
+    });
+    await flowChatStore.loadRelaySessionHistory('peer-recovery');
+    expect(acceptRuntimeStatus).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'processing' }));
+    apiMocks.relaySyncError?.({ sessionId: 'peer-recovery', subscriptionId: 'recovery-subscription', targetDeviceId: PEER_SURFACE_ID, retrying: true, message: 'Reply lost' });
+    expect(flowChatStore.getState().sessions.get('peer-recovery')?.historyState).toBe('failed');
+    apiMocks.relayRecord?.({ sessionId: 'peer-recovery', subscriptionId: 'recovery-subscription', id: 'turn/turn-0', revision: 2, turn: stored });
+    apiMocks.relayReady?.({ sessionId: 'peer-recovery', subscriptionId: 'recovery-subscription', live: true, hasMore: false, oldestSeq: 1, cursor: 2 });
+    expect(flowChatStore.getState().sessions.get('peer-recovery')?.historyState).toBe('ready');
+    expect(acceptRuntimeStatus).toHaveBeenLastCalledWith(expect.objectContaining({ state: 'idle', turnId: 'turn-0' }));
+    expect(apiMocks.subscribeRelaySession).toHaveBeenCalledTimes(1);
   });
 
   it('retains mailbox questions across canonical updates and clears them when the owning turn completes', async () => {

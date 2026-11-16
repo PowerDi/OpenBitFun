@@ -237,3 +237,19 @@ test("TabGroup implements wrapped arrow, Home, and End navigation", async () => 
   assert.match(source, /enabledItems\.length/);
   assert.match(source, /onValueChange\?\.\(item\.value\)/);
 });
+
+test("TabGroup prevents accidental text selection on the tablist and tabs", async () => {
+  const styles = await readFile(
+    new URL("../src/components/TabGroup/TabGroup.module.css", import.meta.url),
+    "utf8",
+  );
+  const tabGroupRule = styles.match(/\.tabGroup\s*\{([^}]*)\}/s)?.[1];
+  const tabRule = styles.match(/\.tab\s*\{([^}]*)\}/s)?.[1];
+
+  assert.ok(tabGroupRule);
+  assert.ok(tabRule);
+  assert.match(tabGroupRule, /-webkit-user-select:\s*none;/);
+  assert.match(tabGroupRule, /user-select:\s*none;/);
+  assert.match(tabRule, /-webkit-user-select:\s*none;/);
+  assert.match(tabRule, /user-select:\s*none;/);
+});

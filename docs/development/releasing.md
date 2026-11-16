@@ -22,20 +22,50 @@ its tag automatically. Release creation and editing use GitHub CLI without
 `--target`: sending `target_commitish` for workflow-changing commits can require
 `workflows:write`, even for an existing tag. Asset upload precedes publication.
 
-## Recovering one macOS package
+## Release infrastructure after the repository transfer
+
+The official repository is `openBitFun/OpenBitFun` (GitHub repository ID
+`1147866277`). Official Actions use the repository ID for release-only settings
+such as the protected `main` history check and download mirror webhook. New
+official Relay images go to `ghcr.io/openbitfun/openbitfun-relay-server`.
+
+Set the organization package to public and give `openBitFun/OpenBitFun` write
+access under the package's **Manage Actions access** settings. If a first push
+creates the package as private, change its visibility and rerun the failed image
+job. The image job checks anonymous access before the Desktop Release can
+publish. Keep the public `gcwing/openbitfun-relay-server` package and its existing
+digests available for older releases.
+
+Deploy the updated mirror script from the official checkout before the first
+release in the organization namespace. The mirror synchronizes Desktop and CLI
+downloads independently of the Relay image descriptor.
+Finalizing trusted Actions artifacts from before the transfer can also reuse
+their original signed descriptor and the Windows updater format built by the
+original source. The standalone Relay deploy script tries the
+organization package first and can retry the same tag or digest in the old
+namespace. For a default `latest` request it resolves the current GitHub release
+tag before retrying the old namespace.
+
+For the optional Homebrew notification from `CLI Package`, set
+`HOMEBREW_TAP_REPOSITORY` to the tap's `owner/repository` and configure
+`HOMEBREW_TAP_DISPATCH_TOKEN`. Existing token-only configurations still target
+`GCWing/homebrew-tap`.
+
+## Recovering one Desktop package
 
 For an existing immutable tag, dispatch `Desktop Package` from the current
-`main` workflow with `target_platform=macos-arm64` or `macos-x64`. Keep
+`main` workflow with `target_platform=macos-arm64`, `macos-x64`, or `windows-x64`. Keep
 `release_channel` equal to the original build and enable `upload_to_release`
 to require release signing and produce updater signatures. This target option
 uploads only the selected platform's Actions artifact; it never publishes a
 GitHub Release, rebuilds Linux binaries, pushes the Relay image, or changes an
 update feed. `all`, the default, retains the complete release gate.
 
-Recovery runs have a separate concurrency group per Mac target, so they can
+Recovery runs have a separate concurrency group per target, so they can
 finish alongside an existing full matrix without cancelling it. Build source
-still resolves to the original tag SHA. Signature verification uses the pinned
-workflow revision, allowing a verification fix to apply without moving that tag.
+still resolves to the original tag SHA. macOS signature verification and Windows
+resource staging use the pinned workflow revision, allowing packaging fixes to
+apply without moving that tag.
 After recovery, dispatch the same workflow with `target_platform=all`, the
 original tag/channel, `upload_to_release=true`, and `artifact_run_ids` containing
 the original and recovery run IDs separated by commas. This skips all builders
@@ -191,7 +221,7 @@ The selected ref must resolve to a commit in the protected `main` history. The
 workflow pins that SHA before dispatching platform jobs and rejects an existing
 release tag if it points somewhere else. Configure the signing secrets and the
 public beta approval policy so untrusted pull-request code cannot access them.
-This protected-history requirement applies to the canonical `GCWing/OpenBitFun`
+This protected-history requirement applies to the canonical `openBitFun/OpenBitFun`
 repository; forks may run packaging from their own test branches. A fork beta
 uses that fork's `channel-v1-beta` release as both updater origins, so it cannot
 silently consume or mutate the canonical beta channel.
@@ -218,8 +248,8 @@ Production cron must run this in-repo script from the OpenBitFun checkout. Do no
 create a detached copy. Host-specific Nginx and restore paths belong to your own
 deployment and are not published here.
 The sync resolves the exact release directory from the updater manifest once;
-Relay and Linux metadata use that same directory to avoid mixed-version reads
-when GitHub's latest-release pointer changes. Publication also compares the
+Linux metadata uses that same directory to avoid mixed-version reads when
+GitHub's latest-release pointer changes. GitHub publication compares the
 downloaded Relay descriptor and signature to the image job's signed bytes.
 
 ## Focused packaging checks

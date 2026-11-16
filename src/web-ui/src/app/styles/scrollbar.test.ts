@@ -26,40 +26,55 @@ describe('shared native scrollbar presentation', () => {
   });
 
   it('preserves automatic track geometry and only releases explicitly opted-in hover tracks', () => {
-    const interactionRules = stylesheet.slice(
-      stylesheet.indexOf('@media (hover: hover)'),
-      stylesheet.indexOf('/* Opt-in hover viewports'),
+    const hoverStart = stylesheet.indexOf('/* Opt-in hover viewports');
+    const hiddenStart = stylesheet.indexOf('/* Explicit hidden viewports');
+    const interactionBlocks = Array.from(
+      stylesheet
+        .slice(0, hoverStart)
+        .matchAll(/@media \(hover: hover\) and \(pointer: fine\) and \(forced-colors: none\)\s*\{([\s\S]*?)\n    \}/g),
+      match => match[1],
     );
-    const hoverRules = stylesheet.slice(
-      stylesheet.indexOf('/* Opt-in hover viewports'),
-      stylesheet.indexOf('/* Explicit hidden viewports'),
-    );
+    const hoverRules = stylesheet.slice(hoverStart, hiddenStart);
+    const positiveRevealSelector =
+      ':where(:hover, :focus-visible, [data-openbitfun-scrollbar-visibility="always"], :root:not([data-openbitfun-focus-visible="false"]) :focus-within, :root:not([data-openbitfun-focus-visible="false"]):focus-within)';
 
-    expect(interactionRules).toContain('(pointer: fine) and (forced-colors: none)');
-    expect(interactionRules).toContain(
-      ':not(:hover, :focus-visible, :has(:focus-visible), [data-openbitfun-scrollbar-visibility="always"])',
-    );
-    expect(interactionRules).toContain('background: transparent;');
-    expect(interactionRules).toContain('scrollbar-color: transparent transparent;');
-    expect(interactionRules).not.toMatch(/(?:overflow|width|height|display|scrollbar-gutter)\s*:/);
+    expect(interactionBlocks).toHaveLength(2);
+    expect(interactionBlocks[0]).toContain('background: transparent;');
+    expect(interactionBlocks[0]).toContain(positiveRevealSelector);
+    expect(interactionBlocks[0]).toContain('background: var(--openbitfun-color-scrollbar-thumb);');
+    expect(interactionBlocks[1]).toContain('scrollbar-color: transparent transparent;');
+    expect(interactionBlocks[1]).toContain(positiveRevealSelector);
+    expect(interactionBlocks[1]).toContain('scrollbar-color: var(--openbitfun-color-scrollbar-thumb) transparent;');
+    for (const block of interactionBlocks) {
+      expect(block).not.toMatch(/(?:overflow|width|height|display|scrollbar-gutter)\s*:/);
+    }
+
     expect(hoverRules).toContain('@media (hover: hover) and (pointer: fine) and (forced-colors: none)');
     expect(hoverRules).toMatch(
-      /\[data-openbitfun-scrollbar-visibility="hover"\]:not\(:hover, :focus-visible, :has\(:focus-visible\)\)\s*\{\s*scrollbar-width:\s*none;/,
+      /\[data-openbitfun-scrollbar-visibility="hover"\]:not\(:hover, :focus-visible\):where\(:not\(:focus-within\), :root\[data-openbitfun-focus-visible="false"\]\[data-openbitfun-scrollbar-visibility="hover"\], :root\[data-openbitfun-focus-visible="false"\] \[data-openbitfun-scrollbar-visibility="hover"\]\)\s*\{\s*scrollbar-width:\s*none;/,
     );
     expect(hoverRules).toMatch(
-      /\[data-openbitfun-scrollbar-visibility="hover"\]:not\(:hover, :focus-visible, :has\(:focus-visible\)\)::-webkit-scrollbar\s*\{\s*display:\s*none;/,
+      /\[data-openbitfun-scrollbar-visibility="hover"\]:not\(:hover, :focus-visible\):where\(:not\(:focus-within\), :root\[data-openbitfun-focus-visible="false"\]\[data-openbitfun-scrollbar-visibility="hover"\], :root\[data-openbitfun-focus-visible="false"\] \[data-openbitfun-scrollbar-visibility="hover"\]\)::-webkit-scrollbar\s*\{\s*display:\s*none;/,
     );
+    const rulesOnly = stylesheet.replace(/\/\*[\s\S]*?\*\//g, '');
     expect(hoverRules).not.toMatch(/(?:overflow(?:-[xy])?|scrollbar-gutter)\s*:/);
-    expect(stylesheet).not.toMatch(/\.is-scrolling|:focus-within|!important/);
+    expect(rulesOnly).not.toMatch(/\[data-openbitfun-focus-visible="false"\]\s*\*/);
+    expect(rulesOnly).not.toMatch(/\.is-scrolling|:has\(|!important/);
   });
 
   it('guards standard width and color together so Safari 18 keeps the WebKit path', () => {
+    expect(stylesheet).toMatch(
+      /@supports not \(scrollbar-color: transparent transparent\)\s*\{[\s\S]*::-webkit-scrollbar\s*\{/,
+    );
     expect(stylesheet).toMatch(
       /@supports \(scrollbar-color: transparent transparent\)\s*\{[^{}]+\{\s*scrollbar-width:\s*thin;\s*scrollbar-color:\s*var\(--openbitfun-color-scrollbar-thumb\) transparent;/,
     );
     expect(stylesheet.match(/scrollbar-width:\s*thin/g)).toHaveLength(1);
     expect(stylesheet).toMatch(
-      /@media \(forced-colors: active\)[\s\S]*scrollbar-color:\s*auto;[\s\S]*background:\s*CanvasText;/,
+      /@media \(forced-colors: active\)\s*\{[\s\S]*?background:\s*CanvasText;/,
+    );
+    expect(stylesheet).toMatch(
+      /@media \(forced-colors: active\)\s*\{[^{}]+\{\s*scrollbar-color:\s*auto;/,
     );
   });
 

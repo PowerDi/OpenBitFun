@@ -69,14 +69,45 @@ export function removeProviderModelConfigs<T extends ProviderConfigLike>(
 ): { remaining: T[]; removed: T[] } {
   const remaining: T[] = [];
   const removed: T[] = [];
-  configs.forEach((config) => {
+  for (let index = 0; index < configs.length; index += 1) {
+    const config = configs[index];
     if (getProviderGroupKey(config) === providerGroupKey) {
       removed.push(config);
     } else {
       remaining.push(config);
     }
-  });
+  }
   return { remaining, removed };
+}
+
+export interface ProviderModelGroup<T extends ProviderConfigLike> {
+  key: string;
+  providerName: string;
+  providerId?: string;
+  models: T[];
+}
+
+/** Group models in first-seen order, resolving display metadata once per instance. */
+export function groupModelConfigsByProvider<T extends ProviderConfigLike>(
+  configs: readonly T[],
+): Map<string, ProviderModelGroup<T>> {
+  const grouped = new Map<string, ProviderModelGroup<T>>();
+  for (let index = 0; index < configs.length; index += 1) {
+    const config = configs[index];
+    const groupKey = getProviderGroupKey(config);
+    const existing = grouped.get(groupKey);
+    if (existing) {
+      existing.models.push(config);
+      continue;
+    }
+    grouped.set(groupKey, {
+      key: groupKey,
+      providerName: getProviderDisplayName(config),
+      providerId: getProviderTemplateId(config),
+      models: [config],
+    });
+  }
+  return grouped;
 }
 
 function inferProviderTemplate(config: ProviderConfigLike): ProviderTemplate | undefined {

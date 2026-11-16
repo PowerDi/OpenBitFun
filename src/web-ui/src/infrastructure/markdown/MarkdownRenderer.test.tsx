@@ -64,6 +64,8 @@ vi.mock('@/infrastructure/i18n', () => ({
   i18nService: {
     t: (key: string, options?: { defaultValue?: string }) => options?.defaultValue ?? key,
   },
+  // The image lightbox's copy action.
+  useI18n: () => ({ t: (key: string) => key }),
 }));
 
 vi.mock('@/infrastructure/appearance', () => ({
@@ -591,6 +593,8 @@ Second paragraph.
 <div align="center"><p>One</p><!-- comment -->text<p>Two</p><hr><p>Three</p></div>
 <table><tbody><tr><th>A</th><td>B</td><td>C</td><th>D</th><th>E</th></tr></tbody></table>`;
     await act(async () => root.render(<MarkdownRenderer content={content} />));
+    expect(container.querySelector('table[data-openbitfun-part="tableSurface"]')).not.toBeNull();
+    expect([...container.querySelectorAll('th')].every(node => node.getAttribute('data-openbitfun-part') === 'tableHeadingCell')).toBe(true);
     for (const [tag, className] of [
       ['p', 'markdown-paragraph'], ['li', 'markdown-list-item'],
       ['th', 'markdown-header-cell'], ['td', 'markdown-data-cell'],

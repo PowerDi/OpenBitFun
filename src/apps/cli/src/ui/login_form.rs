@@ -411,7 +411,7 @@ fn truncate_id(id: &str) -> String {
     if id.len() <= 8 {
         id.to_string()
     } else {
-        format!("{}…", &id[..8])
+        format!("{}…", id.chars().take(8).collect::<String>())
     }
 }
 
@@ -419,6 +419,12 @@ fn truncate_id(id: &str) -> String {
 mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;
+
+    #[test]
+    fn truncate_id_handles_multibyte_ids() {
+        assert_eq!(truncate_id(&"中".repeat(9)), format!("{}…", "中".repeat(8)));
+    }
+
     #[test]
     fn enter_starts_or_checks_the_host_owned_authorization() {
         let mut form = LoginFormState::new();

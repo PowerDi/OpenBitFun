@@ -41,13 +41,12 @@ import { useCatalogSessionStatus } from './catalogSessionStatus';
 import { openDeviceSession } from './openOnDevice';
 import { useSurfaceSessions } from './useSurfaceSessions';
 import { getChildSessionBadge } from '../sessions/sessionRowBadges';
-import { SessionTitleNumber } from '@/flow_chat/components/SessionTitleNumber';
 import { ExternalAgentIcon, sessionRowAgentIconClientId } from '@/shared/components/ExternalAgentIcon';
-import { useSessionTitleNumbers } from '@/flow_chat/hooks/useSessionTitleNumbers';
 import { resolveSessionRelationship } from '@/flow_chat/utils/sessionMetadata';
 import { sessionBelongsToWorkspaceNavRow } from '@/flow_chat/utils/sessionOrdering';
 import type { SidebarDeviceSlot } from './useSidebarDevices';
-import { CatalogSessionMenu, catalogSessionActionKey, runCatalogSessionAction } from './CatalogSessionMenu';
+import { CatalogSessionMenu } from './CatalogSessionMenu';
+import { catalogSessionActionKey, runCatalogSessionAction } from './catalogSessionActions';
 
 export interface BackgroundActions {
   pendingKey: string | null;
@@ -95,10 +94,9 @@ const BackgroundSessionRow: React.FC<{
   flat: boolean;
   /** Owning workspace name, shown in the flat view like the live row. */
   workspaceName?: string;
-  titleNumber?: string;
   /** Owning workspace name for menu copy (archived delete confirmation). */
   ownerWorkspaceName: string;
-}> = ({ slot, session, level, activity, actions, flat, workspaceName, titleNumber, ownerWorkspaceName }) => {
+}> = ({ slot, session, level, activity, actions, flat, workspaceName, ownerWorkspaceName }) => {
   const { t } = useI18n('common');
   const peer = usePeerDeviceModeOptional();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -218,7 +216,6 @@ const BackgroundSessionRow: React.FC<{
                 <ExternalAgentIcon clientId={agentIconClientId} className="openbitfun-nav-panel__inline-item-agent-icon" />
               ) : null}
               <OverflowText behavior="marquee" title="" className="openbitfun-nav-panel__inline-item-label">{title}</OverflowText>
-              <SessionTitleNumber number={titleNumber} />
             </span>
             {session.importedSource ? (
               <StatusPill className="openbitfun-nav-panel__inline-item-source-badge" tone="neutral">
@@ -264,7 +261,6 @@ export const BackgroundSessionList: React.FC<{
 }> = ({ slot, workspaceIds, actions, flat = false, workspaceNames }) => {
   const { t } = useI18n('common');
   const sessions = useSurfaceSessions(slot.surfaceId);
-  const titleNumbers = useSessionTitleNumbers(sessions);
   const ordering = useWorkspaceSessionViewStore(state => state.ordering);
   const show = useWorkspaceSessionViewStore(state => state.show);
   const filters = useWorkspaceSessionViewStore(state => state.filters);
@@ -336,7 +332,6 @@ export const BackgroundSessionList: React.FC<{
         return (
           <BackgroundSessionRow key={session.sessionId} slot={slot} session={session} level={level}
             activity={activities[session.sessionId]} actions={actions} flat={flat}
-            titleNumber={titleNumbers.get(session.sessionId)}
             workspaceName={flat ? ownerName : undefined}
             ownerWorkspaceName={ownerName || ownerId} />
         );

@@ -1217,6 +1217,7 @@ impl ClaudeNativeSession {
             user_input: input,
             original_user_input: original,
             user_message_metadata: metadata,
+            session_binding: None,
         }])
         .await?;
         state.index += 1;
@@ -1903,6 +1904,7 @@ impl ClaudeNativeSession {
                 user_input: prompt,
                 original_user_input: None,
                 user_message_metadata: None,
+                session_binding: None,
             },
         ])
         .await?;

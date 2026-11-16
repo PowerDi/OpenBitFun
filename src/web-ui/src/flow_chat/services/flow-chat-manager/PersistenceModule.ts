@@ -96,31 +96,89 @@ async function runSerialDialogTurnSave(
   await task;
 }
 
+function mixHashByte(state: { h1: number; h2: number }, code: number): void {
+  state.h1 = Math.imul(state.h1 ^ code, 16777619) >>> 0;
+  state.h2 = (Math.imul(state.h2, 33) + code) >>> 0;
+}
+
+function mixHashString(state: { h1: number; h2: number }, value: string): void {
+  mixHashByte(state, value.length);
+  for (let i = 0; i < value.length; i += 1) {
+    mixHashByte(state, value.charCodeAt(i));
+  }
+}
+
+function mixHashValue(state: { h1: number; h2: number }, value: unknown, seen: Set<object>): void {
+  if (value === null) {
+    mixHashByte(state, 1);
+    return;
+  }
+  if (value === undefined) {
+    mixHashByte(state, 2);
+    return;
+  }
+  const kind = typeof value;
+  if (kind === 'string') {
+    mixHashByte(state, 3);
+    mixHashString(state, value as string);
+    return;
+  }
+  if (kind === 'number') {
+    mixHashByte(state, 4);
+    mixHashString(state, Number.isFinite(value as number) ? String(value) : 'null');
+    return;
+  }
+  if (kind === 'boolean') {
+    mixHashByte(state, (value as boolean) ? 5 : 6);
+    return;
+  }
+  if (kind !== 'object') {
+    return;
+  }
+  const obj = value as object;
+  if (seen.has(obj)) {
+    mixHashByte(state, 7);
+    return;
+  }
+  seen.add(obj);
+  if (Array.isArray(obj)) {
+    mixHashByte(state, 8);
+    mixHashByte(state, obj.length);
+    for (let i = 0; i < obj.length; i += 1) {
+      mixHashValue(state, obj[i], seen);
+    }
+    seen.delete(obj);
+    return;
+  }
+  mixHashByte(state, 9);
+  const record = obj as Record<string, unknown>;
+  for (const key in record) {
+    if (Object.prototype.hasOwnProperty.call(record, key)) {
+      const child = record[key];
+      if (child !== undefined && typeof child !== 'function') {
+        mixHashString(state, key);
+        mixHashValue(state, child, seen);
+      }
+    }
+  }
+  seen.delete(obj);
+}
+
 /**
- * Calculate content hash for dialog turn (for deduplication)
+ * Calculate content hash for dialog turn (for deduplication) without allocating
+ * a multi-hundred-KB `JSON.stringify` buffer over tool results and round items.
  */
 export function calculateTurnHash(dialogTurn: DialogTurn): string {
-  const keyData = JSON.stringify({
-    status: dialogTurn.status,
-    roundsCount: dialogTurn.modelRounds.length,
-    lastRoundData: dialogTurn.modelRounds[dialogTurn.modelRounds.length - 1]
-      ? {
-          ...dialogTurn.modelRounds[dialogTurn.modelRounds.length - 1],
-          items: dialogTurn.modelRounds[dialogTurn.modelRounds.length - 1].items,
-        }
-      : null,
-    error: dialogTurn.error,
-    endTime: dialogTurn.endTime,
-    tokenUsage: dialogTurn.tokenUsage,
-  });
-  
-  let hash = 0;
-  for (let i = 0; i < keyData.length; i++) {
-    const char = keyData.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
-  }
-  return hash.toString(36);
+  const state = { h1: 2166136261, h2: 5381 };
+  const seen = new Set<object>();
+  const lastRound = dialogTurn.modelRounds[dialogTurn.modelRounds.length - 1] ?? null;
+  mixHashValue(state, dialogTurn.status, seen);
+  mixHashByte(state, dialogTurn.modelRounds.length);
+  mixHashValue(state, lastRound, seen);
+  mixHashValue(state, dialogTurn.error, seen);
+  mixHashValue(state, dialogTurn.endTime, seen);
+  mixHashValue(state, dialogTurn.tokenUsage, seen);
+  return `${state.h1.toString(36)}_${state.h2.toString(36)}`;
 }
 
 /**
@@ -604,8 +662,12 @@ export async function updateSessionMetadata(
           sessionId,
           requireSessionOwningWorkspaceId(session));
       }
-    } catch {
-      // ignore
+    } catch (error) {
+      // A full checkpoint merges into the stored record. Without it (an
+      // unreachable remote workspace, a transient read failure) the write
+      // would reset tags and title facts; the next checkpoint retries.
+      log.debug('Skipped session metadata checkpoint: stored record unreadable', { sessionId, error });
+      return;
     }
     if (!scope.isCurrent()) return;
 
@@ -624,17 +686,15 @@ export async function updateSessionMetadata(
       }
     }
 
+    // A remote-driven placeholder knows only a guessed title; until it adopts
+    // the host's record it must not rename the persisted session.
+    const defaultFields: UiSessionMetadataField[] = session.externalPlaceholder
+      ? ['tags', 'todos', 'unreadCompletion', 'needsUserAttention']
+      : ['sessionName', 'tags', 'todos', 'unreadCompletion', 'needsUserAttention', 'titleMetadata'];
     await sessionAPI.saveSessionMetadata(
       metadata,
       requireSessionOwningWorkspaceId(session),
-      fields ?? [
-        'sessionName',
-        'tags',
-        'todos',
-        'unreadCompletion',
-        'needsUserAttention',
-        'titleMetadata',
-      ]);
+      fields ?? defaultFields);
   } catch (error) {
     log.warn('Failed to update session metadata', { sessionId, error });
   }

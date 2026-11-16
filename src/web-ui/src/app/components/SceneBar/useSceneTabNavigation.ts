@@ -102,11 +102,23 @@ export function useSceneTabNavigation({
     const pending = pendingRevealRef.current;
     if (!pending) return;
     const tabs = tabsRef.current;
-    const activeTab = getTabElements().find(tab => tab.dataset.openbitfunValue === pending.id);
-    const activeItem = activeTab?.closest<HTMLElement>('[data-openbitfun-part="item"]') ?? activeTab;
-    if (!tabs || !activeItem) { pendingRevealRef.current = null; return; }
+    if (!tabs) { pendingRevealRef.current = null; return; }
 
     const visibleStart = tabs.scrollLeft;
+    const maxScrollLeft = Math.max(0, tabs.scrollWidth - tabs.clientWidth);
+    // Fast path: when the tab strip fits completely within its viewport and is
+    // already at origin, any clamped scroll target is 0. Avoid querying tab DOM
+    // nodes and calling `getBoundingClientRect()`, which otherwise forces an
+    // extra synchronous layout pass during session switches.
+    if (maxScrollLeft <= SCROLL_EDGE_EPSILON && visibleStart <= SCROLL_EDGE_EPSILON) {
+      pendingRevealRef.current = null;
+      return;
+    }
+
+    const activeTab = getTabElements().find(tab => tab.dataset.openbitfunValue === pending.id);
+    const activeItem = activeTab?.closest<HTMLElement>('[data-openbitfun-part="item"]') ?? activeTab;
+    if (!activeItem) { pendingRevealRef.current = null; return; }
+
     const visibleEnd = visibleStart + tabs.clientWidth;
     // TabGroup's item is nested in a positioned, draggable SceneBar wrapper.
     // Its offsetLeft belongs to that wrapper, not this scroll viewport.
@@ -121,7 +133,7 @@ export function useSceneTabNavigation({
       nextLeft = tabEnd - tabs.clientWidth;
     }
 
-    const target = Math.max(0, Math.min(nextLeft, tabs.scrollWidth - tabs.clientWidth));
+    const target = Math.max(0, Math.min(nextLeft, maxScrollLeft));
     if (Math.abs(target - visibleStart) <= SCROLL_EDGE_EPSILON) {
       pendingRevealRef.current = null;
       return;

@@ -112,6 +112,10 @@ describe('tokenUsageDisplay', () => {
   it('mirrors the runtime compression trigger budget', () => {
     expect(getCompressionTriggerTokens(128_000)).toBe(86_000);
     expect(getCompressionTriggerTokens(128_000, 16_000)).toBe(102_000);
+    expect(getCompressionTriggerTokens(256_000)).toBe(214_000);
+    expect(getCompressionTriggerTokens(256_000, 64_000)).toBe(182_000);
+    expect(getCompressionTriggerTokens(399_999)).toBe(357_999);
+    expect(getCompressionTriggerTokens(400_000)).toBe(326_000);
     expect(getCompressionTriggerTokens(1_000_000)).toBe(926_000);
   });
 

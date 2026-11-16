@@ -2,6 +2,7 @@ import { formatDuration } from '@/shared/utils/format';
 import type { DialogTurn, Session, TokenUsage } from '../types/flow-chat';
 import { LONG_CONTEXT_WARNING_THRESHOLD_TOKENS } from '@/shared/constants/modelContext';
 import { i18nService } from '@/infrastructure/i18n';
+import { automaticMaxOutputTokens } from '@/shared/utils/modelOutputTokens';
 import { formatTokenCount } from '@/shared/utils/tokenUsageFormatting';
 
 export const DEFAULT_MAX_CONTEXT_TOKENS = 128128;
@@ -35,7 +36,6 @@ export interface ModelSelectorTooltipDetails {
   warning?: string;
 }
 
-const AUTOMATIC_MAX_OUTPUT_TOKEN_TIERS = [8_000, 16_000, 24_000, 32_000, 64_000] as const;
 const AUTO_COMPRESSION_SAFETY_RESERVE_TOKENS = 10_000;
 
 export function formatCompactTokenCount(value: number): string {
@@ -45,14 +45,7 @@ export function formatCompactTokenCount(value: number): string {
   );
 }
 
-function automaticMaxOutputTokens(contextWindow: number): number {
-  const quarterContext = Math.floor(contextWindow / 4);
-  return [...AUTOMATIC_MAX_OUTPUT_TOKEN_TIERS]
-    .reverse()
-    .find(tier => tier <= quarterContext) ?? quarterContext;
-}
-
-/** Mirrors the runtime compression budget in execution_engine.rs. */
+/** Mirrors the runtime compression budget in context_budget.rs. */
 export function getCompressionTriggerTokens(
   contextWindow: number,
   configuredMaxOutputTokens?: number,

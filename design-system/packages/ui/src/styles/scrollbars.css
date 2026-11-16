@@ -9,29 +9,56 @@
  * tracks for edge-to-edge content.
  */
 @layer openbitfun.base {
-  :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar {
-    width: var(--openbitfun-scrollbar-width);
-    height: var(--openbitfun-scrollbar-width);
-    background: transparent;
-  }
+  /*
+   * Legacy WebKit fallback only when standard `scrollbar-color` is unavailable
+   * (e.g. Safari <= 18.1). Where `scrollbar-color` is supported, CSS Scrollbars
+   * Level 1 supersedes `::-webkit-scrollbar*` anyway, while universal
+   * `*::-webkit-scrollbar*` selectors still force WebKit style/layout work on
+   * every descendant node.
+   */
+  @supports not (scrollbar-color: transparent transparent) {
+    :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar {
+      width: var(--openbitfun-scrollbar-width);
+      height: var(--openbitfun-scrollbar-width);
+      background: transparent;
+    }
 
-  /* OS settings can expose the root, track pieces, buttons, and corner. */
-  :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-track,
-  :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-track-piece,
-  :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-corner,
-  :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-button,
-  :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-resizer {
-    background: transparent;
-  }
+    /* OS settings can expose the root, track pieces, buttons, and corner. */
+    :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-track,
+    :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-track-piece,
+    :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-corner,
+    :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-button,
+    :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-resizer {
+      background: transparent;
+    }
 
-  :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-thumb {
-    background: var(--openbitfun-color-scrollbar-thumb);
-    border-radius: var(--openbitfun-scrollbar-radius);
-  }
+    :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-thumb {
+      background: var(--openbitfun-color-scrollbar-thumb);
+      border-radius: var(--openbitfun-scrollbar-radius);
+    }
 
-  :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-thumb:hover,
-  :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-thumb:active {
-    background: var(--openbitfun-color-scrollbar-thumb-hover);
+    @media (hover: hover) and (pointer: fine) and (forced-colors: none) {
+      :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-thumb {
+        background: transparent;
+      }
+
+      :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility]):where(:hover, :focus-visible, [data-openbitfun-scrollbar-visibility="always"], :root:not([data-openbitfun-focus-visible="false"]) :focus-within, :root:not([data-openbitfun-focus-visible="false"]):focus-within)::-webkit-scrollbar-thumb {
+        background: var(--openbitfun-color-scrollbar-thumb);
+      }
+    }
+
+    :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-thumb:hover,
+    :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-thumb:active {
+      background: var(--openbitfun-color-scrollbar-thumb-hover);
+    }
+
+    @media (forced-colors: active) {
+      :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-thumb,
+      :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-thumb:hover,
+      :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-thumb:active {
+        background: CanvasText;
+      }
+    }
   }
 
   /*
@@ -43,22 +70,21 @@
       scrollbar-width: thin;
       scrollbar-color: var(--openbitfun-color-scrollbar-thumb) transparent;
     }
-  }
 
-  /*
-   * Hide only for a primary mouse/trackpad. Touch keeps a discoverable native
-   * thumb, and forced colors keeps the operating system's accessibility cues.
-   * Keyboard focus reveals its viewport without latching ordinary mouse focus.
-   * Scroll events (including streaming output) do not reveal an idle viewport.
-   */
-  @media (hover: hover) and (pointer: fine) and (forced-colors: none) {
-    :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility]):where(:not(:hover, :focus-visible, :has(:focus-visible), [data-openbitfun-scrollbar-visibility="always"]))::-webkit-scrollbar-thumb {
-      background: transparent;
-    }
-
-    @supports (scrollbar-color: transparent transparent) {
-      :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility]):where(:not(:hover, :focus-visible, :has(:focus-visible), [data-openbitfun-scrollbar-visibility="always"])) {
+    /*
+     * Hide only for a primary mouse/trackpad. Touch keeps a discoverable native
+     * thumb, and forced colors keeps the operating system's accessibility cues.
+     * Keyboard focus reveals its viewport without latching ordinary mouse focus.
+     * Expressing reveal positively avoids `:root[data-openbitfun-focus-visible="false"] *`,
+     * which otherwise invalidates every DOM element whenever focus modality flips.
+     */
+    @media (hover: hover) and (pointer: fine) and (forced-colors: none) {
+      :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility]) {
         scrollbar-color: transparent transparent;
+      }
+
+      :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility]):where(:hover, :focus-visible, [data-openbitfun-scrollbar-visibility="always"], :root:not([data-openbitfun-focus-visible="false"]) :focus-within, :root:not([data-openbitfun-focus-visible="false"]):focus-within) {
+        scrollbar-color: var(--openbitfun-color-scrollbar-thumb) transparent;
       }
     }
   }
@@ -66,11 +92,11 @@
   /* Opt-in hover viewports release idle tracks instead of only hiding paint.
      Native overflow still owns whether a track is needed when revealed. */
   @media (hover: hover) and (pointer: fine) and (forced-colors: none) {
-    [data-openbitfun-scrollbar-visibility="hover"]:not(:hover, :focus-visible, :has(:focus-visible)) {
+    [data-openbitfun-scrollbar-visibility="hover"]:not(:hover, :focus-visible):where(:not(:focus-within), :root[data-openbitfun-focus-visible="false"][data-openbitfun-scrollbar-visibility="hover"], :root[data-openbitfun-focus-visible="false"] [data-openbitfun-scrollbar-visibility="hover"]) {
       scrollbar-width: none;
     }
 
-    [data-openbitfun-scrollbar-visibility="hover"]:not(:hover, :focus-visible, :has(:focus-visible))::-webkit-scrollbar {
+    [data-openbitfun-scrollbar-visibility="hover"]:not(:hover, :focus-visible):where(:not(:focus-within), :root[data-openbitfun-focus-visible="false"][data-openbitfun-scrollbar-visibility="hover"], :root[data-openbitfun-focus-visible="false"] [data-openbitfun-scrollbar-visibility="hover"])::-webkit-scrollbar {
       display: none;
     }
   }
@@ -87,12 +113,6 @@
   @media (forced-colors: active) {
     :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility]) {
       scrollbar-color: auto;
-    }
-
-    :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-thumb,
-    :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-thumb:hover,
-    :where([data-openbitfun-design-system-root], [data-openbitfun-design-system-root] *, [data-openbitfun-scrollbar-visibility])::-webkit-scrollbar-thumb:active {
-      background: CanvasText;
     }
   }
 }

@@ -44,6 +44,7 @@ on:
           - all
           - macos-arm64
           - macos-x64
+          - windows-x64
       relay_image_only:
         description: "Publish only the Relay Server image and signed descriptor (no Desktop packages)."
         required: false
@@ -135,7 +136,8 @@ jobs:
 
           git fetch origin main --tags --force
           CHECKOUT_SHA="$(git rev-parse "${CHECKOUT_REF}^{commit}")"
-          if [[ "${GITHUB_REPOSITORY}" == "GCWing/OpenBitFun" ]] && \
+          # The official repository ID survives an owner or name change.
+          if [[ "${GITHUB_REPOSITORY_ID}" == "1147866277" ]] && \
              ! git merge-base --is-ancestor "${CHECKOUT_SHA}" origin/main; then
             echo "Ref ${CHECKOUT_REF} (${CHECKOUT_SHA}) is not part of the protected main history." >&2
             exit 1
@@ -175,14 +177,14 @@ jobs:
               (!/^\d+(,\d+)*$/.test(process.env.ARTIFACT_RUN_IDS) || target !== 'all' || process.env.RELAY_IMAGE_ONLY === 'true')) {
             throw new Error('Artifact finalization requires run IDs, target all, and no relay_image_only');
           }
-          if (!['all', 'macos-arm64', 'macos-x64'].includes(target)) {
+          if (!['all', 'macos-arm64', 'macos-x64', 'windows-x64'].includes(target)) {
             throw new Error(`Unsupported Desktop recovery target: ${target}`);
           }
           if (target !== 'all' && process.env.RELAY_IMAGE_ONLY === 'true') {
             throw new Error('A Desktop recovery target cannot be combined with relay_image_only');
           }
           if (process.env.VERIFICATION_RECOVERY_RUN_ID &&
-              (!/^\d+$/.test(process.env.VERIFICATION_RECOVERY_RUN_ID) || target === 'all' ||
+              (!/^\d+$/.test(process.env.VERIFICATION_RECOVERY_RUN_ID) || !target.startsWith('macos-') ||
                process.env.ARTIFACT_RUN_IDS || process.env.RELAY_IMAGE_ONLY === 'true' ||
                process.env.UPLOAD_TO_RELEASE !== 'true')) {
             throw new Error('Verification recovery requires one Mac target, signing, and no other recovery mode');
@@ -202,8 +204,8 @@ jobs:
       NODE_OPTIONS: --max-old-space-size=6144
       OPENBITFUN_ENABLE_UPDATER_ARTIFACTS: ${{ needs.prepare.outputs.upload_to_release }}
       OPENBITFUN_RELEASE_CHANNEL: ${{ needs.prepare.outputs.release_channel }}
-      TAURI_UPDATER_ENDPOINT: ${{ github.repository != 'GCWing/OpenBitFun' && (needs.prepare.outputs.release_channel == 'beta' && format('https://github.com/{0}/releases/download/channel-v1-beta/latest-v1.json', github.repository) || format('https://github.com/{0}/releases/latest/download/latest-v1.json', github.repository)) || '' }}
-      TAURI_UPDATER_FALLBACK_ENDPOINT: ${{ github.repository != 'GCWing/OpenBitFun' && (needs.prepare.outputs.release_channel == 'beta' && format('https://github.com/{0}/releases/download/channel-v1-beta/latest-v1.json', github.repository) || format('https://github.com/{0}/releases/latest/download/latest-v1.json', github.repository)) || '' }}
+      TAURI_UPDATER_ENDPOINT: ${{ github.repository_id != '1147866277' && (needs.prepare.outputs.release_channel == 'beta' && format('https://github.com/{0}/releases/download/channel-v1-beta/latest-v1.json', github.repository) || format('https://github.com/{0}/releases/latest/download/latest-v1.json', github.repository)) || '' }}
+      TAURI_UPDATER_FALLBACK_ENDPOINT: ${{ github.repository_id != '1147866277' && (needs.prepare.outputs.release_channel == 'beta' && format('https://github.com/{0}/releases/download/channel-v1-beta/latest-v1.json', github.repository) || format('https://github.com/{0}/releases/latest/download/latest-v1.json', github.repository)) || '' }}
       TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
       # Same trust root, compiled into the Desktop binary so one-click relay
       # deploy can verify the signed checksum locally and hand the remote host
@@ -331,11 +333,39 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - name: Resolve Bun executable cache
+        id: bun-cache-target
+        shell: bash
+        run: |
+          if [[ -f scripts/ci/bun-cache-target.mjs ]]; then
+            node scripts/ci/bun-cache-target.mjs 1.3.14
+          else
+            echo "::notice::Bun caching is unavailable for this older source revision; setup-bun will install it normally."
+          fi
+
+      - name: Restore Bun executable
+        id: bun-executable-cache
+        if: steps.bun-cache-target.outputs.key != ''
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ steps.bun-cache-target.outputs.path }}
+          key: ${{ steps.bun-cache-target.outputs.key }}
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.14"
           no-cache: true
+
+      - name: Save Bun executable
+        if: >-
+          (github.event_name == 'release' || github.event_name == 'workflow_dispatch') &&
+          steps.bun-cache-target.outputs.key != '' &&
+          steps.bun-executable-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ steps.bun-cache-target.outputs.path }}
+          key: ${{ steps.bun-cache-target.outputs.key }}
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -429,6 +459,14 @@ jobs:
           $ErrorActionPreference = 'Stop'
           # The payload manifest must hash the already signed desktop executable.
           $env:OPENBITFUN_INSTALLER_APP_EXE = 'target/x86_64-pc-windows-msvc/release/openbitfun-desktop.exe'
+          # The pinned workflow supplies packaging tools even for an older source tag.
+          git fetch --no-tags --depth=1 origin '${{ github.workflow_sha }}'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $stagingScript = Join-Path $env:RUNNER_TEMP 'stage-desktop-runtime.mjs'
+          git show '${{ github.workflow_sha }}:scripts/windows/stage-desktop-runtime.mjs' | Set-Content -Encoding utf8 $stagingScript
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node $stagingScript src/apps/desktop $env:OPENBITFUN_INSTALLER_APP_EXE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pnpm run installer:build:only
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ($env:WINDOWS_CERTIFICATE_THUMBPRINT) {
@@ -694,6 +732,10 @@ jobs:
           push: true
           provenance: false
           sbom: false
+          # Override the labels even when rebuilding a tag from before the transfer.
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
           build-args: |
             VERSION=${{ needs.prepare.outputs.version }}
             REVISION=${{ needs.prepare.outputs.release_tag }}
@@ -739,16 +781,6 @@ jobs:
           bash scripts/sign-release-assets.sh relay-image.json
           test -s relay-image.json.sig
 
-      - name: Upload signed image descriptor
-        uses: actions/upload-artifact@v6
-        with:
-          name: openbitfun-relay-image-${{ needs.prepare.outputs.release_tag }}
-          if-no-files-found: error
-          retention-days: 7
-          path: |
-            relay-image.json
-            relay-image.json.sig
-
       # The package is private on first creation. This deliberately fails until
       # its visibility is changed to public, preventing an apparently green
       # release that anonymous customer servers cannot pull.
@@ -763,6 +795,16 @@ jobs:
           trap 'rm -rf "$clean_config"' EXIT
           DOCKER_CONFIG="$clean_config" docker buildx imagetools inspect \
             "${IMAGE}@${IMAGE_DIGEST}" >/dev/null
+
+      - name: Upload signed image descriptor
+        uses: actions/upload-artifact@v6
+        with:
+          name: openbitfun-relay-image-${{ needs.prepare.outputs.release_tag }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            relay-image.json
+            relay-image.json.sig
 
       - name: Attach descriptor to an existing release (image-only backfill)
         if: needs.prepare.outputs.relay_image_only == 'true'
@@ -862,12 +904,20 @@ jobs:
         run: bash scripts/sign-release-assets.sh release-manual-assets/*.exe
 
       - name: Collect updater assets
+        shell: bash
+        env:
+          RELEASE_SOURCE: ${{ needs.prepare.outputs.checkout_ref }}
         run: |
-          node scripts/collect-tauri-updater-assets.mjs \
-            --assets-dir release-assets \
-            --version "${{ needs.prepare.outputs.version }}" \
-            --out-dir release-updater-assets \
-            --required-platforms "${REQUIRED_UPDATER_PLATFORMS}"
+          set -euo pipefail
+          # Releases predating the maintenance installer use the signed NSIS updater.
+          args=(--assets-dir release-assets --version "${{ needs.prepare.outputs.version }}"
+            --out-dir release-updater-assets --required-platforms "${REQUIRED_UPDATER_PLATFORMS}")
+          if git grep -q OPENBITFUN_MAINTENANCE_V1 "$RELEASE_SOURCE" -- OpenBitFun-Installer/src-tauri/src/installer/commands.rs; then
+            args+=(--windows-installer-dir release-manual-assets)
+          elif [[ $? != 1 ]]; then
+            exit 1
+          fi
+          node scripts/collect-tauri-updater-assets.mjs "${args[@]}"
 
       - name: Generate Linux binaries manifest
         run: |
@@ -931,6 +981,30 @@ jobs:
             --version "${{ needs.prepare.outputs.version }}" \
             --required-platforms "${REQUIRED_UPDATER_PLATFORMS}" \
             --required-manual-platforms "windows-x86_64,darwin-aarch64,darwin-x86_64"
+
+      - name: Verify staged Relay image descriptor
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          ARTIFACT_RUN_IDS: ${{ inputs.artifact_run_ids }}
+        run: |
+          set -euo pipefail
+          owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          image="ghcr.io/${owner}/openbitfun-relay-server"
+          legacy_image=""
+          # Trusted recovery artifacts may have been signed before the repository transfer.
+          if [[ "$GITHUB_REPOSITORY_ID" == "1147866277" && -n "$ARTIFACT_RUN_IDS" ]]; then
+            legacy_image="ghcr.io/gcwing/openbitfun-relay-server"
+          fi
+          jq -e --arg tag "$RELEASE_TAG" --arg version "$RELEASE_VERSION" \
+            --arg image "$image" --arg legacy "$legacy_image" '
+              .schema_version == 1 and .tag == $tag and .version == $version and
+              (.image == $image or ($legacy != "" and .image == $legacy)) and
+              (.platforms | sort == ["linux/amd64", "linux/arm64"]) and
+              (.digest | test("^sha256:[0-9a-f]{64}$"))
+            ' relay-image-assets/relay-image.json >/dev/null
+          test -s relay-image-assets/relay-image.json.sig
 
       - name: Stage release assets
         shell: bash
@@ -1072,11 +1146,6 @@ jobs:
           curl -fsSL --retry 5 --retry-delay 3 \
             "https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare.outputs.release_tag }}/relay-image.json" \
             -o relay-image.published.json
-          test "$(jq -r '.tag' relay-image.published.json)" = "${{ needs.prepare.outputs.release_tag }}"
-          test "$(jq -r '.version' relay-image.published.json)" = "${{ needs.prepare.outputs.version }}"
-          test "$(jq -r '.image' relay-image.published.json)" = "ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/openbitfun-relay-server"
-          jq -e '.platforms | sort == ["linux/amd64", "linux/arm64"]' relay-image.published.json >/dev/null
-          jq -e '.digest | test("^sha256:[0-9a-f]{64}$")' relay-image.published.json >/dev/null
           curl -fsSL --retry 5 --retry-delay 3 \
             "https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare.outputs.release_tag }}/relay-image.json.sig" \
             -o relay-image.published.json.sig
@@ -1176,7 +1245,7 @@ jobs:
       # still the source of truth, so a failed or unconfigured ping never fails
       # the release. Receiver: scripts/openbitfun-release-sync.sh.
       - name: Request openbitfun mirror sync
-        if: github.repository == 'GCWing/OpenBitFun'
+        if: github.repository_id == '1147866277'
         continue-on-error: true
         env:
           SYNC_WEBHOOK_URL: ${{ secrets.OPENBITFUN_SYNC_WEBHOOK_URL }}

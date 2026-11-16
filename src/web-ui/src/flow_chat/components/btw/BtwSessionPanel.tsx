@@ -243,7 +243,7 @@ const BtwSessionPanelContent: React.FC<BtwSessionPanelProps & { viewState: BtwPa
   const headerModelName = childKind === 'subagent'
     ? childSession?.config?.modelName?.trim()
     : childSession?.delegatedBy ? delegatedChildModelName(childSession) : undefined;
-  const [projectSession] = useState(createSessionVirtualItemProjector);
+  const [projectSession] = useState(() => createSessionVirtualItemProjector({ reuseSnapshotsAcrossMounts: true }));
   const sessionVirtualItems = useMemo(
     () => projectSession(childSession ?? null),
     [childSession, projectSession],

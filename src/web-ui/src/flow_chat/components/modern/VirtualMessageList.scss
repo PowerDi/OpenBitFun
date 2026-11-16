@@ -198,6 +198,10 @@
       visibility: visible;
     }
 
+    &[data-history-paging-sentinel='error'] {
+      pointer-events: auto;
+    }
+
     // A page that arrives quickly never flashes its spinner.
     &[data-history-paging-sentinel='loading'] > * {
       animation: history-paging-reveal 160ms ease-out 200ms both;

@@ -1105,6 +1105,7 @@ impl CodexNativeSession {
             user_input: input,
             original_user_input: original,
             user_message_metadata: metadata,
+            session_binding: None,
         }])
         .await?;
         state.index += 1;

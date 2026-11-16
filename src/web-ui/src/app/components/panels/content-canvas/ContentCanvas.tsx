@@ -5,7 +5,8 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { Toolbar } from '@openbitfun/ui';
-import { CanvasToolbarContribution, useExternalCanvasToolbar } from './CanvasToolbar';
+import { CanvasToolbarContribution } from './CanvasToolbar';
+import { useExternalCanvasToolbar } from './canvasToolbarContext';
 import { EditorArea } from './editor-area';
 import { AnchorZone } from './anchor-zone';
 import { MissionControl } from './mission-control';
@@ -86,7 +87,7 @@ export const ContentCanvas: React.FC<ContentCanvasProps> = ({
   const canvasScopeKey = useCanvasStore(state => state.scopeKey);
   const { workspace: currentWorkspace } = useCurrentWorkspace();
   const activeSessionId = useSyncExternalStore(
-    flowChatStore.subscribe.bind(flowChatStore),
+    notify => flowChatStore.subscribeSelector(s => s.activeSessionId, () => notify()),
     () => flowChatStore.getState().activeSessionId,
     () => flowChatStore.getState().activeSessionId,
   );

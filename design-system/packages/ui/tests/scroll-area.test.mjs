@@ -66,5 +66,10 @@ test("ScrollArea styling uses public scrollbar tokens and preserves native scrol
   assert.match(publishedStyles, /--openbitfun-color-scrollbar-thumb-hover/);
   assert.match(publishedStyles, /\[data-openbitfun-scrollbar-visibility\]/);
   assert.match(publishedStyles, /scrollbar-width:\s*none/);
+  // Universal legacy WebKit scrollbar rules must stay gated behind
+  // `@supports not (scrollbar-color: transparent transparent)` and avoid
+  // `:root[data-openbitfun-focus-visible="false"] *` full-tree invalidation.
+  assert.match(publishedStyles, /@supports not\s*\(scrollbar-color:\s*transparent transparent\)/);
+  assert.doesNotMatch(publishedStyles, /\[data-openbitfun-focus-visible="false"\]\s*\*/);
   assert.doesNotMatch(styles, /#[0-9a-f]{3,8}/i);
 });

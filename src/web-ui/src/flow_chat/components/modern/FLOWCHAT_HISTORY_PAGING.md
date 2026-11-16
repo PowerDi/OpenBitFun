@@ -3,10 +3,10 @@
 ## History loading presentation
 
 `HistorySessionLoadingBoundary` covers open intents, cold hydration and bookmark
-restoration with seven 24px lines and a rounded user bubble. Session loading
-indicators appear after 200 ms, including reduced-motion mode and new-session
-creation. The boundary retains the loading surface until the complete Turn and
-`data-open-viewport-settled` are ready. It then
+restoration with a centered muted `md` brand `Spinner`, matching the new-session
+and device-switch curtains. Session loading indicators appear after 200 ms,
+including reduced-motion mode and new-session creation. The boundary retains the
+loading surface until the complete Turn and `data-open-viewport-settled` are ready. It then
 publishes the transcript immediately in the same React commit. Warm session
 switches also pass through the viewport gate and display settled content immediately.
 
@@ -23,8 +23,8 @@ Session and surface-activation changes disconnect old readiness observers.
 Failures, inactive scenes and hidden documents release the loading surface.
 Streaming updates and virtual-window remounts retain the settled presentation.
 The old `historyOpenIntentSpinner` appearance part remains a hidden compatibility
-slot so installed appearance packages still validate. The skeleton is exposed
-through `historySkeleton`.
+slot so installed appearance packages still validate. The loading indicator
+container continues to be exposed through `historySkeleton`.
 
 ## Last-Turn opening
 
@@ -55,6 +55,19 @@ Source-read, hydrate and first-content-paint trace phases distinguish transport
 wait from presentation wait; fixture timings are not live-device performance.
 
 ## Inactive history residency
+
+Live Turns can arrive while a persisted Session is still metadata-only. Keep
+their bodies in canonical state, but do not cache a guessed local index as a
+global history ordinal while hydration is unresolved. An explicit catalog
+identity can locate the Turn; a storage index alone is not a chronological
+ordinal, because storage slots can have gaps.
+
+The first authoritative catalog invalidates unversioned cached ranges and
+their navigation tickets, just as a later catalog revision does. Canonical
+live Turns remain intact and are seeded at their resolved positions. The
+turn rail accepts a loaded candidate only when its known Turn ID and storage
+slot agree with the catalog entry. Slots without IDs retain legacy lazy
+loading, rather than borrowing an unrelated live Turn at the same local index.
 
 Reader bookmarks retain the semantic snapshot, intent and ordinal range, never
 the Turn bodies. A mounted primary, BTW or subagent transcript holds a history
@@ -228,6 +241,25 @@ request or attach exhaustion to a different window. Non-applied outcomes leave
 no pending ticket; errors/cancellation require a new reader action rather than
 a render-driven retry loop. Exhaustion is forgotten when its window/boundary
 changes. Session instances isolate the controller across session switches.
+
+Explicit source synchronization reserves the pager's presentation commit before
+reading the host: publishing the snapshot can move the rendered boundary, and
+must not cancel its own retry ticket. A cancelled request clears only its own
+loading state, fenced by the request slot, surface, Session and presentation
+owner. Errors remain retryable. Recovery accepts a changed host catalog revision
+even when its previews are incomplete; a cached complete catalog from an older
+revision cannot override that response. Same-revision complete previews and the
+ordinary Peer snapshot merge policy remain intact.
+
+An adjacent read can adopt a newer catalog and retire the store's active range
+even when its stale-response retry returns ready. The container reacquires the
+displayed reader range and confirms the adjacent page again before preparing
+the viewport. This uses the existing window reader and cache, not a full-history
+reload. Catalog, navigation-generation or range changes during preparation
+cancel the old commit and leave the boundary available for fresh reader demand.
+Repeated invalidation does not start a recursive retry. Actual read failures
+retain the displayed content and expose explicit synchronization; the error
+sentinel restores pointer interaction so its recovery button can be clicked.
 
 Opening and follow-output guards remain synchronous (`isFollowingOutputNow`),
 so the gesture that releases follow is evaluated against the new owner. Geometry

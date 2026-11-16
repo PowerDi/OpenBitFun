@@ -20,6 +20,19 @@ describe('Markdown presentation sections', () => {
     expect(clean(slices.flatMap(slice => parser.parse(slice).children))).toEqual(clean(parser.parse(source).children));
   });
 
+  it('keeps settled sections cached while a reply streams past many prefixes', () => {
+    const settled = prefix + '# Settled\n\n' + prefix;
+    const sections = markdownSections(settled);
+    let streaming = prefix;
+    for (let index = 0; index < 80; index += 1) {
+      streaming += `Streamed paragraph ${index}.\n\n`;
+      markdownSections(streaming, { streaming: true });
+    }
+    expect(markdownSections(settled)).toBe(sections);
+    // A streamed source and its settled read share the same boundaries.
+    expect(markdownSections(streaming)).toEqual(markdownSections(streaming, { streaming: true }));
+  });
+
   it.each(['\n', '\r\n', '\r'])('keeps complete semantic blocks and exact source with %j line endings', newline => {
     const document = (prefix + [
       '# Heading\n\nSetext heading\n---\n\n',
@@ -47,5 +60,14 @@ describe('Markdown presentation sections', () => {
   ])('retains whole-document dependencies: %s', dependent => {
     const source = prefix + dependent + '\n\n' + prefix;
     expect(markdownSections(source)).toEqual([{ start: 0, end: source.length }]);
+  });
+
+  it('splits technical documents with inline code generics, indexing, and < comparisons', () => {
+    const technical = (
+      'Use `Vec<u8>`, `Result<T, String>`, and `matrix[i][j]` whenever latency < 16 ms and a <= b.\n\n'
+    ).repeat(120);
+    const sections = markdownSections(technical, { streaming: true });
+    expect(sections.length).toBeGreaterThan(2);
+    expect(sections.map(section => technical.slice(section.start, section.end)).join('')).toBe(technical);
   });
 });

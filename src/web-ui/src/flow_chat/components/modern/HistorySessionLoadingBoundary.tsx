@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Spinner } from '@openbitfun/ui';
 import { FlowChatOpeningBoundary } from './FlowChatOpeningBoundary';
 import { SESSION_LOADING_DELAY_MS } from '../../services/sessionOpenIntent';
 import './HistorySessionLoadingBoundary.scss';
@@ -25,9 +26,6 @@ export function HistorySessionLoadingBoundary({
   const [state, setState] = useState<{ identity: string; phase: Phase }>({
     identity, phase: initialPhase,
   });
-  if (state.identity !== identity) {
-    setState({ identity, phase: initialPhase });
-  }
   const phase = state.identity === identity ? state.phase : initialPhase;
   const covering = !disabled && (loading || phase !== 'idle');
 
@@ -37,14 +35,15 @@ export function HistorySessionLoadingBoundary({
 
   useLayoutEffect(() => {
     const setPhase = (next: Phase) => setState(previous => (
-      previous.identity === identity && previous.phase !== next
-        ? { identity, phase: next }
-        : previous
+      previous.identity === identity && previous.phase === next
+        ? previous
+        : { identity, phase: next }
     ));
     // Inactive scenes expose their placeholder and recheck the viewport on resume.
     if (disabled) { setPhase(hasTranscript ? 'loading' : 'idle'); return; }
     if (loading) { setPhase('loading'); return; }
-    if (phase === 'idle') return;
+    if (phase === 'idle') { setPhase('idle'); return; }
+    setPhase('loading');
 
     const root = rootRef.current;
     const content = root?.querySelector<HTMLElement>('.history-session-loading__content');
@@ -119,27 +118,12 @@ export function HistorySessionLoadingBoundary({
   );
 }
 
-/** The history loading skeleton, shared with presentations that precede a session (a device switch). */
+/** Centered session loading indicator, aligned with new-session and device-switch curtains. */
 export function HistorySessionSkeleton() {
   return (
     <div className="history-session-skeleton" style={{ animationDelay: `${SESSION_LOADING_DELAY_MS}ms` }}
       aria-hidden="true" data-openbitfun-component="modern-flow-chat" data-openbitfun-part="historySkeleton">
-      <div className="history-session-skeleton__column">
-        <div className="history-session-skeleton__user"><span /><span /></div>
-        <div className="history-session-skeleton__group history-session-skeleton__group--first">
-          <span className="history-session-skeleton__bar" data-history-loading-line />
-          <span className="history-session-skeleton__bar" data-history-loading-line />
-          <span className="history-session-skeleton__bar" data-history-loading-line />
-        </div>
-        <div className="history-session-skeleton__group history-session-skeleton__group--second">
-          <span className="history-session-skeleton__bar" data-history-loading-line />
-          <span className="history-session-skeleton__bar" data-history-loading-line />
-        </div>
-        <div className="history-session-skeleton__group history-session-skeleton__group--third">
-          <span className="history-session-skeleton__bar" data-history-loading-line />
-          <span className="history-session-skeleton__bar" data-history-loading-line />
-        </div>
-      </div>
+      <Spinner size="md" />
     </div>
   );
 }

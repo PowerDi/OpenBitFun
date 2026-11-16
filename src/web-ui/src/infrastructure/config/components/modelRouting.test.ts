@@ -69,6 +69,11 @@ describe('backup channels', () => {
     expect(isEligibleBackup(model('legacy', { context_window: undefined }), model('small', { context_window: 32_000 }))).toBe(false);
   });
 
+  it('uses the host’s 400K context gate for the automatic 64K output tier', () => {
+    const primary = model('primary', { context_window: 256_000, max_tokens: 32_000 });
+    expect(isEligibleBackup(primary, model('backup', { context_window: 256_000 }))).toBe(true);
+  });
+
   it('stores empty routes as absent and drops stale manual choices', () => {
     expect(normalizeChannelRouting({ version: 1, fallback_model_ids: [] })).toBeUndefined();
     expect(normalizeChannelRouting({ version: 1, fallback_model_ids: ['b'], manual_channel: 'b' }))

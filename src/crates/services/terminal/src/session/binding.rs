@@ -100,14 +100,14 @@ impl TerminalSessionBinding {
         let terminal_session_id = options.session_id.unwrap_or_else(|| {
             format!(
                 "term-{}-{}",
-                &owner_id[..8.min(owner_id.len())],
+                owner_id.chars().take(8).collect::<String>(),
                 &uuid::Uuid::new_v4().to_string()[..8]
             )
         });
 
-        let session_name = options
-            .session_name
-            .unwrap_or_else(|| format!("Terminal-{}", &owner_id[..8.min(owner_id.len())]));
+        let session_name = options.session_name.unwrap_or_else(|| {
+            format!("Terminal-{}", owner_id.chars().take(8).collect::<String>())
+        });
 
         // Create the session
         let _session = session_manager
@@ -185,14 +185,17 @@ impl TerminalSessionBinding {
         let session_id = options.session_id.unwrap_or_else(|| {
             format!(
                 "bg-{}-{}",
-                &owner_id[..8.min(owner_id.len())],
+                owner_id.chars().take(8).collect::<String>(),
                 &uuid::Uuid::new_v4().to_string()[..8]
             )
         });
 
-        let session_name = options
-            .session_name
-            .unwrap_or_else(|| format!("Background-{}", &session_id[..8.min(session_id.len())]));
+        let session_name = options.session_name.unwrap_or_else(|| {
+            format!(
+                "Background-{}",
+                session_id.chars().take(8).collect::<String>()
+            )
+        });
 
         let _session = session_manager
             .create_session(

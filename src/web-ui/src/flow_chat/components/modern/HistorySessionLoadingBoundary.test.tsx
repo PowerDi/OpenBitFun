@@ -15,6 +15,8 @@ describe('history loading presentation handoff', () => {
   let media: MediaQueryList;
   let hidden: boolean;
   const action = vi.fn();
+  const presentationAnimate = vi.fn(() => { throw new Error('Presentation must be immediate'); });
+  const spinnerAnimate = vi.fn(() => ({ cancel: vi.fn(), play: vi.fn(), pause: vi.fn(), effect: null }) as unknown as Animation);
   const originalAnimate = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'animate');
   const transcript = (settled = true, content: React.ReactNode = 'Restored conversation') => (
     <div className="virtual-message-list" data-open-viewport-settled={String(settled)}>
@@ -38,6 +40,8 @@ describe('history loading presentation handoff', () => {
     root = createRoot(host);
     hidden = false;
     action.mockReset();
+    presentationAnimate.mockClear();
+    spinnerAnimate.mockClear();
     media = Object.assign(new EventTarget(), {
       media: '(prefers-reduced-motion: reduce)', matches: false,
     }) as MediaQueryList;
@@ -50,7 +54,12 @@ describe('history loading presentation handoff', () => {
     });
     Object.defineProperty(HTMLElement.prototype, 'animate', {
       configurable: true,
-      value: vi.fn(() => { throw new Error('Presentation must be immediate'); }),
+      value: function (this: HTMLElement, ...args: Parameters<HTMLElement['animate']>) {
+        if (this.closest('[data-openbitfun-component="spinner"]')) {
+          return spinnerAnimate.apply(this, args);
+        }
+        return presentationAnimate.apply(this, args);
+      },
     });
   });
 
@@ -70,7 +79,7 @@ describe('history loading presentation handoff', () => {
     expect(HTMLElement.prototype.getBoundingClientRect).not.toHaveBeenCalled();
     await act(async () => { element('.virtual-message-list').dataset.openViewportSettled = 'true'; });
     expect(phase()).toBe('idle');
-    expect(HTMLElement.prototype.animate).not.toHaveBeenCalled();
+    expect(presentationAnimate).not.toHaveBeenCalled();
     expect(HTMLElement.prototype.getBoundingClientRect).not.toHaveBeenCalled();
   });
 
@@ -131,7 +140,7 @@ describe('history loading presentation handoff', () => {
     clock.mockReturnValue(5_000 + elapsed);
     render({ loading: false });
     expect(phase()).toBe('idle');
-    expect(HTMLElement.prototype.animate).not.toHaveBeenCalled();
+    expect(presentationAnimate).not.toHaveBeenCalled();
     expect(element('.history-session-loading__content').style.opacity).toBe('');
     element('button').click();
     expect(action).toHaveBeenCalledOnce();
@@ -186,7 +195,7 @@ describe('history loading presentation handoff', () => {
     expect(element('.virtual-item-wrapper')).toBe(row);
     expect(row.style.cssText).toBe('');
     expect(element('.virtual-message-list').scrollTop).toBe(0);
-    expect(HTMLElement.prototype.animate).not.toHaveBeenCalled();
+    expect(presentationAnimate).not.toHaveBeenCalled();
   });
 
   it('guards invisible transcript actions until viewport readiness', async () => {
@@ -255,13 +264,26 @@ describe('history loading presentation handoff', () => {
     expect(phase()).toBe('idle');
   });
 
+  it('renders the compact brand spinner instead of full-pane skeleton bars', () => {
+    render();
+    const indicator = element('.history-session-skeleton');
+    const spinner = indicator.querySelector('[data-openbitfun-component="spinner"]');
+    expect(spinner?.getAttribute('data-size')).toBe('md');
+    expect(spinner?.getAttribute('data-variant')).toBe('logo');
+    expect(indicator.querySelector('[data-history-loading-line]')).toBeNull();
+    expect(indicator.querySelector('.history-session-skeleton__user')).toBeNull();
+    expect(spinnerAnimate).toHaveBeenCalled();
+    expect(presentationAnimate).not.toHaveBeenCalled();
+  });
+
   it('uses the same delayed indicator and immediate settled presentation with reduced motion', () => {
     Object.defineProperty(media, 'matches', { value: true });
     render();
     expect(element('.history-session-skeleton').style.animationDelay).toBe('200ms');
+    expect(spinnerAnimate).not.toHaveBeenCalled();
     render({ loading: false });
     expect(phase()).toBe('idle');
-    expect(HTMLElement.prototype.animate).not.toHaveBeenCalled();
+    expect(presentationAnimate).not.toHaveBeenCalled();
   });
 
   it('releases a hidden document without replaying when it becomes visible', async () => {
@@ -279,6 +301,6 @@ describe('history loading presentation handoff', () => {
     render({ loading: false });
     render({ loading: false, children: transcript(true, <pre key="new-row">New virtual window</pre>) });
     expect(phase()).toBe('idle');
-    expect(HTMLElement.prototype.animate).not.toHaveBeenCalled();
+    expect(presentationAnimate).not.toHaveBeenCalled();
   });
 });

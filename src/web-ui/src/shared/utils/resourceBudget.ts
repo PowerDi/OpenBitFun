@@ -88,15 +88,34 @@ if (import.meta.env.DEV || globalThis.__OPENBITFUN_PERF_TRACE_ENABLED__ === true
   globalThis.__OPENBITFUN_RESOURCE_BUDGET__ = { snapshot: () => resourceBudget.snapshot() };
 }
 
-/** No stringify-sized temporary copy. Shared references are counted once per working set. */
+function decimalDigitCount(index: number): number {
+  if (index < 10) return 1;
+  if (index < 100) return 2;
+  if (index < 1000) return 3;
+  if (index < 10000) return 4;
+  return String(index).length;
+}
+
+/** No stringify-sized temporary copy or Object.entries tuple allocations. Shared references are counted once per working set. */
 export function estimateRetainedBytes(value: unknown, seen = new Set<object>()): number {
   if (typeof value === 'string') return value.length * 2;
   if (!value || typeof value !== 'object') return 8;
   if (seen.has(value)) return 0;
   seen.add(value);
   let bytes = 32;
-  for (const [key, child] of Object.entries(value)) {
-    bytes += key.length * 2 + 8 + estimateRetainedBytes(child, seen);
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i += 1) {
+      if (i in value) {
+        bytes += decimalDigitCount(i) * 2 + 8 + estimateRetainedBytes(value[i], seen);
+      }
+    }
+    return bytes;
+  }
+  const record = value as Record<string, unknown>;
+  for (const key in record) {
+    if (Object.prototype.hasOwnProperty.call(record, key)) {
+      bytes += key.length * 2 + 8 + estimateRetainedBytes(record[key], seen);
+    }
   }
   return bytes;
 }

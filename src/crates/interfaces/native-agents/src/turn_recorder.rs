@@ -114,6 +114,7 @@ impl TurnRecorder {
                 user_input,
                 original_user_input,
                 user_message_metadata,
+                ..
             } => {
                 let now = now_ms();
                 let content = original_user_input
@@ -601,6 +602,7 @@ mod tests {
             user_input: "raw".into(),
             original_user_input: Some("fix it".into()),
             user_message_metadata: None,
+            session_binding: None,
         }
     }
 

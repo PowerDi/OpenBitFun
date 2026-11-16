@@ -26,11 +26,26 @@ function pruneEmptyBuckets(entries: OwnedRange[]): void {
   }
 }
 
+const SKIPPED_SUBTREE_SELECTOR = 'button, [aria-hidden="true"], .katex-mathml';
+
 function readRuns(root: HTMLElement): { runs: TextRun[]; text: string } {
-  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode: node => node.parentElement?.closest('button, [aria-hidden="true"], .katex-mathml')
-      ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
-  });
+  // Rejecting excluded elements at the element level skips their entire subtree
+  // in O(1) instead of walking `parentElement.closest(...)` up to document root
+  // for every text node in syntax-highlighted code blocks and tables.
+  const walker = root.ownerDocument.createTreeWalker(
+    root,
+    NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+    {
+      acceptNode: node => {
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          return (node as Element).matches(SKIPPED_SUBTREE_SELECTOR)
+            ? NodeFilter.FILTER_REJECT
+            : NodeFilter.FILTER_SKIP;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    },
+  );
   const runs: TextRun[] = [];
   let text = '';
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {

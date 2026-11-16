@@ -1,3 +1,4 @@
+import { automaticMaxOutputTokens } from '@/shared/utils/modelOutputTokens';
 import type {
   AIModelConfig,
   AuthConfig,
@@ -56,10 +57,9 @@ export function newAccountSlotId(provider: SubscriptionProvider): string {
 function channelInputCapacity(model: Pick<AIModelConfig, 'context_window' | 'max_tokens'>): number {
   const context = model.context_window ?? 128_128;
   const configured = model.max_tokens;
-  const quarter = Math.floor(context / 4);
   const output = configured && configured > 0 && configured * 100 <= context * 40
     ? configured
-    : [64_000, 32_000, 24_000, 16_000, 8_000].find(tier => tier <= quarter) ?? quarter;
+    : automaticMaxOutputTokens(context);
   return Math.max(0, context - output);
 }
 

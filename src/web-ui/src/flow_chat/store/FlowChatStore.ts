@@ -1,4 +1,5 @@
 import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
+import { isOutcomeUnknownError } from '@/infrastructure/api/errors/TauriCommandError';
 import { forgetAgentCanvasSession, removeBtwSessionFromAgentCanvas } from '@/app/components/panels/content-canvas/stores/canvasStore';
 import { resolveLegacySessionWorkspace } from '@/infrastructure/api/service-api/legacyWorkspaceCompatibility';
 import { projectUserQuestionTiming } from '../utils/userQuestionTiming';
@@ -769,6 +770,23 @@ function belongsToSupersededAttempt(item: AnyFlowItem, superseded: Set<string>):
 }
 
 /**
+ * Whether persisted round text accounts for what a live item painted. Live
+ * delivery is best-effort under load: chunks can be lost from the middle of a
+ * stream, leaving painted text with holes that is no longer a substring of the
+ * record. Its characters still appear in the record in order, while a record
+ * missing the round's later work cannot contain text painted beyond it.
+ */
+function paintedStreamTextIsCovered(settled: string, painted: string): boolean {
+  if (settled.includes(painted)) return true;
+  if (painted.length > settled.length) return false;
+  let next = 0;
+  for (let index = 0; index < settled.length && next < painted.length; index += 1) {
+    if (settled.charCodeAt(index) === painted.charCodeAt(next)) next += 1;
+  }
+  return next === painted.length;
+}
+
+/**
  * Whether a settled persisted Turn carries everything the projection painted.
  *
  * The persisted record of a settled Turn is built by the Runtime, while the
@@ -817,7 +835,7 @@ function settledReadCoversProjectedTurn(
       }
       if (item.type === 'text' || item.type === 'thinking') {
         const painted = comparableStreamText((item as RunningStreamItem).content);
-        if (painted && !settledText[item.type].includes(painted)) {
+        if (painted && !paintedStreamTextIsCovered(settledText[item.type], painted)) {
           return false;
         }
         continue;
@@ -2229,7 +2247,6 @@ function sessionFromPersistedMetadata(metadata: any, context: {
     titleSource: titleState.titleSource,
     titleI18nKey: titleState.titleI18nKey,
     titleI18nParams: titleState.titleI18nParams,
-    workspaceSessionNumber: titleState.workspaceSessionNumber,
     titleStatus: hasDynamicDefaultTitle ? undefined : 'generated',
     dialogTurns: [],
     status: 'idle',
@@ -2277,6 +2294,30 @@ function sessionFromPersistedMetadata(metadata: any, context: {
     deepReviewRunManifest: metadata.deepReviewRunManifest,
     reviewTargetEvidence: metadata.reviewTargetEvidence,
     isTransient: false,
+  };
+}
+
+/**
+ * A remote-driven placeholder becomes the persisted session: identity, title,
+ * binding and mode come from the host's record; the live Turns it already
+ * projected stay. Earlier Turns hydrate on open like any unopened session.
+ */
+function adoptPersistedMetadataIntoPlaceholder(placeholder: Session, persisted: Session): Session {
+  const hasEarlierTurns = (persisted.persistedTurnCount ?? 0) > placeholder.dialogTurns.length;
+  return {
+    ...persisted,
+    dialogTurns: placeholder.dialogTurns,
+    status: placeholder.status,
+    error: placeholder.error,
+    lastFinishedAt: placeholder.lastFinishedAt ?? persisted.lastFinishedAt,
+    lastActiveAt: Math.max(placeholder.lastActiveAt ?? 0, persisted.lastActiveAt ?? 0),
+    currentTokenUsage: placeholder.currentTokenUsage ?? persisted.currentTokenUsage,
+    btwThreads: placeholder.btwThreads ?? persisted.btwThreads,
+    isHistorical: placeholder.isHistorical || hasEarlierTurns,
+    historyState: placeholder.historyState === 'new' && !hasEarlierTurns
+      ? placeholder.historyState
+      : persisted.historyState,
+    externalPlaceholder: undefined,
   };
 }
 
@@ -2857,6 +2898,15 @@ export class FlowChatStore {
     const existing = this.sessionHistoryViews.get(sessionId);
     if (existing) {
       if (catalog !== undefined && existing.catalog === null) {
+        if (catalog && existing.loadedRanges.length > 0) {
+          // First catalog adoption versions previously unlocated live bodies.
+          // Their local offsets cannot vouch for global history ordinals.
+          existing.navigationGeneration += 1;
+          existing.pendingTargetOrdinal = null;
+          existing.activeRange = null;
+          existing.loadedRanges = [];
+          this.sessionHistoryTurnAccessTimes.delete(sessionId);
+        }
         existing.catalog = catalog;
       }
       return existing;
@@ -3250,7 +3300,17 @@ export class FlowChatStore {
     if (catalog.sessionId !== sessionId) {
       return;
     }
-    this.ensureSessionHistoryView(sessionId, catalog).catalog = catalog;
+    const view = this.ensureSessionHistoryView(sessionId, catalog);
+    if (view.catalog?.revision !== catalog.revision) {
+      // Catalog revisions also version the cached bodies and in-flight reads.
+      // A stale page can discover a rewrite before the next Session snapshot.
+      view.navigationGeneration += 1;
+      view.pendingTargetOrdinal = null;
+      view.activeRange = null;
+      view.loadedRanges = [];
+      this.sessionHistoryTurnAccessTimes.delete(sessionId);
+    }
+    view.catalog = catalog;
     this.setState(prev => {
       const session = prev.sessions.get(sessionId);
       if (!session) {
@@ -3770,22 +3830,21 @@ export class FlowChatStore {
     const entry = catalog?.entries.find(
       candidate => candidate.ordinal === normalizedTargetOrdinal,
     );
-    if (!session || !catalog || !entry) {
-      return {
-        status: 'not-found',
+    const notFound = (): SessionTurnWindowLoadResult => ({
+      status: 'not-found',
+      sessionId,
+      targetOrdinal: normalizedTargetOrdinal,
+      navigationGeneration: generation,
+      isCurrent: this.isSessionTurnWindowRequestCurrent(
         sessionId,
-        targetOrdinal: normalizedTargetOrdinal,
-        navigationGeneration: generation,
-        isCurrent: this.isSessionTurnWindowRequestCurrent(
-          sessionId,
-          generation,
-          normalizedTargetOrdinal,
-          source,
-        ),
-        cacheHit: false,
-        ...(catalog ? { catalog } : {}),
-      };
-    }
+        generation,
+        normalizedTargetOrdinal,
+        source,
+      ),
+      cacheHit: false,
+      ...(catalog ? { catalog } : {}),
+    });
+    if (!session || !catalog) return notFound();
 
     const cachedRange = view.loadedRanges.find(range =>
       range.startOrdinal <= normalizedTargetOrdinal
@@ -3793,7 +3852,22 @@ export class FlowChatStore {
     );
     if (cachedRange) {
       const cachedTarget = cachedRange.turns[normalizedTargetOrdinal - cachedRange.startOrdinal];
-      if (!entry.turnId || cachedTarget?.id === entry.turnId) {
+      // A live/optimistic Turn can be rendered before the next persisted
+      // catalog includes it. Only the current canonical tail can vouch for
+      // that ordinal; an unrelated stale cache entry cannot fill a catalog gap.
+      const canonicalTarget = !entry && cachedTarget
+        ? session.dialogTurns.find(turn => turn.id === cachedTarget.id)
+        : undefined;
+      const canonicalOrdinal = canonicalTarget
+        ? resolveDialogTurnIdentity(session, canonicalTarget)?.ordinal
+        : undefined;
+      const cachedStorageTurnIndex = cachedTarget
+        ? resolveStorageTurnIndex(session, cachedTarget)
+        : undefined;
+      if (cachedTarget && (entry
+        ? (!entry.turnId || cachedTarget.id === entry.turnId)
+          && (cachedStorageTurnIndex === undefined || cachedStorageTurnIndex === entry.storageTurnIndex)
+        : canonicalOrdinal === normalizedTargetOrdinal)) {
         const selected = selectTargetHistoryPresentationRange(
           cachedRange,
           normalizedTargetOrdinal,
@@ -3822,6 +3896,8 @@ export class FlowChatStore {
         };
       }
     }
+
+    if (!entry) return notFound();
 
     if (getActiveSurfaceId() !== 'local') {
       // Turn navigation reads the same canonical log replica. It never starts
@@ -4061,18 +4137,15 @@ export class FlowChatStore {
         };
       }
 
-      const isCurrent = this.isSessionTurnWindowRequestCurrent(
+      const currentCatalog = this.sessionHistoryViews.get(request.sessionId)?.catalog;
+      const catalogIsCurrent = !currentCatalog || currentCatalog.revision === request.catalog.revision;
+      const isCurrent = catalogIsCurrent && this.isSessionTurnWindowRequestCurrent(
         request.sessionId,
         request.generation,
         request.targetOrdinal,
         request.source,
       );
-      const currentCatalog = this.sessionHistoryViews.get(request.sessionId)?.catalog;
-      if (
-        isCurrent
-        || !currentCatalog
-        || currentCatalog.revision === request.catalog.revision
-      ) {
+      if (catalogIsCurrent) {
         this.updateAuthoritativeSessionTurnCatalog(request.sessionId, response.catalog);
       }
       if (response.status === 'stale' && request.staleRetryCount === 0 && isCurrent) {
@@ -4083,7 +4156,7 @@ export class FlowChatStore {
           );
         if (relocatedEntry) {
           const view = this.sessionHistoryViews.get(request.sessionId);
-          if (request.source === 'target' && view?.navigationGeneration === request.generation) {
+          if (request.source === 'target' && view) {
             view.pendingTargetOrdinal = relocatedEntry.ordinal;
           }
           return this.loadSessionTurnWindowAttempt({
@@ -4092,6 +4165,7 @@ export class FlowChatStore {
             targetStorageTurnIndex: relocatedEntry.storageTurnIndex,
             originalTargetTurnId: relocatedEntry.turnId ?? request.originalTargetTurnId,
             catalog: response.catalog,
+            generation: view?.navigationGeneration ?? request.generation,
             staleRetryCount: 1,
           });
         }
@@ -4780,7 +4854,6 @@ export class FlowChatStore {
         titleSource: titleState.titleSource,
         titleI18nKey: titleState.titleI18nKey,
         titleI18nParams: titleState.titleI18nParams,
-        workspaceSessionNumber: titleState.workspaceSessionNumber,
         titleStatus: undefined,
         dialogTurns: [],
         status: 'idle',
@@ -4840,6 +4913,10 @@ export class FlowChatStore {
       continuationPolicy?: Session['continuationPolicy'];
       isTransient?: boolean;
       agentBackedTransient?: boolean;
+      /** See `Session.externalPlaceholder`. */
+      externalPlaceholder?: boolean;
+      /** The host already holds earlier Turns; opening must hydrate them. */
+      persistedHistory?: boolean;
       deepReviewRunManifest?: Session['deepReviewRunManifest'];
       focusedReviewDisplayLabel?: Session['focusedReviewDisplayLabel'];
       reviewTargetEvidence?: Session['reviewTargetEvidence'];
@@ -4890,8 +4967,9 @@ export class FlowChatStore {
         mode: mode || 'Standard',
         lastUserDialogMode: undefined,
         lastSubmittedMode: undefined,
-        isHistorical: false,
-        historyState: 'new',
+        isHistorical: meta?.persistedHistory === true,
+        historyState: meta?.persistedHistory ? 'metadata-only' : 'new',
+        externalPlaceholder: meta?.externalPlaceholder || undefined,
         workspacePath,
         projectWorkspacePath: meta?.projectWorkspacePath,
         workspaceId: meta?.workspaceId,
@@ -4921,6 +4999,50 @@ export class FlowChatStore {
         ...prev,
         sessions: newSessions,
       };
+    });
+  }
+
+  /**
+   * Correct a remote-driven placeholder once an event names its owning
+   * workspace (an earlier event, such as image analysis, may have carried no
+   * binding). Sessions loaded from the host are never rebound here.
+   */
+  public rebindExternalPlaceholder(sessionId: string, binding: {
+    workspaceId?: string;
+    workspacePath?: string;
+    projectWorkspacePath?: string;
+    executionTarget?: Session['config']['executionTarget'];
+    remoteConnectionId?: string;
+    remoteSshHost?: string;
+    persistedHistory?: boolean;
+  }): void {
+    this.setState(prev => {
+      const existing = prev.sessions.get(sessionId);
+      if (!existing?.externalPlaceholder || !binding.workspaceId) return prev;
+      const historyState = binding.persistedHistory && existing.historyState === 'new'
+        ? 'metadata-only' as const
+        : existing.historyState;
+      if (existing.workspaceId === binding.workspaceId && historyState === existing.historyState) return prev;
+      const projectWorkspacePath = binding.projectWorkspacePath || binding.workspacePath;
+      const sessions = new Map(prev.sessions);
+      sessions.set(sessionId, {
+        ...existing,
+        workspaceId: binding.workspaceId,
+        workspacePath: binding.workspacePath ?? existing.workspacePath,
+        projectWorkspacePath: projectWorkspacePath ?? existing.projectWorkspacePath,
+        remoteConnectionId: binding.remoteConnectionId,
+        remoteSshHost: binding.remoteSshHost,
+        isHistorical: existing.isHistorical || historyState === 'metadata-only',
+        historyState,
+        config: {
+          ...existing.config,
+          workspaceId: binding.workspaceId,
+          workspacePath: binding.workspacePath ?? existing.config.workspacePath,
+          projectWorkspacePath: projectWorkspacePath ?? existing.config.projectWorkspacePath,
+          executionTarget: binding.executionTarget ?? existing.config.executionTarget,
+        },
+      });
+      return { ...prev, sessions };
     });
   }
 
@@ -5826,7 +5948,28 @@ export class FlowChatStore {
           // Session storage is resolved by workspace ID, so a session whose
           // workspace directory is gone must still reach the backend. Pre-ID
           // sessions fail loudly in sessionHistoryWorkspaceId.
-          await agentAPI.deleteSession(id, this.sessionHistoryWorkspaceId(id));
+          const workspaceId = this.sessionHistoryWorkspaceId(id);
+          try {
+            await agentAPI.deleteSession(id, workspaceId);
+          } catch (error) {
+            scope.assertCurrent('verify session deletion');
+            // A host deletion event may have confirmed the result before its
+            // RPC acknowledgement was lost. Otherwise only an authoritative
+            // read can settle an unknown outcome; never replay the mutation.
+            if (this.state.sessions.has(id)) {
+              if (scope.surfaceId === 'local' || !isOutcomeUnknownError(error)) throw error;
+              let confirmed = false;
+              try {
+                const { sessionAPI } = await import('@/infrastructure/api/service-api/SessionAPI');
+                scope.assertCurrent('read session deletion outcome');
+                confirmed = await sessionAPI.loadSessionMetadata(id, workspaceId) === null;
+              } catch (readError) {
+                log.warn('Could not verify peer session deletion', { sessionId: id, error: readError });
+              }
+              scope.assertCurrent('apply verified session deletion');
+              if (!confirmed) throw error;
+            }
+          }
           scope.assertCurrent('complete session deletion');
         }
         stateMachineManager.delete(id);
@@ -6194,6 +6337,15 @@ export class FlowChatStore {
       const catalog = updatedSession.turnCatalog?.sessionId === sessionId
         ? updatedSession.turnCatalog
         : undefined;
+      const storageTurnIndex = resolveStorageTurnIndex(updatedSession, dialogTurn);
+      const hasCatalogIdentity = catalog?.entries.some(entry => entry.turnId === dialogTurn.id
+        || (!entry.turnId && storageTurnIndex !== undefined && entry.storageTurnIndex === storageTurnIndex)) === true;
+      const historyUnresolved = updatedSession.historyState === 'metadata-only'
+        || updatedSession.historyState === 'hydrating'
+        || (updatedSession.isHistorical === true && updatedSession.isPartial !== true);
+      // Keep the live Turn in canonical state while lazy history is unknown.
+      // A local fallback ordinal is for presentation, not a global cache key.
+      if (historyUnresolved && !hasCatalogIdentity) return;
       const identity = resolveDialogTurnIdentity(updatedSession, dialogTurn);
       if (!identity) {
         return;
@@ -6489,10 +6641,11 @@ export class FlowChatStore {
     if (isUnmaterializedSessionDraft(surface.state.sessions.get(sessionId))) return;
     let history = surface.relaySessionHistory.get(sessionId);
     if (!history) {
+      this.rebaseRelaySessionReplica(sessionId);
       history = new RelaySessionHistory(sessionId,
         record => this.applyRelaySessionRecord(record),
         ready => {
-          this.finishRelaySessionResync(sessionId);
+          if (ready.live !== true) this.finishRelaySessionResync(sessionId);
           this.setState(previous => {
             const session = previous.sessions.get(sessionId);
             if (!session) return previous;
@@ -6505,7 +6658,12 @@ export class FlowChatStore {
             return { ...previous, sessions };
           });
           if (!ready.hasMore) this.refreshRelayTurnCatalog(sessionId);
-        }, error => {
+        }, (error, options) => {
+          if (options?.retrying) {
+            log.warn('Relay session sync interrupted; retaining subscription for recovery', { sessionId, error });
+            this.setSessionHistoryState(sessionId, 'failed');
+            return;
+          }
           log.error('Relay session history failed', { sessionId, error });
           this.setSessionHistoryState(sessionId, 'failed');
           // Retrying opens a fresh replay owner; a failed owner must not turn
@@ -6522,10 +6680,76 @@ export class FlowChatStore {
     }
     try { await history.open(); }
     catch (error) {
-      if (surface === this.activeSurface) this.setSessionHistoryState(sessionId, 'failed');
-      if (surface.relaySessionHistory.get(sessionId) === history) surface.relaySessionHistory.delete(sessionId);
+      // A retired reader (closed by a re-read or resync) cannot fail its replacement.
+      if (surface.relaySessionHistory.get(sessionId) === history) {
+        surface.relaySessionHistory.delete(sessionId);
+        if (surface === this.activeSurface) this.setSessionHistoryState(sessionId, 'failed');
+      }
       throw error;
     }
+  }
+
+  /**
+   * A new subscription reads the session from the host again. When the host's
+   * previous stream expired while nothing was subscribed (switched away, slept,
+   * failed open), it rebuilds the stream and stamps the snapshot with revisions
+   * the replica already holds or exceeds, so a turn that finished meanwhile
+   * would be rejected and keep running. The new subscription's records must
+   * supersede what earlier subscriptions delivered. This is not a host resync:
+   * held content, pending turns and rendered turns all stay.
+   */
+  private rebaseRelaySessionReplica(sessionId: string): void {
+    this.activeSurface.relaySessionRecords.get(sessionId)?.rebaseRevisions();
+  }
+
+  /**
+   * Re-read the session from the host when a controller fact can no longer be
+   * trusted, e.g. a stop that the host acknowledged without settling anything.
+   * The host projects a turn without a live executor as settled, so this is
+   * the authoritative way back from a stale running state. A subscription still
+   * waiting for its first page is already reading the host and is left alone.
+   */
+  public async reloadRelaySessionFromHost(sessionId: string): Promise<void> {
+    const surface = this.activeSurface;
+    if (surface.surfaceId === 'local' || !surface.state.sessions.has(sessionId)) return;
+    const history = surface.relaySessionHistory.get(sessionId);
+    if (history?.awaitingFirstPage()) return;
+    if (history) {
+      surface.relaySessionHistory.delete(sessionId);
+      history.close();
+    }
+    await this.loadRelaySessionHistory(sessionId);
+  }
+
+  /**
+   * Re-read the session from the host as a full resync, when the host may have
+   * removed turns without tombstones reaching this controller (a rollback whose
+   * reply was lost). The replay is reduced into a fresh replica and, at its
+   * ready, rendered turns it does not contain are pruned, exactly as after a
+   * host stream restart. Rendered turns stay until then.
+   */
+  public async resyncRelaySessionFromHost(sessionId: string): Promise<void> {
+    const surface = this.activeSurface;
+    if (surface.surfaceId === 'local' || !surface.state.sessions.has(sessionId)) return;
+    // Even a reader still awaiting its first page may have read a snapshot
+    // from before the mutation; it is replaced, not reused.
+    const history = surface.relaySessionHistory.get(sessionId);
+    if (history) {
+      surface.relaySessionHistory.delete(sessionId);
+      history.close();
+    }
+    this.beginRelaySessionResync(sessionId);
+    await this.loadRelaySessionHistory(sessionId);
+  }
+
+  /**
+   * Whether the rendered device's canonical records hold this turn. Only host
+   * records enter the replica, so an optimistic controller turn never counts.
+   */
+  public relayHostHasTurn(sessionId: string, turnId: string): boolean {
+    const surface = this.activeSurface;
+    if (surface.surfaceId === 'local') return false;
+    return surface.relaySessionRecords.get(sessionId)?.snapshot(turnId).turn != null;
   }
 
   private refreshRelayInteractionMailbox(sessionId: string): Promise<void> {
@@ -7972,6 +8196,7 @@ export class FlowChatStore {
         const seededSession = this.isRebuildableSeed(metadata.sessionId);
         const existingSession = seededSession ? undefined : this.state.sessions.get(metadata.sessionId);
         if ((existingSession?.workspaceId || existingSession?.config.workspaceId)
+          && !existingSession?.externalPlaceholder
           && !(existingSession?.sessionKind === 'subagent' && existingSession.continuationPolicy === undefined)
           && !existingSession?.externalHistory && !existingSession?.externalBranchOf
           && !metadata.customMetadata?.externalHistoryMode && !metadata.customMetadata?.externalBranchOf) {
@@ -8023,6 +8248,16 @@ export class FlowChatStore {
           if (!scope.isCurrent()) return prev;
           const existing = seededSession ? undefined : prev.sessions.get(metadata.sessionId);
           this.activeSurface.seededSessions.delete(metadata.sessionId);
+          if (existing?.externalPlaceholder) {
+            const sessions = new Map(prev.sessions);
+            sessions.set(metadata.sessionId, adoptPersistedMetadataIntoPlaceholder(
+              existing,
+              sessionFromPersistedMetadata(metadata, {
+                workspaceId, projectWorkspaceId, workspacePath, remoteConnectionId, remoteSshHost, maxContextTokens,
+              }),
+            ));
+            return { ...prev, sessions };
+          }
           if (existing) {
             const continuationPolicy = existing.continuationPolicy ?? relationship.continuationPolicy;
             const importedSource = metadata.customMetadata?.importedFrom ?? existing.importedSource;
@@ -8642,7 +8877,6 @@ export class FlowChatStore {
               titleSource: titleState.titleSource,
               titleI18nKey: titleState.titleI18nKey,
               titleI18nParams: titleState.titleI18nParams,
-              workspaceSessionNumber: titleState.workspaceSessionNumber,
               titleStatus: hasDynamicDefaultTitle ? undefined : 'generated',
               dialogTurns: [],
               status: 'idle',
@@ -8798,6 +9032,7 @@ export class FlowChatStore {
       requireActiveSession: true,
       shouldApply,
       shouldReplayRuntimeSnapshot: () => false,
+      synchronizeHistoryCatalog: true,
     });
     if (!result.applied && shouldApply?.() !== false && this.state.sessions.get(sessionId) !== session) {
       throw new Error('Session history changed during source synchronization');
@@ -8819,6 +9054,8 @@ export class FlowChatStore {
       requireActiveSession?: boolean;
       shouldApply?: () => boolean;
       shouldReplayRuntimeSnapshot?: (snapshot: SessionRuntimeEventSnapshot) => boolean;
+      /** Explicit recovery accepts a new host revision even if its previews are incomplete. */
+      synchronizeHistoryCatalog?: boolean;
     },
   ): Promise<PeerSessionSnapshotRefreshResult> {
     const scope = getActiveSurfaceScope();
@@ -9027,7 +9264,10 @@ export class FlowChatStore {
         }
       }
       const turnCatalog = restored.turnCatalog?.sessionId === sessionId
-        ? selectPreferredTurnCatalog(session.turnCatalog, restored.turnCatalog)
+        ? options?.synchronizeHistoryCatalog
+          && session.turnCatalog?.revision !== restored.turnCatalog.revision
+          ? restored.turnCatalog
+          : selectPreferredTurnCatalog(session.turnCatalog, restored.turnCatalog)
         : session.turnCatalog;
       const restoredAgentType = resolveRestoredAgentType(
         restored.session.agentType, session.mode, session.config.agentType,
@@ -9811,11 +10051,19 @@ export class FlowChatStore {
           });
         }
       }
-      if (activeTurnId && isSurfaceReconcileEnabled()) {
-        const { requestPeerSessionRefresh } = await import(
+      if (activeTurnId && (restoredRuntimeEventSnapshot || isSurfaceReconcileEnabled())) {
+        const { requestPeerSessionRefresh, requestRuntimeProjectionRepair } = await import(
           '../services/flow-chat-manager/PeerSessionRefreshModule'
         );
-        requestPeerSessionRefresh(sessionId);
+        scope.assertCurrent('request restored Runtime projection replay');
+        if (restoredRuntimeEventSnapshot) {
+          // The active Turn above is an empty journal-replay shell. A local
+          // reload also needs replay, even if this window never changed device.
+          // The stream gap survives a request made before refresh installation.
+          requestRuntimeProjectionRepair(sessionId);
+        } else {
+          requestPeerSessionRefresh(sessionId);
+        }
       }
       completeSessionMutationReconciliation(sessionId);
       startupTrace.markPhase('historical_session_hydrate_end', {
