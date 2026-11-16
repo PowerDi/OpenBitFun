@@ -19617,6 +19617,7 @@ pub(crate) mod tests {
                     user_input: "work".into(),
                     original_user_input: None,
                     user_message_metadata: None,
+                    session_binding: None,
                 },
                 None,
             )
