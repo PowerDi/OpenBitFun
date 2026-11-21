@@ -6429,7 +6429,7 @@ dependencies = [
 
 [[package]]
 name = "openbitfun-native-agents"
-version = "1.0.8"
+version = "1.0.12"
 dependencies = [
  "agent-client-protocol",
  "async-trait",

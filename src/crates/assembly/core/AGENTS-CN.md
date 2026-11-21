@@ -138,3 +138,10 @@ cargo test --locked -p openbitfun-core --no-default-features --features agent-ru
 ```
 
 这些测试覆盖本地夹具和模拟工作区策略，不代表已验证真实 SSH、Relay、Peer Device 或 Detached Dispatch 连接。
+
+Host history 与 native executor 活跃状态验证：
+`cargo test --locked -p openbitfun-core --no-default-features --features agent-runtime,git --lib load_relay_session_turns_`。
+Observer 必须保留已经进入本进程 EventQueue、尚无结束事件的 Turn；native executor
+不一定将 Core SessionState 置为 Processing。证据在队列排空和控制端断线后仍有效，
+但不跨宿主重启。测试覆盖 loaded-idle、unloaded、历史分页和遗留 checkpoint，
+不代表真实 Peer 连接已验证。

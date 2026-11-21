@@ -371,6 +371,30 @@ export interface AcpSessionOptionsChangedEvent {
   clientId: string;
 }
 
+export interface SubmitAcpPermissionResponseRequest {
+  permissionId: string;
+  approve: boolean;
+  optionId?: string;
+}
+
+export interface AcpPermissionOption {
+  optionId: string;
+  name: string;
+  kind: 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always';
+}
+
+export interface AcpPermissionRequestEvent {
+  permissionId: string;
+  sessionId: string;
+  toolCall?: {
+    toolCallId?: string;
+    title?: string;
+    rawInput?: unknown;
+    content?: unknown;
+  };
+  options?: AcpPermissionOption[];
+}
+
 const LOCAL_REQUIREMENT_CACHE_KEY = '__local__';
 export const ACP_REQUIREMENTS_INVALIDATED_EVENT = 'openbitfun:acp-requirements-invalidated';
 const CLIENT_LIST_CACHE_TTL_MS = 1000;
@@ -639,6 +663,12 @@ export class ACPClientAPI {
     };
 
     await ACPClientAPI.saveJsonConfig(JSON.stringify(config, null, 2));
+  }
+
+  static async submitPermissionResponse(
+    request: SubmitAcpPermissionResponseRequest
+  ): Promise<void> {
+    return api.invoke('submit_acp_permission_response', { request });
   }
 
   static async createFlowSession(

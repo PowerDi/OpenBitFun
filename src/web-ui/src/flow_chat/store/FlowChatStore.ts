@@ -93,6 +93,7 @@ import {
   deriveLastFinishedAtFromMetadata,
   deriveSessionRelationshipFromMetadata,
   normalizeSessionRelationship,
+  delegatingSessionIdFromMetadata,
 } from '../utils/sessionMetadata';
 import { sessionOwningWorkspaceId } from '../utils/sessionOrdering';
 import { sessionProjectWorkspacePath } from '../utils/sessionWorkspace';
@@ -978,10 +979,12 @@ function persistedReadMayReplaceTurn(
   incoming: DialogTurn,
   hostExecutingTurnId: string | undefined,
   hostServesRuntimeProjection: boolean,
-  hostStateKnown = false,
+  hostConfirmsTerminalRecord = false,
 ): boolean {
+  // Only a raw terminal record can settle a stream-owned Turn. Converting an
+  // in-progress checkpoint to an interrupted UI row is not host evidence.
   if (
-    hostStateKnown &&
+    hostConfirmsTerminalRecord &&
     incoming.id !== hostExecutingTurnId &&
     isSettledTurnStatus(incoming.status)
   ) {
@@ -1034,7 +1037,7 @@ function coerceRuntimeEventSnapshot(
   sessionId: string,
   backendActive: boolean,
   fallbackActiveTurnId?: string,
-  executionProjection?: 'acp',
+  executionProjection?: 'acp' | 'native',
 ): SessionRuntimeEventSnapshot | undefined {
   if (
     (!backendActive && executionProjection !== 'acp') ||
@@ -1364,6 +1367,7 @@ function normalizeSupersededItem(item: AnyFlowItem, endedAt: number): AnyFlowIte
       ...toolItem,
       status: 'cancelled',
       requiresConfirmation: false,
+      acpPermission: undefined,
       isParamsStreaming: false,
       interruptionReason: 'retry_superseded',
       endTime: toolItem.endTime ?? endedAt,
@@ -4951,6 +4955,7 @@ export class FlowChatStore {
       projectWorkspaceId?: string;
       executionTarget?: Session['config']['executionTarget'];
       workspaceId?: string;
+      delegatedBy?: string;
     },
     remoteConnectionId?: string,
     remoteSshHost?: string
@@ -5001,6 +5006,7 @@ export class FlowChatStore {
         projectWorkspaceId: meta?.projectWorkspaceId,
         remoteConnectionId,
         remoteSshHost,
+        delegatedBy: meta?.delegatedBy,
         parentSessionId: relationship.parentSessionId,
         sessionKind: relationship.sessionKind,
         parentToolCallId: relationship.parentToolCallId,
@@ -8287,19 +8293,21 @@ export class FlowChatStore {
             const importedSource = metadata.customMetadata?.importedFrom ?? existing.importedSource;
             const externalHistory = externalHistoryFromMetadata(metadata.customMetadata);
             const externalBranchOf = metadata.customMetadata?.externalBranchOf;
+            const delegatedBy = delegatingSessionIdFromMetadata(metadata) ?? existing.delegatedBy;
             const followedFields = externalHistory ? { ...titleState, lastActiveAt: metadata.lastActiveAt } : {};
             if (existing.workspaceId || existing.config.workspaceId || !workspaceId) {
               if (continuationPolicy === existing.continuationPolicy && importedSource === existing.importedSource
+                && delegatedBy === existing.delegatedBy
                 && (!externalHistory || (existing.title === titleState.title && existing.lastActiveAt === metadata.lastActiveAt))
                 && JSON.stringify(externalHistory) === JSON.stringify(existing.externalHistory)
                 && JSON.stringify(externalBranchOf) === JSON.stringify(existing.externalBranchOf)) return prev;
               const sessions = new Map(prev.sessions);
-              sessions.set(metadata.sessionId, { ...existing, ...followedFields, continuationPolicy, importedSource, externalHistory, externalBranchOf });
+              sessions.set(metadata.sessionId, { ...existing, ...followedFields, continuationPolicy, importedSource, externalHistory, externalBranchOf, delegatedBy });
               return { ...prev, sessions };
             }
             const sessions = new Map(prev.sessions);
             sessions.set(metadata.sessionId, {
-              ...existing, ...followedFields, workspaceId, projectWorkspaceId, continuationPolicy, importedSource, externalHistory, externalBranchOf,
+              ...existing, ...followedFields, workspaceId, projectWorkspaceId, continuationPolicy, importedSource, externalHistory, externalBranchOf, delegatedBy,
               workspacePath: metadata.workspacePath || workspacePath,
               projectWorkspacePath: metadata.projectWorkspacePath || workspacePath,
               ...remoteScope,
@@ -8907,6 +8915,7 @@ export class FlowChatStore {
               importedSource: metadata.customMetadata?.importedFrom,
               externalHistory: externalHistoryFromMetadata(metadata.customMetadata),
               externalBranchOf: metadata.customMetadata?.externalBranchOf,
+              delegatedBy: delegatingSessionIdFromMetadata(metadata),
               config: {
                 agentType: restoredAgentType,
                 modelName: metadata.modelName,
@@ -9101,7 +9110,7 @@ export class FlowChatStore {
     // This snapshot describes the device it was read from; reconciling it into
     // the surface that is rendered now would merge two devices' turns.
     scope.assertCurrent('refreshPeerSessionSnapshot');
-    if (isAcpFlowSession(initialSession) && restored.executionProjection !== 'acp'
+    if (isAcpFlowSession(initialSession) && !restored.executionProjection
       && isRuntimeSessionProjectionStale(scope.surfaceId, sessionId)) {
       this.setSessionHistoryState(sessionId, 'failed');
       throw new Error('ACP execution recovery is not supported by this host');
@@ -9132,6 +9141,8 @@ export class FlowChatStore {
     const runtimeReplaySnapshot = runtimeEventReplayRequired
       ? runtimeEventSnapshot
       : undefined;
+    const hostTerminalTurnIds = new Set(restored.turns
+      .filter(turn => isSettledTurnStatus(turn.status)).map(turn => turn.turnId));
     const snapshotTurns = this.convertToDialogTurns(restored.turns, { activeTurnId }).map(turn =>
       runtimeReplaySnapshot && turn.id === runtimeReplaySnapshot.activeTurnId
         ? asRuntimeReplayTurn(turn)
@@ -9180,7 +9191,7 @@ export class FlowChatStore {
               snapshotTurn,
               activeTurnId,
               Boolean(runtimeEventSnapshot),
-              true,
+              hostTerminalTurnIds.has(snapshotTurn.id),
             )
           ) {
             continue;
@@ -9260,7 +9271,7 @@ export class FlowChatStore {
             snapshotTurn,
             activeTurnId,
             Boolean(runtimeEventSnapshot),
-            true,
+            hostTerminalTurnIds.has(snapshotTurn.id),
           )
         ) {
           mergedTurns[existingIndex] = isRuntimeReplayTurn
@@ -9467,7 +9478,7 @@ export class FlowChatStore {
           reconciled,
           hostExecutingTurnId,
           Boolean(runtimeSnapshot),
-          true,
+          isSettledTurnStatus(restored.turns.find(turn => turn.turnId === turnId)?.status),
         )
       ) {
         return prev;
@@ -9792,7 +9803,7 @@ export class FlowChatStore {
               // Older hosts have only a native Runtime snapshot, which is
               // not an execution fact for an ACP prompt. Keep their existing
               // persisted-history fallback instead of treating it as idle.
-              if (!isAcpSession || restored.executionProjection === 'acp') {
+              if (!isAcpSession || restored.executionProjection === 'acp' || restored.executionProjection === 'native') {
                 restoredSessionInfo = restored.session;
                 turns = restored.turns;
                 contextRestoreState =
@@ -9958,6 +9969,8 @@ export class FlowChatStore {
       const activeTurnId = isBackendSessionActivelyProcessing(restoredSessionInfo?.state)
         ? restoredRuntimeEventSnapshot?.activeTurnId ?? turns[turns.length - 1]?.turnId
         : undefined;
+      const hostTerminalTurnIds = new Set(turns
+        .filter(turn => isSettledTurnStatus(turn.status)).map(turn => turn.turnId));
       const dialogTurns = this.convertToDialogTurns(turns, { activeTurnId }).map(turn =>
         restoredRuntimeEventSnapshot && turn.id === activeTurnId
           ? asRuntimeReplayTurn(turn)
@@ -9993,7 +10006,8 @@ export class FlowChatStore {
               loaded,
               activeTurnId,
               Boolean(restoredRuntimeEventSnapshot),
-              Boolean(restoredSessionInfo?.state),
+              Boolean(restoredSessionInfo?.state)
+                && hostTerminalTurnIds.has(loaded.id),
             )
           ) {
             return existing;
@@ -10296,6 +10310,7 @@ export class FlowChatStore {
               aiIntent: tool.aiIntent,
               requiresConfirmation: tool.requiresConfirmation,
               userConfirmed: tool.userConfirmed,
+              acpPermission: tool.acpPermission,
               startTime: tool.startTime,
               endTime: tool.endTime,
               durationMs: tool.durationMs,

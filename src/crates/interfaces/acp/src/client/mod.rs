@@ -26,7 +26,10 @@ pub use execution::{
     AcpEventCursor, AcpEventProjectionSnapshot, AcpExecutionSnapshot, AcpProjectionJournal,
 };
 pub use external_session_port::NativeExternalSessionPort;
-pub use manager::{AcpClientService, SetAcpSessionConfigOptionRequest, SetAcpSessionModelRequest};
+pub use manager::{
+    AcpClientPermissionResponse, AcpClientService, SetAcpSessionConfigOptionRequest,
+    SetAcpSessionModelRequest, SubmitAcpPermissionResponseRequest,
+};
 pub use openbitfun_native_agents::session_options::{
     AcpAvailableCommand, AcpPlanEntry, AcpSessionConfigKind, AcpSessionConfigOption,
     AcpSessionConfigSelectOption, AcpSessionConfigValue, AcpSessionContextUsage,

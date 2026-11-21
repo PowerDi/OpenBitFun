@@ -38,3 +38,16 @@ Desktop 注入既有的会话事件日志，通过可选的 `executionProjection
 协议接收器仍串行持有；按会话保存的 watch 快照支持长请求或变更期间的读取。
 首次读取等待快照发布或初始化锁释放；模型、配置变更和流内元数据更新后发布新快照。
 空闲读取仍排空待处理通知；重建连接不得复用旧快照，不能增加第二个协议流读取者来解决阻塞。
+
+普通 ACP 审批保留 `backend-event-acppermissionrequest` 与
+`submit_acp_permission_response`，兼容已有客户端及 Peer 控制端。
+Native 审批只通过 runtime mailbox，旧响应命令不得转发到 native driver。
+`client::manager::tests::legacy_permission_payloads` 覆盖旧请求与响应往返。
+
+## Native agent drivers
+
+Claude Code、Codex、Pi 驱动及共享外部 CLI 工具归
+[`openbitfun-native-agents`](../native-agents/AGENTS.md)。`client::native`
+继续重新导出该 crate；ACP manager 保留会话准备，运行与队列通过 external-session port
+连接 scheduler。持久化标识和 session options 的 wire shape 保持兼容。
+Session options 验证：`cargo test -p openbitfun-native-agents --lib session_options::tests`。

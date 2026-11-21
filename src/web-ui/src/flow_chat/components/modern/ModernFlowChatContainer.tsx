@@ -40,6 +40,7 @@ import { useFlowChatFileActions } from './useFlowChatFileActions';
 import { useFlowChatNavigation } from './useFlowChatNavigation';
 import { useFlowChatCopyDialog } from './useFlowChatCopyDialog';
 import { useFlowChatSync } from './useFlowChatSync';
+import { useFlowChatToolActions } from './useFlowChatToolActions';
 import { useFlowChatSearch } from './useFlowChatSearch';
 import { TrajectoryExplorer, type TrajectoryExplorerRef, type TrajectorySearchState, type TrajectorySelection } from '../../trajectory/TrajectoryExplorer';
 import { trajectoryNodeKey } from '../../trajectory/trajectoryModel';
@@ -74,8 +75,7 @@ import { useConversationViewScope } from '../../contexts/conversationViewScope';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import { flowChatSessionConfigForCurrentWorkspace } from '@/app/utils/projectSessionWorkspace';
 import { createLogger } from '@/shared/utils/logger';
-import { parsePullRequestUrl } from '@/shared/utils/pullRequestLinks';
-import { createBackgroundCommandOutputTab, createReviewPlatformPullRequestDetailTab } from '@/shared/utils/tabUtils';
+import { createBackgroundCommandOutputTab } from '@/shared/utils/tabUtils';
 import { useFlowChatHttpLinkClick } from './useFlowChatHttpLinkClick';
 import { externalAgentSupports } from '../../utils/externalAgentCapabilities';
 import { useExternalAgentCapabilities } from '../../hooks/useExternalAgentCapabilities';
@@ -770,6 +770,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     onCollapseGroup: handleCollapseGroup,
   } = useFlowGroupState(virtualItems, undefined, activeSession?.sessionId, undefined,
     surfaceScope.key('flow-group-feedback', surfaceScope.epoch, activeSession?.sessionId ?? ''));
+  const { handleToolConfirm, handleToolReject } = useFlowChatToolActions();
 
   const { handleFileViewRequest } = useFlowChatFileActions({
     sessionId: activeSession?.sessionId,
@@ -1102,6 +1103,8 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     onTabOpen,
     onHttpLinkClick: handleHttpLinkClick,
     onOpenVisualization,
+    onToolConfirm: handleToolConfirm,
+    onToolReject: handleToolReject,
     sessionId: activeSessionId,
     workspaceId: activeSessionWorkspaceId,
     workspacePath: activeSessionWorkspacePath,
@@ -1121,6 +1124,8 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     onTabOpen,
     handleHttpLinkClick,
     onOpenVisualization,
+    handleToolConfirm,
+    handleToolReject,
     activeSessionId,
     activeSessionWorkspaceId,
     activeSessionWorkspacePath,

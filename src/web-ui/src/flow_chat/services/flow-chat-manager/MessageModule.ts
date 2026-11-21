@@ -39,7 +39,7 @@ import {
 import { isOutcomeUnknownError, isSessionInUseError } from '@/infrastructure/api/errors/TauriCommandError';
 import { i18nService } from '@/infrastructure/i18n';
 import { driverForSession } from '../../session-drivers/registry';
-import { isAcpAgentType, isNativeAgentSession } from '../../utils/acpSession';
+import { isAcpAgentType, isAcpFlowSession, isNativeAgentSession } from '../../utils/acpSession';
 import { assertSessionConversationCanSubmit, getSessionConversationCapability } from '../../session-drivers/conversationCapability';
 import type { SendMessageOptions, SessionDriver, StartTurnResult, SubmissionDraft, TurnTracker } from '../../session-drivers/types';
 import { assertSessionSubmissionAllowed } from '../../store/sessionMutationStore';

@@ -380,6 +380,7 @@ impl DialogScheduler {
             request.action,
             DialogQueueAction::List | DialogQueueAction::Get { .. }
         ) && self.session_manager.get_session(session).is_none()
+            && !self.is_external_session(session).await
         {
             if let Err(restore_error) = self
                 .coordinator
@@ -391,14 +392,12 @@ impl DialogScheduler {
                     session, restore_error
                 );
             }
-        }
-        if self.session_manager.get_session(session).is_none()
-            && !self.is_external_session(session).await
-        {
-            return Err(PortError::new(
-                PortErrorKind::NotFound,
-                "Session is not loaded on the execution host",
-            ));
+            if self.session_manager.get_session(session).is_none() {
+                return Err(PortError::new(
+                    PortErrorKind::NotFound,
+                    "Session is not loaded on the execution host",
+                ));
+            }
         }
         let snapshot = self.queue_snapshot(session, None);
         if !matches!(request.action, DialogQueueAction::List)

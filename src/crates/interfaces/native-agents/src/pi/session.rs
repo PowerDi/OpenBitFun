@@ -420,6 +420,8 @@ impl PiNativeSession {
             });
         }
         AcpSessionOptions {
+            // Native commands come from the commands endpoint.
+            available_commands: None,
             current_model_id,
             available_models,
             model_config_id: None,
@@ -1022,6 +1024,7 @@ impl PiNativeSession {
             user_input: input,
             original_user_input: original,
             user_message_metadata: metadata,
+            session_binding: None,
         }])
         .await?;
         state.index += 1;

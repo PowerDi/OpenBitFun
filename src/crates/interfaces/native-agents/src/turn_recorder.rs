@@ -114,6 +114,7 @@ impl TurnRecorder {
                 user_input,
                 original_user_input,
                 user_message_metadata,
+                ..
             } => {
                 let now = now_ms();
                 let content = original_user_input
@@ -141,6 +142,7 @@ impl TurnRecorder {
                         timestamp: now,
                         metadata: user_message_metadata.clone(),
                     },
+                    published_figures: Default::default(),
                     model_rounds: Vec::new(),
                     start_time: now,
                     end_time: None,
@@ -601,6 +603,7 @@ mod tests {
             user_input: "raw".into(),
             original_user_input: Some("fix it".into()),
             user_message_metadata: None,
+            session_binding: None,
         }
     }
 

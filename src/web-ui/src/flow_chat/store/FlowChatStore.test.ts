@@ -33,7 +33,6 @@ import { rollbackSessionToTurn } from '../services/SessionRollbackService';
 import { editAndRerunUserMessage } from '../services/UserMessageEditService';
 import { useSessionMutationStore } from './sessionMutationStore';
 import { HARNESS_IDS } from '@/shared/agents/identity';
-import { resetSessionStreamsForTest, sessionStream } from '../session-stream/SessionStream';
 import {
   askUserQuestionDraftKey,
   askUserQuestionDraftStore,
@@ -2885,9 +2884,9 @@ describe('FlowChatStore historical session hydration state', () => {
     });
   });
 
-  it('keeps a live native subagent turn running when Core does not report it executing', async () => {
-    // Native-agent children run inside their CLI, so Core restores them idle and
-    // their in-progress checkpoint converts to an inferred interruption.
+  it.each(['inprogress', 'cancelled'] as const)('distinguishes native subagent checkpoints from terminal host records (%s)', async persistedStatus => {
+    // An in-progress checkpoint is not a terminal fact, while an explicit
+    // host cancellation must settle even if its live event was missed.
     const liveTurn = {
       id: 'child-turn',
       sessionId: 'claude-subagent',
@@ -2956,7 +2955,8 @@ describe('FlowChatStore historical session hydration state', () => {
           status: 'streaming',
         }],
         startTime: 1,
-        status: 'inprogress',
+        status: persistedStatus,
+        ...(persistedStatus === 'cancelled' ? { finishReason: 'interrupted' } : {}),
       }],
       contextRestoreState: 'ready',
     });
@@ -2973,7 +2973,7 @@ describe('FlowChatStore historical session hydration state', () => {
 
       expect(
         flowChatStore.getState().sessions.get('claude-subagent')?.dialogTurns[0],
-      ).toMatchObject({ id: 'child-turn', status: 'processing' });
+      ).toMatchObject({ id: 'child-turn', status: persistedStatus === 'inprogress' ? 'processing' : 'cancelled' });
     } finally {
       resetSessionStreamsForTest();
     }
@@ -4226,6 +4226,24 @@ describe('FlowChatStore historical session hydration state', () => {
     expect(flowChatStore.getState().sessions.get('history-2')?.maxContextTokens).toBe(256000);
   });
 
+  it('preserves native delegation in live creation and metadata hydration without inventing it for legacy records', async () => {
+    flowChatStore.addExternalSession('native-live', 'Child', 'acp:codex-native', '/workspace', {
+      delegatedBy: 'native-parent', workspaceId: 'workspace-1',
+    });
+    expect(flowChatStore.getState().sessions.get('native-live')?.delegatedBy).toBe('native-parent');
+    apiMocks.listSessions.mockResolvedValueOnce([
+      { sessionId: 'native-restored', title: 'Native child', agentType: 'acp:codex-native',
+        createdAt: 10, lastActiveAt: 20,
+        customMetadata: { nativeDelegation: { parentSessionId: 'native-parent' } } },
+      { sessionId: 'legacy-restored', title: 'Legacy', agentType: 'Standard', createdAt: 10, lastActiveAt: 20 },
+    ]);
+    await flowChatStore.initializeFromDisk(fixtureWorkspaceId('D:/workspace/OpenBitFun'), undefined);
+    expect(flowChatStore.getState().sessions.get('native-restored')).toMatchObject({
+      delegatedBy: 'native-parent', historyState: 'metadata-only',
+    });
+    expect(flowChatStore.getState().sessions.get('legacy-restored')?.delegatedBy).toBeUndefined();
+  });
+
   it('skips one bad metadata entry without dropping the rest of the session list', async () => {
     apiMocks.listSessions.mockResolvedValueOnce([
       {
@@ -4943,6 +4961,30 @@ describe('FlowChatStore historical session hydration state', () => {
     }));
     const result = await flowChatStore.refreshPeerSessionSnapshot('acp-1');
     expect(result.runtimeEventSnapshot).toEqual(snapshot);
+    expect(result.backendState).toBe(state);
+  });
+
+  it.each(['Processing', 'Idle'])('uses native runtime authority without treating a restarted journal as running (%s)', async state => {
+    const snapshot = {
+      sessionId: 'native-1', streamId: 'native-host', cursor: 1, activeTurnId: 'native-turn',
+      events: [{ eventName: 'agentic://dialog-turn-started', payload: {
+        sessionId: 'native-1', turnId: 'native-turn', turnIndex: 7, userInput: 'Continue',
+      } }],
+    };
+    apiMocks.restoreSessionView.mockResolvedValueOnce({
+      executionProjection: 'native',
+      session: { sessionId: 'native-1', agentType: 'acp:codex-native', state, turnCount: 0, createdAt: 1 },
+      turns: [], runtimeEventSnapshot: snapshot, contextRestoreState: 'pending',
+    });
+    flowChatStore.setState(() => ({
+      sessions: new Map([['native-1', createSession({
+        sessionId: 'native-1', workspaceId: 'workspace-1', mode: 'acp:codex-native',
+        config: { agentType: 'acp:codex-native' }, historyState: 'ready', isHistorical: false,
+      })]]), activeSessionId: 'native-1',
+    }));
+    markRuntimeSessionProjectionStale(LOCAL_SURFACE_ID, 'native-1');
+    const result = await flowChatStore.refreshPeerSessionSnapshot('native-1');
+    expect(result.runtimeEventSnapshot).toEqual(state === 'Processing' ? snapshot : undefined);
     expect(result.backendState).toBe(state);
   });
 

@@ -122,7 +122,13 @@ export function discardBtwSession(sessionId: string): Promise<void> {
     // An empty side draft has no host session yet. A request ID also covers
     // forks whose acknowledgement failed after the host accepted them.
     if (isNativeAgentSession(latest) || !isBtwSessionDraft(latest) || latest.btwOrigin?.requestId) {
-      await cancelBtwRuntime(sessionId, latest.btwOrigin?.requestId);
+      if (isNativeAgentSession(latest)) {
+        // A native fork has no btw_ask_stream request on the host. A legacy
+        // btw_cancel response cannot prove its native execution was stopped.
+        await agentAPI.cancelSession(sessionId);
+      } else {
+        await cancelBtwRuntime(sessionId, latest.btwOrigin?.requestId);
+      }
       scope.assertCurrent('delete BTW session');
       await agentAPI.deleteSession(sessionId, requireSessionOwningWorkspaceId(latest));
       scope.assertCurrent('release BTW session state');

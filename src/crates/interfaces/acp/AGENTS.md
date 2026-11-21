@@ -46,7 +46,7 @@ cargo check -p openbitfun-acp --no-default-features --features client
 cargo check -p openbitfun-acp --no-default-features --features server
 cargo test -p openbitfun-acp
 cargo test -p openbitfun-acp --no-default-features --features client,openbitfun-core/git --lib client::prompt::tests
-cargo test -p openbitfun-acp --no-default-features --features client,openbitfun-core/git --lib client::session_options::tests
+cargo test -p openbitfun-native-agents --lib session_options::tests
 cargo test -p openbitfun-acp --no-default-features --features client,openbitfun-core/git --lib client::execution::tests
 ```
 
@@ -72,6 +72,12 @@ and coherent live/replay cursors. The ACP owner records execution events before
 the host publishes them and reads execution snapshots without the long-held
 protocol session mutex. Desktop injects its existing session event journal;
 the additive `executionProjection: "acp"` restore marker identifies that authority.
+
+Generic ACP approvals retain `backend-event-acppermissionrequest` and
+`submit_acp_permission_response` for existing clients, including Peer controllers.
+Native approvals use the runtime mailbox exclusively; never dispatch that legacy
+response command to a native driver. The `legacy_permission_payloads` test in
+`client::manager::tests` covers the old request and response round trips.
 
 ## Native agent drivers
 

@@ -693,6 +693,10 @@ describe('processToolEvent rejected event behavior', () => {
       requiresConfirmation: true,
       userConfirmed: undefined,
       isParamsStreaming: true,
+      acpPermission: {
+        permissionId: 'permission-1',
+        requestedAt: 1001,
+      },
       toolCall: {
         id: 'tool-1',
         input: { cmd: 'npm test' },
@@ -730,6 +734,7 @@ describe('processToolEvent rejected event behavior', () => {
         error: 'User rejected operation',
       },
     });
+    expect(updatedTool.acpPermission).toBeUndefined();
     expect(typeof updatedTool.endTime).toBe('number');
   });
 });

@@ -10668,20 +10668,32 @@ impl SessionManager {
         let ai_client_factory = get_global_ai_client_factory().await.map_err(|e| {
             OpenBitFunError::AIClient(format!("Failed to get AI client factory: {}", e))
         })?;
-        let title_session = self
-            .get_session(session_id)
-            .ok_or_else(|| OpenBitFunError::NotFound(format!("Session not found: {session_id}")))?;
-        let ai_config = Self::load_ai_config_for_session(&title_session.config)
-            .await?
-            .ok_or_else(|| {
-                OpenBitFunError::AIClient("Failed to load AI configuration".to_string())
-            })?;
+        let ai_config = match &source {
+            TitleModelSource::Session {
+                session: Some(session),
+                ..
+            } => Self::load_ai_config_for_session(&session.config)
+                .await?
+                .ok_or_else(|| {
+                    OpenBitFunError::AIClient("Failed to load AI configuration".to_string())
+                })?,
+            TitleModelSource::Session { id, session: None } => {
+                return Err(OpenBitFunError::NotFound(format!(
+                    "Session not found: {id}"
+                )));
+            }
+            TitleModelSource::Detached => Self::load_ai_config_for_model_resolution()
+                .await
+                .ok_or_else(|| {
+                    OpenBitFunError::AIClient("Failed to load AI configuration".to_string())
+                })?,
+        };
         let ai_client = match &ai_config.task_models.session_title {
             crate::service::config::types::TaskModelSelection::Fixed { model_id } => {
                 ai_client_factory.get_client_resolved(model_id).await
             }
             crate::service::config::types::TaskModelSelection::Inherit
-                if matches!(source, TitleModelSource::Detached) =>
+                if matches!(&source, TitleModelSource::Detached) =>
             {
                 // A detached caller has no Runtime session to inherit from;
                 // use the default primary selection a session without an
@@ -10697,10 +10709,11 @@ impl SessionManager {
                 ai_client_factory.get_client_by_id(&resolved_model_id).await
             }
             crate::service::config::types::TaskModelSelection::Inherit => {
-                let TitleModelSource::Session { id, session } = source else {
+                let TitleModelSource::Session { id, session } = &source else {
                     unreachable!("detached title source is handled above");
                 };
                 let session = session
+                    .as_ref()
                     .ok_or_else(|| OpenBitFunError::NotFound(format!("Session not found: {id}")))?;
                 let explicit_model_id = session
                     .config

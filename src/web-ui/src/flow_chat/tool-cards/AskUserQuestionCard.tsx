@@ -26,7 +26,6 @@ import { useTranslation } from 'react-i18next';
 import { i18nService } from '@/infrastructure/i18n';
 import { toolAPI } from '@/infrastructure/api/service-api/ToolAPI';
 import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
-import { ACPClientAPI } from '@/infrastructure/api/service-api/ACPClientAPI';
 import { needsInteractionAnswerReadback, settledInteractionAnswerOutcome } from '../utils/interactionAnswerOutcome';
 import {
   getActiveSurfaceScope,

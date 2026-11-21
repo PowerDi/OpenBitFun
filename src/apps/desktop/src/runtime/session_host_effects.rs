@@ -48,6 +48,12 @@ impl DesktopSessionHostEffects for ProductionDesktopSessionHostEffects {
         self.acp_client_service.is_some()
     }
 
+    fn uses_native_execution(&self, agent_type: &str) -> bool {
+        agent_type
+            .strip_prefix("acp:")
+            .is_some_and(|client_id| openbitfun_acp::client::native::is_native_client(client_id))
+    }
+
     fn acp_execution_snapshot(&self, session_id: &str) -> Option<DesktopSessionExecutionSnapshot> {
         let snapshot = self
             .acp_client_service

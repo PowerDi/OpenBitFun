@@ -253,7 +253,6 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
       () => resolveSessionRelationship(activeSession),
       [activeSession]
     );
-    const canShowRollbackAction = allowUserMessageRollback && !sessionRelationship.isSubagent && !isGenUIHostEvidence;
     const currentSession = activeSessionOverride
       ?? (sessionId ? flowChatStore.getState().sessions.get(sessionId) ?? null : null)
       ?? activeSessionFromStore;
@@ -261,6 +260,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
     const isLatestTurn = turnIndex >= 0 && turnIndex === (currentSession?.dialogTurns.length ?? 0) - 1;
     const canShowRollbackAction = allowUserMessageRollback
       && !sessionRelationship.isSubagent
+      && !isGenUIHostEvidence
       && (!externalAgentRollback || isLatestTurn);
     const dialogTurn = turnIndex >= 0 ? currentSession?.dialogTurns[turnIndex] : null;
     const resolvedTurnStatus = dialogTurn?.status ?? turnStatus;

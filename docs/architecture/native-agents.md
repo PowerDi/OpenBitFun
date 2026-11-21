@@ -90,14 +90,13 @@ this session" is dropped):
 | `reject` + feedback | deny; Claude receives the feedback text |
 | plan review (`displayMetadata.planReview`) | `once` approves the plan; `reject` + feedback keeps planning |
 
-The generic ACP client uses the same bridge, so the old per-card path was
-removed entirely: `backend-event-acppermissionrequest`, the
-`submit_acp_permission_response` command and registry row, the Web UI
-`AcpPermissionToolCardModule`, `ToolApprovalBar`, `AcpPermissionActions`, the
-`acpPermission` tool-item field, and the dead tool-card confirm/reject
-callbacks. Desktop shows every request in the composer approval band, which
-gained the plan view. The product is upgraded as a whole, so no old-client
-fallback is kept (see Compatibility).
+Native drivers use this bridge exclusively and show requests in the composer
+approval band, including plan review. Generic ACP clients retain the upstream
+`backend-event-acppermissionrequest` / `submit_acp_permission_response` contract,
+registry row, and tool-card approval UI. These are separate executor paths, not
+two approval owners for the same request: the legacy command only resolves an
+ACP manager request and never bypasses the native runtime mailbox. This keeps
+ordinary ACP approvals answerable across existing Desktop and Peer versions.
 
 ### D6: backend persistence
 
@@ -287,6 +286,12 @@ selection on delegation.
   `start_acp_dialog_turn` as `Unaudited` / `CLI_NOT_IMPLEMENTED`.
 - Native approvals and questions are in the runtime mailbox (step 3), so mobile
   web and Peer controllers can see and answer them; live check still owed.
+- Desktop restore distinguishes native execution from generic ACP at the host
+  effects boundary. The additive `executionProjection: "native"` marker keeps
+  native Turn ordinals and the shared runtime journal; scheduler/control-state
+  and process-local EventQueue evidence decide whether work is still running.
+  A persisted journal alone never revives execution after a host restart.
+  Generic ACP retains its `executionProjection: "acp"` snapshot and replay rules.
 - Native CLI processes run over `open_workspace_stdio` for SSH and container
   workspaces, so remote workspaces already work for an attached Desktop.
   Claude CLI update on a remote host is refused.
@@ -406,9 +411,10 @@ background tasks. Missing pieces, to add when a consumer needs them:
 
 ## Compatibility
 
-- The product is upgraded as a whole on every machine the user runs. Wire and
-  event shapes between Desktop, Web UI, and the runtime may change together
-  without old-client fallbacks.
+- A local Desktop and its bundled Web UI upgrade together, but Peer and remote
+  controllers can run different versions. Preserve existing generic ACP wire
+  commands and events; native capabilities remain additive and must be checked
+  before use. Native approvals use the existing runtime mailbox contract.
 - Data on disk is still read by newer code: identifiers in D7 never change,
   and new metadata fields are additive with defaults.
 - Tauri command names are kept unless a step removes the command entirely;

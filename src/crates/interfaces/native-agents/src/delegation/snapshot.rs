@@ -175,6 +175,7 @@ mod tests {
                 timestamp: 0,
                 metadata: None,
             },
+            published_figures: Default::default(),
             model_rounds: rounds
                 .iter()
                 .enumerate()

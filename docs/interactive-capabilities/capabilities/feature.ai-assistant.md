@@ -70,10 +70,8 @@ Collaborate in durable project sessions: switch between Standard, Ultimate, Cowo
   - Let the agent track step-by-step todos, write .openbitfun/plans specs, and ask clarifying questions when choices matter
   - 说明：面对复杂特性，智能体会先阅读代码库并把结构化方案保存到 `.openbitfun/plans` 供你在专属计划视图中审阅，只在仓库里查不到、需要你拍板的设计取舍上弹出单选/多选卡片。
   - Why & how: For complex work, the Agent tracks live progress items, saves structured plans under .openbitfun/plans for review, and asks concise multiple-choice questions only when a product decision is needed.
-- **智能体可定位入口，需交互完成 / Agent opens; interaction required** · 用 /btw（或 Ctrl+Alt+B）随手发起临时「侧问」，以及在代码编辑器中使用内联 AI
-  - Ask quick ephemeral side questions with /btw (or Ctrl+Alt+B) and invoke inline AI inside the code editor
-  - 说明：正在跑大重构时突然想查个语法或正则？输入 `/btw 这个问题` 会开启一个继承当前上下文、不调工具、关掉即焚的轻量侧问，完全不打断也不撑爆主对话；写代码时也可直接在编辑器内呼出内联 AI。
-  - Why & how: Need a quick syntax check mid-task? `/btw your question` opens a lightweight, tool-free side chat that inherits context without cluttering or saving to your main transcript; inline AI is also available right inside the editor.
+- **智能体可定位入口，需交互完成 / Agent opens; interaction required** · 使用 BTW 轻量问答与编辑器内联 AI，并可随时取消
+  - Use lightweight BTW questions and inline editor AI, with cancellation
 - **由专用智能体工具控制 / Delegated Agent tool** · `FrontendWorkbench` / `Read` / `Write` / `Edit` · 切换到「创造（Creative）」模式，安全定制正在运行的 OpenBitFun 界面与交互能力
   - Switch to Creative mode to customize the live OpenBitFun interface with automatic 15-second rollback protection
   - 说明：无需下载源码或搭编译环境，直接告诉创造模式的智能体你想怎么改界面样式或组合快捷功能；新改动激活后会弹出 15 秒不可变确认倒计时，万一渲染异常会自动回滚保底。

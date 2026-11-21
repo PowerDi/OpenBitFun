@@ -680,9 +680,11 @@ mod tests {
             serde_json::to_vec(&old).unwrap(),
         )
         .unwrap();
-        assert!(read_record(dir.path(), &"1.0.0".parse().unwrap(), "test")
-            .unwrap()
-            .is_some());
+        assert!(
+            read_record(dir.path(), &"1.0.0".parse().unwrap(), "test", "stable")
+                .unwrap()
+                .is_some()
+        );
         let original = std::fs::read(dir.path().join(RECORD_NAME)).unwrap();
         assert!(
             migrate_verified_legacy_record(dir.path(), &mut record, b"ambiguous", "nsis").is_err()
@@ -716,9 +718,11 @@ mod tests {
         );
         record.package_kind = Some("other-format".into());
         save_package(dir.path(), &record, b"package").unwrap();
-        assert!(read_record(dir.path(), &"1.0.0".parse().unwrap(), "test")
-            .unwrap_err()
-            .contains("installation format"));
+        assert!(
+            read_record(dir.path(), &"1.0.0".parse().unwrap(), "test", "stable")
+                .unwrap_err()
+                .contains("installation format")
+        );
         assert!(dir.path().join(record.package_name().unwrap()).is_file());
         let mut legacy = serde_json::to_value(&record).unwrap();
         legacy.as_object_mut().unwrap().remove("packageKind");

@@ -157,6 +157,30 @@ fn overlay_live_session_state(restored: &mut Session, live: Option<Session>) {
     restored.state = live.state;
 }
 
+/// The journal may survive a host restart; only live owner evidence can mark
+/// a native turn running. An earlier turn's projection cannot seed a new turn.
+fn overlay_native_execution(
+    session: &mut Session,
+    active_turn_id: Option<String>,
+    projection: &mut Option<SessionEventProjectionSnapshot>,
+) {
+    let Some(turn_id) = active_turn_id else {
+        session.state = SessionState::Idle;
+        *projection = None;
+        return;
+    };
+    if projection.as_ref().is_some_and(|snapshot| {
+        snapshot.session_id != session.session_id
+            || snapshot.active_turn_id.as_deref() != Some(turn_id.as_str())
+    }) {
+        *projection = None;
+    }
+    session.state = SessionState::Processing {
+        current_turn_id: turn_id,
+        phase: ProcessingPhase::Streaming,
+    };
+}
+
 #[derive(Clone)]
 struct ResolvedDesktopSessionScope {
     workspace_id: String,
@@ -238,6 +262,9 @@ pub(crate) struct DesktopSessionExecutionSnapshot {
 pub(crate) trait DesktopSessionHostEffects: Send + Sync {
     async fn release_session(&self, session_id: &str);
     fn supports_acp_projection(&self) -> bool {
+        false
+    }
+    fn uses_native_execution(&self, _agent_type: &str) -> bool {
         false
     }
     fn acp_execution_snapshot(&self, _session_id: &str) -> Option<DesktopSessionExecutionSnapshot> {
@@ -923,7 +950,34 @@ impl DesktopSessionApplication {
         // Native coordinator state is not the execution authority for an
         // external ACP prompt. Read its facts without acquiring its long-held
         // protocol session mutex. The journal is shared with live delivery.
-        let execution_projection = if session.agent_type.starts_with("acp:")
+        let execution_projection = if self.host_effects.uses_native_execution(&session.agent_type) {
+            let scheduled_turn =
+                openbitfun_runtime_ports::RemoteControlStatePort::read_remote_control_state(
+                    self.coordinator.as_ref(),
+                    openbitfun_runtime_ports::RemoteControlStateRequest {
+                        session_id: session_id.to_string(),
+                    },
+                )
+                .await
+                .map_err(|error| DesktopSessionApplicationError::Core(error.to_string()))?
+                .and_then(|state| state.active_turn_id);
+            let observed_turn = runtime_event_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.active_turn_id.clone())
+                .filter(|turn_id| {
+                    self.coordinator
+                        .event_queue()
+                        .has_unsettled_turn(session_id, turn_id)
+                });
+            overlay_native_execution(
+                &mut session,
+                scheduled_turn.or(observed_turn),
+                &mut runtime_event_snapshot,
+            );
+            // Native events keep their persisted turn indices. Do not apply
+            // the generic ACP replay enrichment to their runtime journal.
+            Some("native")
+        } else if session.agent_type.starts_with("acp:")
             && self.host_effects.supports_acp_projection()
         {
             if let Some(acp) = self.host_effects.acp_execution_snapshot(session_id) {
@@ -1402,6 +1456,41 @@ mod tests {
                 ..
             } if current_turn_id == "turn-1"
         ));
+    }
+
+    #[test]
+    fn native_execution_restore_uses_live_owner_not_a_persisted_journal() {
+        let mut session = Session::new_with_id(
+            "native-session".into(),
+            "Native".into(),
+            "acp:codex-native".into(),
+            Default::default(),
+        );
+        let snapshot = SessionEventProjectionSnapshot {
+            session_id: session.session_id.clone(),
+            stream_id: "host".into(),
+            cursor: 1,
+            active_turn_id: Some("turn-1".into()),
+            events: Vec::new(),
+        };
+        let mut projection = Some(snapshot.clone());
+        overlay_native_execution(&mut session, Some("turn-1".into()), &mut projection);
+        assert!(
+            matches!(&session.state, SessionState::Processing { current_turn_id, .. } if current_turn_id == "turn-1")
+        );
+        assert!(projection.is_some());
+        overlay_native_execution(&mut session, Some("turn-2".into()), &mut projection);
+        assert!(
+            projection.is_none(),
+            "an old turn journal must not seed a new turn"
+        );
+        projection = Some(snapshot);
+        overlay_native_execution(&mut session, None, &mut projection);
+        assert!(matches!(session.state, SessionState::Idle));
+        assert!(
+            projection.is_none(),
+            "restart must not revive the stored journal"
+        );
     }
 
     #[test]

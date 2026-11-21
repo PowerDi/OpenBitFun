@@ -809,6 +809,7 @@ impl CodexTurnProjector {
             round_index: self.round_index,
             model_config_id: CODEX_NATIVE_MODEL_CONFIG_ID.to_string(),
             effective_model_name: self.model_name.clone(),
+            routing: None,
         });
         self.round_index += 1;
         self.total_rounds += 1;

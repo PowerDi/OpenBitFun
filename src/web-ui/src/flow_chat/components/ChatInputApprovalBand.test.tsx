@@ -529,11 +529,11 @@ describe('ChatInputApprovalBand', () => {
     expect(container.querySelector('[data-testid="chat-input-approval-allow-always"]')).toBeNull();
 
     await click('chat-input-approval-reject-with-reason');
-    expect(onRespond).toHaveBeenCalledWith('request-1', 'reject', 'Cover rollback too');
+    expect(onRespond).toHaveBeenCalledWith('request-1', 'reject', 'Cover rollback too', expect.objectContaining({ onConfirming: expect.any(Function) }));
     expect(onRespondBatch).not.toHaveBeenCalled();
 
     await click('chat-input-approval-allow');
-    expect(onRespond).toHaveBeenLastCalledWith('request-1', 'once', undefined);
+    expect(onRespond).toHaveBeenLastCalledWith('request-1', 'once', undefined, expect.objectContaining({ onConfirming: expect.any(Function) }));
   });
 
   it('offers the agent-owned always scope for native requests without saved grants', async () => {
@@ -555,7 +555,7 @@ describe('ChatInputApprovalBand', () => {
     });
     expect(container.textContent).toContain('Codex');
     await click('chat-input-approval-allow-always');
-    expect(onRespond).toHaveBeenCalledWith('request-1', 'always', undefined);
+    expect(onRespond).toHaveBeenCalledWith('request-1', 'always', undefined, expect.objectContaining({ onConfirming: expect.any(Function) }));
   });
 
   it('renders nothing when there is nothing to approve', async () => {

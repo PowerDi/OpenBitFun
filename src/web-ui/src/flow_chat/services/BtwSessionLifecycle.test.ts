@@ -170,6 +170,17 @@ describe('BTW session lifetime', () => {
     expect(state.sessions.has('child')).toBe(false);
   });
 
+  it('never uses ordinary BTW cancellation as proof that a native fork stopped', async () => {
+    Object.assign(state.sessions.get('child'), { mode: 'acp:codex-native', btwOrigin: { requestId: 'native-fork' } });
+    state.cancel.mockRejectedValueOnce(new Error(
+      "command 'cancel_session' is not supported on CLI peer host: the CLI peer host has no handler for this command",
+    ));
+    await expect(discardBtwSession('child')).rejects.toThrow('not supported');
+    expect(state.btwCancel).not.toHaveBeenCalled();
+    expect(state.delete).not.toHaveBeenCalled();
+    expect(state.sessions.has('child')).toBe(true);
+  });
+
   it('keeps the tab when cancellation fails for any other reason', async () => {
     state.sessions.get('child').btwOrigin = { requestId: 'request' };
     state.cancel.mockRejectedValueOnce(new Error('host offline'));

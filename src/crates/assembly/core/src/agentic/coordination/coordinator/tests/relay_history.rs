@@ -455,3 +455,136 @@ async fn load_relay_session_turns_refuses_unfinished_undo_without_the_mutation_l
         );
     }
 }
+
+#[tokio::test]
+async fn load_relay_session_turns_preserves_external_executor_activity() {
+    use crate::agentic::core::SessionState;
+    use crate::agentic::events::AgenticEvent;
+    use crate::service::session::{DialogTurnData, TurnStatus, UserMessageData};
+
+    let workspace = tempfile::tempdir().unwrap();
+    crate::service::workspace::legacy_compat::register_local_fixture_blocking(workspace.path());
+    let (coordinator, manager) = test_persistent_coordinator();
+    let session = manager
+        .create_session(
+            "External executor".into(),
+            "Standard".into(),
+            SessionConfig {
+                workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let storage = manager
+        .effective_session_storage_path(&session.session_id)
+        .await
+        .unwrap();
+    // Native drivers publish dialog lifecycle through EventQueue, not Core's
+    // execution engine. Their UI checkpoints remain InProgress between rounds.
+    let mut turn = DialogTurnData::new(
+        "external-turn".into(),
+        0,
+        session.session_id.clone(),
+        UserMessageData {
+            id: "user".into(),
+            content: "work".into(),
+            timestamp: 1,
+            metadata: None,
+        },
+    );
+    manager
+        .persistence_manager()
+        .save_dialog_turn(&storage, &turn)
+        .await
+        .unwrap();
+    coordinator
+        .event_queue
+        .enqueue(
+            AgenticEvent::DialogTurnStarted {
+                session_id: session.session_id.clone(),
+                turn_id: turn.turn_id.clone(),
+                turn_index: 0,
+                user_input: "work".into(),
+                original_user_input: None,
+                user_message_metadata: None,
+                session_binding: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    coordinator.event_queue.dequeue_batch(100).await;
+    assert!(matches!(
+        manager.get_session(&session.session_id).unwrap().state,
+        SessionState::Idle
+    ));
+
+    // Both a loaded-but-idle Core shell and an unloaded Core session must
+    // preserve the external executor, including a fresh peer attachment.
+    for unloaded in [false, true] {
+        if unloaded {
+            manager
+                .unload_session_from_memory(&session.session_id)
+                .await
+                .unwrap();
+        }
+        let all = coordinator
+            .load_relay_session_turns(&storage, &session.session_id, None)
+            .await
+            .unwrap();
+        let live = coordinator
+            .load_relay_session_turns(&storage, &session.session_id, Some(&turn.turn_id))
+            .await
+            .unwrap();
+        let (page, _) = coordinator
+            .load_relay_history_turn(&storage, &session.session_id, None)
+            .await
+            .unwrap();
+        for projection in [all, live, page] {
+            assert_eq!(projection[0].status, TurnStatus::InProgress);
+            assert!(projection[0].finish_reason.is_none());
+            assert!(projection[0].error.is_none());
+            assert!(projection[0].end_time.is_none());
+        }
+    }
+
+    // Execution evidence is process-local: a new host still identifies
+    // abandoned checkpoints, without rewriting the persisted user record.
+    let (restarted, _) = test_persistent_coordinator();
+    let abandoned = restarted
+        .load_relay_session_turns(&storage, &session.session_id, None)
+        .await
+        .unwrap();
+    assert_eq!(abandoned[0].status, TurnStatus::Cancelled);
+    assert_eq!(abandoned[0].finish_reason.as_deref(), Some("interrupted"));
+    let stored = manager
+        .persistence_manager()
+        .load_visible_session_turn(&storage, &session.session_id, &turn.turn_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.status, TurnStatus::InProgress);
+
+    // An actual terminal record stays terminal, even if publication of its
+    // lifecycle event has not caught up with persistence yet.
+    turn.mark_completed();
+    manager
+        .persistence_manager()
+        .save_dialog_turn(&storage, &turn)
+        .await
+        .unwrap();
+    let completed = coordinator
+        .load_relay_session_turns(&storage, &session.session_id, None)
+        .await
+        .unwrap();
+    assert_eq!(completed[0].status, TurnStatus::Completed);
+    manager
+        .restore_session(workspace.path(), &session.session_id)
+        .await
+        .unwrap();
+    manager
+        .delete_session_by_id(&session.session_id)
+        .await
+        .unwrap();
+}

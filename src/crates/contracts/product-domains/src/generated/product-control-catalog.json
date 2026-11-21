@@ -4,7 +4,7 @@
   "title": "OpenBitFun Playbook",
   "origin": "https://playbook.openbitfun.com",
   "source": "src/shared/interactive-capabilities/catalog.json",
-  "digest": "3d50d21ee69fe9a54f064e9364529f0effb58315ba85093d302cb7f6d395cfd9",
+  "digest": "d6dcade5d3268fed0bef46062088438a31209bccc09788ffafa3555107ac7a36",
   "ownerDigest": "6f0746578f3c56479f7c289bb05395dfe6917042f4d419de8c9a2f719d31f815",
   "searchAcceptance": [
     {
@@ -22647,13 +22647,13 @@
         },
         {
           "id": "btw-editor-ai",
-          "titleZh": "用 /btw（或 Ctrl+Alt+B）随手发起临时「侧问」，以及在代码编辑器中使用内联 AI",
-          "titleEn": "Ask quick ephemeral side questions with /btw (or Ctrl+Alt+B) and invoke inline AI inside the code editor",
+          "titleZh": "使用 BTW 轻量问答与编辑器内联 AI，并可随时取消",
+          "titleEn": "Use lightweight BTW questions and inline editor AI, with cancellation",
           "control": {
             "kind": "open",
             "reasonCode": "unstructuredInteraction",
-            "reasonZh": "「用 /btw（或 Ctrl+Alt+B）随手发起临时「侧问」，以及在代码编辑器中使用内联 AI」是在你当前阅读或编码位置即开即用的轻量交互，可随时发起或按取消键中止。",
-            "reasonEn": "“Ask quick ephemeral side questions with /btw (or Ctrl+Alt+B) and invoke inline AI inside the code editor” is an on-the-spot lightweight interaction launched from your active chat composer or editor cursor and cancellable anytime."
+            "reasonZh": "“使用 BTW 轻量问答与编辑器内联 AI，并可随时取消”由多个实时状态相关步骤组成，目前没有一个能确定完成整个流程的单一结构化 Command；智能体会打开精确入口，并把后续交互保留在用户可见界面。",
+            "reasonEn": "“Use lightweight BTW questions and inline editor AI, with cancellation” spans multiple live-state-dependent steps and currently has no single structured Command that can deterministically complete the whole workflow; the Agent opens the exact entry and keeps the remaining interaction visible to the user."
           }
         },
         {
@@ -22931,8 +22931,8 @@
         "Edit the active goal objective or clear the session goal from the goal banner",
         "让智能体拆解待办进度、编写 .openbitfun/plans 实施计划，并在关键分岔点向你提问确认",
         "Let the agent track step-by-step todos, write .openbitfun/plans specs, and ask clarifying questions when choices matter",
-        "用 /btw（或 Ctrl+Alt+B）随手发起临时「侧问」，以及在代码编辑器中使用内联 AI",
-        "Ask quick ephemeral side questions with /btw (or Ctrl+Alt+B) and invoke inline AI inside the code editor",
+        "使用 BTW 轻量问答与编辑器内联 AI，并可随时取消",
+        "Use lightweight BTW questions and inline editor AI, with cancellation",
         "切换到「创造（Creative）」模式，安全定制正在运行的 OpenBitFun 界面与交互能力",
         "Switch to Creative mode to customize the live OpenBitFun interface with automatic 15-second rollback protection",
         "通过已配置的默认图像模型在对话中直接生成配图与素材",

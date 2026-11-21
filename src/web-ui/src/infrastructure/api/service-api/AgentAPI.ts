@@ -334,7 +334,7 @@ export interface SessionViewRestoreTiming {
 
 export interface RestoreSessionViewResponse {
   /** Explicit execution authority/capability; absent on older hosts. */
-  executionProjection?: 'acp';
+  executionProjection?: 'acp' | 'native';
   session: SessionInfo;
   turns: DialogTurnData[];
   /** Absent when talking to an older Peer Host. */

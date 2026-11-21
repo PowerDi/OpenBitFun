@@ -274,6 +274,7 @@ impl CodexNativeSession {
                 user_input: input,
                 original_user_input: None,
                 user_message_metadata: None,
+                session_binding: None,
             }])
             .await?;
             child.turn_index += 1;

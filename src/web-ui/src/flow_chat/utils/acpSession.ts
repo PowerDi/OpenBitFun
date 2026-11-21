@@ -1,6 +1,11 @@
 import type { Session } from '../types/flow-chat';
 
 const ACP_AGENT_TYPE_PREFIX = 'acp:';
+const NATIVE_AGENT_NAMES: Readonly<Record<string, true>> = {
+  'claude-native': true,
+  'codex-native': true,
+  'pi-native': true,
+};
 
 export function acpClientIdFromAgentType(agentType: string | null | undefined): string | null {
   const value = agentType?.trim();
