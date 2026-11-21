@@ -777,6 +777,7 @@ mod tests {
             user_input: "work".into(),
             original_user_input: None,
             user_message_metadata: None,
+            session_binding: None,
         }
     }
 
@@ -804,6 +805,7 @@ mod tests {
                     first_chunk_ms: None,
                     first_visible_output_ms: None,
                     stream_duration_ms: None,
+                    ttft_ms: None,
                     attempt_count: None,
                     failure_category: None,
                     token_details: None,
