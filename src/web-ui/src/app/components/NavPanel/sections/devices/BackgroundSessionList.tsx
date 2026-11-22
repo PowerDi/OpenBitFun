@@ -18,6 +18,8 @@ import { usePeerDeviceModeOptional } from '@/infrastructure/peer-device/peerDevi
 import { sessionNavStatusService } from '@/flow_chat/services/sessionNavStatusService';
 import { knownWorkspaceSessionTotal } from '@/flow_chat/services/workspaceSessionTotals';
 import { resolveSessionTitle } from '@/flow_chat/utils/sessionTitle';
+import { acpClientIdFromAgentType } from '@/flow_chat/utils/acpSession';
+import { ExternalAgentIcon, externalAgentIconSource } from '@/shared/components/ExternalAgentIcon';
 import type { Session } from '@/flow_chat/types/flow-chat';
 import type { SessionActivitySummary, SessionMetadata } from '@/shared/types/session-history';
 import {
@@ -104,6 +106,9 @@ const BackgroundSessionRow: React.FC<{
   const editInputRef = useRef<HTMLInputElement>(null);
   const status = useCatalogSessionStatus(slot.surfaceId, session.sessionId, activity);
   const title = getTitle(session);
+  const externalAgentClientId = acpClientIdFromAgentType(session.config?.agentType)
+    ?? acpClientIdFromAgentType(session.mode);
+  const showExternalAgentIcon = Boolean(externalAgentIconSource(externalAgentClientId));
   const relationship = resolveSessionRelationship(session);
   const isChildSession = level === 1 && relationship.displayAsChild;
   const key = `session:${session.sessionId}`;
@@ -210,6 +215,9 @@ const BackgroundSessionRow: React.FC<{
         <span className="openbitfun-nav-panel__inline-item-copy">
           <span className="openbitfun-nav-panel__inline-item-primary">
             <span className="openbitfun-nav-panel__inline-item-title">
+              {showExternalAgentIcon && externalAgentClientId ? (
+                <ExternalAgentIcon clientId={externalAgentClientId} className="openbitfun-nav-panel__inline-item-agent-icon" />
+              ) : null}
               <OverflowText behavior="marquee" title="" className="openbitfun-nav-panel__inline-item-label">{title}</OverflowText>
             </span>
             {session.importedSource ? (
