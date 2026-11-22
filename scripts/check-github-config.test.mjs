@@ -1704,6 +1704,26 @@ test('stable and beta publication require every producer, while artifact-only ru
 });
 
 
+test('Fork beta packaging uses the upstream Linux tray and GLIBC contract', () => {
+  const { jobs } = yaml.parse(readFileSync(
+    path.join(repoRoot, '.github/workflows/fork-desktop-release.yml'), 'utf8',
+  ));
+  const job = jobs.package;
+  assert.equal(job['runs-on'], "${{ matrix.platform.name == 'linux-x64' && 'ubuntu-22.04' || matrix.platform.os }}");
+  const install = job.steps.find(step => step.name === 'Install Linux system dependencies (Tauri bundler)');
+  assert.equal(install.if, "runner.os == 'Linux'");
+  assert.match(install.run, /libayatana-appindicator3-dev/);
+  assert.match(install.run, /libwebkit2gtk-4\.1-dev/);
+  assert.doesNotMatch(install.run, /\blibappindicator3-dev\b|libwebkit2gtk-4\.0-dev/);
+  const verify = job.steps.find(step => step.name === 'Verify Linux desktop packages');
+  assert.equal(verify.if, "runner.os == 'Linux'");
+  assert.match(verify.run, /verify-linux-desktop-package\.sh/);
+  assert.ok(existsSync(path.join(repoRoot, 'scripts/ci/verify-linux-desktop-package.sh')));
+  assert.ok(job.steps.indexOf(verify) > job.steps.findIndex(step => step.name === 'Build desktop app'));
+  assert.ok(job.steps.indexOf(verify) < job.steps.findIndex(step => step.name === 'Upload bundles'));
+  assert.deepEqual(jobs.publish.needs, ['prepare', 'package']);
+});
+
 test('Desktop release and nightly package Linux on Ubuntu 22.04 and verify before upload', () => {
   const readPackageJob = (file) =>
     yaml.parse(readFileSync(path.join(repoRoot, '.github/workflows', file), 'utf8')).jobs.package;
