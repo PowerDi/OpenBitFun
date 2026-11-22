@@ -1709,9 +1709,16 @@ test('Fork beta packaging uses the upstream Linux tray and GLIBC contract', () =
     path.join(repoRoot, '.github/workflows/fork-desktop-release.yml'), 'utf8',
   ));
   const job = jobs.package;
-  assert.equal(job['runs-on'], "${{ matrix.platform.name == 'linux-x64' && 'ubuntu-22.04' || matrix.platform.os }}");
+  assert.equal(job['runs-on'], '${{ matrix.platform.os }}');
+  assert.equal(job.container, "${{ startsWith(matrix.platform.name, 'linux-') && 'ubuntu:22.04' || '' }}");
   const install = job.steps.find(step => step.name === 'Install Linux system dependencies (Tauri bundler)');
   assert.equal(install.if, "runner.os == 'Linux'");
+  assert.equal(install.env.DEBIAN_FRONTEND, 'noninteractive');
+  assert.ok(job.steps.indexOf(install) < job.steps.findIndex(step => step.name === 'Checkout'));
+  assert.doesNotMatch(install.run, /sudo/);
+  for (const dependency of ['build-essential', 'ca-certificates', 'git', 'curl', 'libclang-dev', 'python3', 'unzip', 'xz-utils']) {
+    assert.ok(install.run.includes(dependency), dependency);
+  }
   assert.match(install.run, /libayatana-appindicator3-dev/);
   assert.match(install.run, /libwebkit2gtk-4\.1-dev/);
   assert.doesNotMatch(install.run, /\blibappindicator3-dev\b|libwebkit2gtk-4\.0-dev/);
